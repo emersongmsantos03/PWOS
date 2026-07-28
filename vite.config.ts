@@ -6,8 +6,10 @@ import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 
 type User = { id: string; name: string; email: string; profile: string; role: string; salt: string; passwordHash: string };
+type Integration = { id: string; platform: "GOOGLE_ADS" | "META_ADS"; name: string; status: string; demo: boolean; managerName: string; accountCount: number; campaignCount: number; responsible: string; lastSyncAt: string | null; nextSyncAt: string | null; frequency: string };
 const sessions = new Map<string, string>();
 const users = new Map<string, User>();
+const integrations = new Map<string, Integration>();
 const hash = (password: string, salt: string) => scryptSync(password, salt, 64).toString("hex");
 const safeEqual = (a: string, b: string) => {
   const left = Buffer.from(a);
@@ -29,6 +31,7 @@ const json = (response: ServerResponse, status: number, value: unknown) => {
 
 function localApi(masterEmail: string, masterPassword: string): Plugin {
   const localUsersPath = "data/users.local.json";
+  const localIntegrationsPath = "data/integrations.local.json";
   const salt = randomBytes(16).toString("hex");
   const master: User = { id: randomUUID(), name: "Emerson Santos", email: masterEmail.toLowerCase(), profile: "MASTER", role: "Administrador", salt, passwordHash: hash(masterPassword, salt) };
   users.set(master.id, master);
@@ -39,6 +42,14 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
   const persistUsers = () => {
     mkdirSync("data", { recursive: true });
     writeFileSync(localUsersPath, JSON.stringify([...users.values()].filter(user => user.profile !== "MASTER"), null, 2), { mode: 0o600 });
+  };
+  if (existsSync(localIntegrationsPath)) {
+    const storedIntegrations = JSON.parse(readFileSync(localIntegrationsPath, "utf8")) as Integration[];
+    storedIntegrations.forEach(integration => integrations.set(integration.id, integration));
+  }
+  const persistIntegrations = () => {
+    mkdirSync("data", { recursive: true });
+    writeFileSync(localIntegrationsPath, JSON.stringify([...integrations.values()], null, 2), { mode: 0o600 });
   };
   return {
     name: "pw-os-local-api",
@@ -64,6 +75,7 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
           return json(response, 200, { ok: true });
         }
         if (!currentUser) return json(response, 401, { message: "Sessão necessária." });
+        if (currentUser.profile === "CLIENT" && url.startsWith("/integrations")) return json(response, 403, { message: "Clientes externos não acessam a Central de Conexões." });
         if (url === "/users" && request.method === "GET") return json(response, 200, { users: [...users.values()].map(publicUser) });
         if (url === "/users" && request.method === "POST") {
           if (currentUser.profile !== "MASTER") return json(response, 403, { message: "Permissão insuficiente." });
@@ -75,6 +87,37 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
           users.set(user.id, user);
           persistUsers();
           return json(response, 201, { user: publicUser(user) });
+        }
+        if (url === "/integrations" && request.method === "GET") return json(response, 200, { integrations: [...integrations.values()] });
+        const demoMatch = url.match(/^\/integrations\/(google_ads|meta_ads)\/demo$/);
+        if (demoMatch && request.method === "POST") {
+          if (!["MASTER","ADMIN"].includes(currentUser.profile)) return json(response, 403, { message: "Permissão insuficiente." });
+          const input = await body(request);
+          const platform = demoMatch[1].toUpperCase() as Integration["platform"];
+          const integration: Integration = {
+            id: randomUUID(), platform, name: `${platform === "GOOGLE_ADS" ? "Google Ads" : "Meta Ads"} • Demonstração`,
+            status: "Conectada", demo: true, managerName: platform === "GOOGLE_ADS" ? "Manager demonstrativa PW Media" : "Portfólio demonstrativo PW Media",
+            accountCount: Number(input.accountCount || 0), campaignCount: Number(input.campaignCount || 0),
+            responsible: currentUser.name, lastSyncAt: null, nextSyncAt: null, frequency: input.frequency || "Manual"
+          };
+          integrations.set(integration.id, integration); persistIntegrations();
+          return json(response, 201, { integration });
+        }
+        const integrationMatch = url.match(/^\/integrations\/([^/]+)(?:\/(test|sync))?$/);
+        if (integrationMatch) {
+          const integration = integrations.get(integrationMatch[1]);
+          if (!integration) return json(response, 404, { message: "Conexão não encontrada." });
+          if (request.method === "POST" && integrationMatch[2] === "test") return json(response, 200, { ok: true, message: integration.demo ? "Conexão simulada validada." : "Conexão válida.", checkedAt: new Date().toISOString() });
+          if (request.method === "POST" && integrationMatch[2] === "sync") {
+            integration.status = "Conectada"; integration.lastSyncAt = new Date().toISOString();
+            integration.nextSyncAt = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
+            persistIntegrations();
+            return json(response, 200, { ok: true, received: 0, updated: 0, completedAt: integration.lastSyncAt, message: "Sincronização demonstrativa concluída sem dados reais." });
+          }
+          if (request.method === "DELETE" && !integrationMatch[2]) {
+            integrations.delete(integration.id); persistIntegrations();
+            return json(response, 200, { ok: true, historyPreserved: true });
+          }
         }
         return json(response, 404, { message: "Rota não encontrada." });
       });

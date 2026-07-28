@@ -4,10 +4,11 @@ import {
   Activity, AlertTriangle, ArrowLeft, ArrowRight, BarChart3, Bell, BriefcaseBusiness,
   CalendarDays, Check, ChevronDown, CircleDollarSign, Download, FileText, Gauge,
   Eye, EyeOff, HelpCircle, LayoutDashboard, LogOut, Megaphone, Menu, MoreHorizontal, Plus, Search,
-  Settings, ShieldCheck, Sparkles, Sun, Moon, TrendingDown, TrendingUp, UserPlus, Users, X
+  Plug, Settings, ShieldCheck, Sparkles, Sun, Moon, TrendingDown, TrendingUp, UserPlus, Users, X
 } from "lucide-react";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { campaigns, clients, trend, type Health } from "./data";
+import { Connections } from "./Connections";
 
 const money = (value: number) => value.toLocaleString("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 0 });
 const nav = [
@@ -16,6 +17,7 @@ const nav = [
   { to: "/midia", icon: Megaphone, label: "Mídia paga" },
   { to: "/relatorios", icon: FileText, label: "Relatórios" },
   { to: "/equipe", icon: Users, label: "Equipe & acesso" },
+  { to: "/configuracoes/integracoes", icon: Plug, label: "Central de Conexões" },
 ];
 
 function Status({ value }: { value: Health | string }) {
@@ -64,6 +66,7 @@ function Shell({ user, onLogout }: { user: SessionUser; onLogout: () => void }) 
         <Route path="/midia/:id" element={<CampaignDetail />} />
         <Route path="/relatorios" element={<Reports />} />
         <Route path="/equipe" element={<Team />} />
+        <Route path="/configuracoes/integracoes" element={<Connections />} />
         <Route path="*" element={<Dashboard />} />
       </Routes>
       <MobileNav />

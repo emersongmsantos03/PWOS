@@ -22,3 +22,12 @@ Senha master vem exclusivamente de `PW_OS_MASTER_INITIAL_PASSWORD`, recebe hash 
 ## Migração Azure
 
 Banco acessado por adaptador PostgreSQL; arquivos por interface `FileStorage`. As implementações locais podem ser trocadas por Azure Database for PostgreSQL e Azure Blob Storage. Configuração permanece em variáveis de ambiente, compatível futuramente com Key Vault.
+
+## Central de Conexões de Ads
+
+- O domínio usa `AdPlatformConnector`; detalhes específicos ficam nos adaptadores Google Ads e Meta Ads.
+- OAuth real será iniciado e concluído exclusivamente no backend, com `state`, PKCE quando aplicável e redirect URI validada.
+- Tokens não chegam ao frontend. Credenciais ficam separadas, criptografadas em repouso com chave externa e migração prevista para Azure Key Vault.
+- A simulação existe apenas no desenvolvimento, exige escolha explícita e é identificada visualmente em todas as telas.
+- Permissões independentes: `integrations.view`, `create`, `authorize`, `edit`, `sync`, `manage_accounts`, `manage_campaigns`, `manage_client_access`, `view_logs`, `revoke` e `delete`.
+- Clientes externos recebem negação integral à central; contas e campanhas continuam isoladas por organização e vínculo de cliente.

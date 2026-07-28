@@ -4,6 +4,8 @@ datasource db { provider = "postgresql"; url = env("DATABASE_URL") }
 enum TechnicalProfile { MASTER ADMIN COLLABORATOR CLIENT }
 enum UserStatus { INVITED ACTIVE BLOCKED DISABLED }
 enum PermissionEffect { ALLOW DENY }
+enum AdIntegrationPlatform { GOOGLE_ADS META_ADS }
+enum IntegrationStatus { CONNECTED SYNCING ATTENTION AUTH_EXPIRING AUTH_EXPIRED ERROR PAUSED DISCONNECTED }
 
 model Organization {
   id String @id @default(uuid()) @db.Uuid
@@ -52,4 +54,100 @@ model AuditLog {
   metadata Json?
   createdAt DateTime @default(now())
   @@index([organizationId, createdAt])
+}
+
+model IntegrationConnection {
+  id String @id @default(uuid()) @db.Uuid
+  organizationId String @db.Uuid
+  platform AdIntegrationPlatform
+  name String
+  externalId String?
+  status IntegrationStatus @default(DISCONNECTED)
+  lastSyncAt DateTime?
+  nextSyncAt DateTime?
+  lastSuccessAt DateTime?
+  lastErrorCode String?
+  createdBy String @db.Uuid
+  updatedBy String @db.Uuid
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  credentials IntegrationCredential?
+  accounts ExternalAdAccount[]
+  schedules IntegrationSyncSchedule[]
+  syncRuns IntegrationSyncRun[]
+  @@index([organizationId, platform, status])
+}
+
+model IntegrationCredential {
+  id String @id @default(uuid()) @db.Uuid
+  connectionId String @unique @db.Uuid
+  connection IntegrationConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  encryptedAccessToken Bytes
+  encryptedRefreshToken Bytes?
+  tokenExpiresAt DateTime?
+  encryptionKeyVersion String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ExternalAdAccount {
+  id String @id @default(uuid()) @db.Uuid
+  organizationId String @db.Uuid
+  connectionId String @db.Uuid
+  connection IntegrationConnection @relation(fields: [connectionId], references: [id])
+  externalId String
+  name String
+  currency String
+  timezone String
+  status String
+  rawPayload Json?
+  campaigns ExternalCampaign[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([connectionId, externalId])
+  @@index([organizationId, connectionId])
+}
+
+model ExternalCampaign {
+  id String @id @default(uuid()) @db.Uuid
+  organizationId String @db.Uuid
+  accountId String @db.Uuid
+  account ExternalAdAccount @relation(fields: [accountId], references: [id])
+  externalId String
+  name String
+  status String
+  objective String?
+  syncEnabled Boolean @default(true)
+  rawPayload Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([accountId, externalId])
+  @@index([organizationId, accountId, status])
+}
+
+model IntegrationSyncSchedule {
+  id String @id @default(uuid()) @db.Uuid
+  connectionId String @db.Uuid
+  connection IntegrationConnection @relation(fields: [connectionId], references: [id])
+  frequency String
+  enabled Boolean @default(true)
+  nextRunAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model IntegrationSyncRun {
+  id String @id @default(uuid()) @db.Uuid
+  connectionId String @db.Uuid
+  connection IntegrationConnection @relation(fields: [connectionId], references: [id])
+  startedAt DateTime
+  finishedAt DateTime?
+  accountsProcessed Int @default(0)
+  recordsReceived Int @default(0)
+  recordsUpdated Int @default(0)
+  result String
+  friendlyMessage String?
+  technicalReference String?
+  createdAt DateTime @default(now())
+  @@index([connectionId, startedAt])
 }
