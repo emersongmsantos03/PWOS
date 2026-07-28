@@ -54,10 +54,7 @@ function RoleEditor({role,catalog,onClose,onSave}:{role?:Role;catalog:CatalogMod
   const [description,setDescription]=useState(role?.description||"");
   const [level,setLevel]=useState(role?.level||10);
   const [permissions,setPermissions]=useState<string[]>(role?.permissions||[]);
-  const [expanded,setExpanded]=useState<string[]>(() => {
-    const selectedModules=catalog.filter(module=>module.actions.some(action=>(role?.permissions||[]).includes(`${module.key}.${action}`))).map(module=>module.key);
-    return selectedModules.length ? selectedModules : catalog.slice(0,2).map(module=>module.key);
-  });
+  const [expanded,setExpanded]=useState<string[]>(() => catalog.map(module=>module.key));
   const toggle=(permission:string)=>setPermissions(value=>value.includes(permission)?value.filter(item=>item!==permission):[...value,permission]);
   const toggleModule=(module:CatalogModule)=>{const keys=module.actions.map(action=>`${module.key}.${action}`);const all=keys.every(key=>permissions.includes(key));setPermissions(value=>all?value.filter(item=>!keys.includes(item)):Array.from(new Set([...value,...keys])))};
   const toggleExpanded=(key:string)=>setExpanded(value=>value.includes(key)?value.filter(item=>item!==key):[...value,key]);
