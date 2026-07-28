@@ -20,6 +20,12 @@ const safeEqual = (a: string, b: string) => {
   return left.length === right.length && timingSafeEqual(left, right);
 };
 const publicUser = ({ passwordHash: _, salt: __, ...user }: User) => user;
+const hasPermission = (user: User, permission: string) => {
+  if (user.profile === "MASTER") return true;
+  const override = user.permissionOverrides?.[permission];
+  if (override) return override === "ALLOW";
+  return !!user.roleId && !!roles.get(user.roleId)?.permissions.includes(permission);
+};
 const cookies = (request: IncomingMessage) => Object.fromEntries((request.headers.cookie || "").split(";").filter(Boolean).map(value => value.trim().split("=")));
 const body = async (request: IncomingMessage) => {
   let value = "";
@@ -111,7 +117,7 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
         if (url === "/permissions/catalog" && request.method === "GET") return json(response, 200, { modules: permissionCatalog });
         if (url === "/roles" && request.method === "GET") return json(response, 200, { roles: [...roles.values()].map(role => ({ ...role, userCount: [...users.values()].filter(user => user.roleId === role.id).length })) });
         if (url === "/roles" && request.method === "POST") {
-          if (currentUser.profile !== "MASTER") return json(response, 403, { message: "Somente o dono pode criar cargos nesta fase." });
+          if (!hasPermission(currentUser, "roles.create")) return json(response, 403, { message: "Permissão insuficiente." });
           const input = await body(request);
           if (!input.name) return json(response, 400, { message: "Informe o nome do cargo." });
           const role: Role = { id: randomUUID(), name: input.name, description: input.description || "", level: Number(input.level || 10), system: false, permissions: Array.isArray(input.permissions) ? input.permissions.filter(permission => allPermissions.includes(permission)) : [] };
@@ -120,7 +126,7 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
         }
         const roleMatch = url.match(/^\/roles\/([^/]+)$/);
         if (roleMatch && request.method === "PATCH") {
-          if (currentUser.profile !== "MASTER") return json(response, 403, { message: "Permissão insuficiente." });
+          if (!hasPermission(currentUser, "roles.edit")) return json(response, 403, { message: "Permissão insuficiente." });
           const role = roles.get(roleMatch[1]);
           if (!role || role.system) return json(response, 403, { message: "Cargo protegido." });
           const input = await body(request);
@@ -132,7 +138,7 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
           return json(response, 200, { role });
         }
         if (roleMatch && request.method === "DELETE") {
-          if (currentUser.profile !== "MASTER") return json(response, 403, { message: "Permissão insuficiente." });
+          if (!hasPermission(currentUser, "roles.delete")) return json(response, 403, { message: "Permissão insuficiente." });
           const role = roles.get(roleMatch[1]);
           if (!role || role.system) return json(response, 403, { message: "Cargo protegido." });
           if ([...users.values()].some(user => user.roleId === role.id)) return json(response, 409, { message: "Reatribua os usuários antes de excluir este cargo." });
@@ -141,14 +147,14 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
         }
         if (url === "/users" && request.method === "GET") return json(response, 200, { users: [...users.values()].map(publicUser) });
         if (url === "/users" && request.method === "POST") {
-          if (currentUser.profile !== "MASTER") return json(response, 403, { message: "Permissão insuficiente." });
+          if (!hasPermission(currentUser, "users.create")) return json(response, 403, { message: "Permissão insuficiente." });
           const input = await body(request);
           if (!input.name || !input.email || !input.password) return json(response, 400, { message: "Preencha nome, e-mail e senha inicial." });
           if ([...users.values()].some(item => item.email === input.email.toLowerCase())) return json(response, 409, { message: "E-mail já cadastrado." });
           const userSalt = randomBytes(16).toString("hex");
           if (input.profile === "CLIENT") return json(response, 400, { message: "Clientes externos devem ser cadastrados dentro do cliente correspondente." });
           const selectedRole = input.roleId && roles.get(input.roleId);
-          if (!selectedRole || selectedRole.system) return json(response, 400, { message: "Selecione um cargo válido." });
+          if (!selectedRole) return json(response, 400, { message: "Selecione um cargo válido." });
           const user: User = { id: randomUUID(), name: input.name, email: input.email.toLowerCase(), profile: input.profile || "COLLABORATOR", role: selectedRole.name, roleId: selectedRole.id, permissionOverrides: {}, mustChangePassword: true, salt: userSalt, passwordHash: hash(input.password, userSalt) };
           users.set(user.id, user);
           persistUsers();
@@ -156,12 +162,12 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
         }
         const userAccessMatch = url.match(/^\/users\/([^/]+)\/access$/);
         if (userAccessMatch && request.method === "PATCH") {
-          if (currentUser.profile !== "MASTER") return json(response, 403, { message: "Somente o dono pode alterar acessos nesta fase." });
+          if (!hasPermission(currentUser, "users.edit")) return json(response, 403, { message: "Permissão insuficiente." });
           const user = users.get(userAccessMatch[1]);
           if (!user || user.profile === "MASTER") return json(response, 403, { message: "O acesso do dono é protegido." });
           const input = await body(request);
           const role = roles.get(input.roleId);
-          if (!role || role.system) return json(response, 400, { message: "Cargo inválido." });
+          if (!role) return json(response, 400, { message: "Cargo inválido." });
           const overrides = input.permissionOverrides && typeof input.permissionOverrides === "object" ? input.permissionOverrides : {};
           user.roleId = role.id; user.role = role.name;
           user.permissionOverrides = Object.fromEntries(Object.entries(overrides).filter(([permission,effect]) => allPermissions.includes(permission) && ["ALLOW","DENY"].includes(String(effect)))) as Record<string, "ALLOW" | "DENY">;
@@ -170,7 +176,7 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
         }
         const userMatch = url.match(/^\/users\/([^/]+)$/);
         if (userMatch && request.method === "DELETE") {
-          if (currentUser.profile !== "MASTER") return json(response, 403, { message: "Permissão insuficiente." });
+          if (!hasPermission(currentUser, "users.edit")) return json(response, 403, { message: "Permissão insuficiente." });
           const user = users.get(userMatch[1]);
           if (!user || user.profile === "MASTER") return json(response, 403, { message: "A conta do dono não pode ser excluída." });
           users.delete(user.id); persistUsers();
