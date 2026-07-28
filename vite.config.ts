@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { defineConfig, loadEnv, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
@@ -27,9 +28,18 @@ const json = (response: ServerResponse, status: number, value: unknown) => {
 };
 
 function localApi(masterEmail: string, masterPassword: string): Plugin {
+  const localUsersPath = "data/users.local.json";
   const salt = randomBytes(16).toString("hex");
   const master: User = { id: randomUUID(), name: "Emerson Santos", email: masterEmail.toLowerCase(), profile: "MASTER", role: "Administrador", salt, passwordHash: hash(masterPassword, salt) };
   users.set(master.id, master);
+  if (existsSync(localUsersPath)) {
+    const storedUsers = JSON.parse(readFileSync(localUsersPath, "utf8")) as User[];
+    storedUsers.forEach(user => users.set(user.id, user));
+  }
+  const persistUsers = () => {
+    mkdirSync("data", { recursive: true });
+    writeFileSync(localUsersPath, JSON.stringify([...users.values()].filter(user => user.profile !== "MASTER"), null, 2), { mode: 0o600 });
+  };
   return {
     name: "pw-os-local-api",
     configureServer(server) {
@@ -63,6 +73,7 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
           const userSalt = randomBytes(16).toString("hex");
           const user: User = { id: randomUUID(), name: input.name, email: input.email.toLowerCase(), profile: input.profile || "COLLABORATOR", role: input.role || "Colaborador", salt: userSalt, passwordHash: hash(input.password, userSalt) };
           users.set(user.id, user);
+          persistUsers();
           return json(response, 201, { user: publicUser(user) });
         }
         return json(response, 404, { message: "Rota não encontrada." });
