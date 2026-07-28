@@ -4,11 +4,14 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { defineConfig, loadEnv, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
+import { allPermissions, permissionCatalog } from "./packages/permissions/src/catalog";
 
-type User = { id: string; name: string; email: string; profile: string; role: string; salt: string; passwordHash: string };
+type User = { id: string; name: string; email: string; profile: string; role: string; roleId?: string; permissionOverrides?: Record<string, "ALLOW" | "DENY">; salt: string; passwordHash: string };
+type Role = { id: string; name: string; description: string; level: number; system: boolean; permissions: string[] };
 type Integration = { id: string; platform: "GOOGLE_ADS" | "META_ADS"; name: string; status: string; demo: boolean; managerName: string; accountCount: number; campaignCount: number; responsible: string; lastSyncAt: string | null; nextSyncAt: string | null; frequency: string };
 const sessions = new Map<string, string>();
 const users = new Map<string, User>();
+const roles = new Map<string, Role>();
 const integrations = new Map<string, Integration>();
 const hash = (password: string, salt: string) => scryptSync(password, salt, 64).toString("hex");
 const safeEqual = (a: string, b: string) => {
@@ -21,7 +24,7 @@ const cookies = (request: IncomingMessage) => Object.fromEntries((request.header
 const body = async (request: IncomingMessage) => {
   let value = "";
   for await (const chunk of request) value += chunk;
-  return JSON.parse(value || "{}") as Record<string, string>;
+  return JSON.parse(value || "{}") as Record<string, any>;
 };
 const json = (response: ServerResponse, status: number, value: unknown) => {
   response.statusCode = status;
@@ -31,9 +34,16 @@ const json = (response: ServerResponse, status: number, value: unknown) => {
 
 function localApi(masterEmail: string, masterPassword: string): Plugin {
   const localUsersPath = "data/users.local.json";
+  const localRolesPath = "data/roles.local.json";
   const localIntegrationsPath = "data/integrations.local.json";
+  const ownerRole: Role = { id: "owner-system-role", name: "Dono da empresa", description: "Acesso total protegido. Este cargo não pode ser reduzido ou excluído.", level: 100, system: true, permissions: [...allPermissions] };
+  roles.set(ownerRole.id, ownerRole);
+  if (existsSync(localRolesPath)) {
+    const storedRoles = JSON.parse(readFileSync(localRolesPath, "utf8")) as Role[];
+    storedRoles.forEach(role => roles.set(role.id, role));
+  }
   const salt = randomBytes(16).toString("hex");
-  const master: User = { id: randomUUID(), name: "Emerson Santos", email: masterEmail.toLowerCase(), profile: "MASTER", role: "Administrador", salt, passwordHash: hash(masterPassword, salt) };
+  const master: User = { id: randomUUID(), name: "Emerson Santos", email: masterEmail.toLowerCase(), profile: "MASTER", role: ownerRole.name, roleId: ownerRole.id, permissionOverrides: {}, salt, passwordHash: hash(masterPassword, salt) };
   users.set(master.id, master);
   if (existsSync(localUsersPath)) {
     const storedUsers = JSON.parse(readFileSync(localUsersPath, "utf8")) as User[];
@@ -42,6 +52,10 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
   const persistUsers = () => {
     mkdirSync("data", { recursive: true });
     writeFileSync(localUsersPath, JSON.stringify([...users.values()].filter(user => user.profile !== "MASTER"), null, 2), { mode: 0o600 });
+  };
+  const persistRoles = () => {
+    mkdirSync("data", { recursive: true });
+    writeFileSync(localRolesPath, JSON.stringify([...roles.values()].filter(role => !role.system), null, 2), { mode: 0o600 });
   };
   if (existsSync(localIntegrationsPath)) {
     const storedIntegrations = JSON.parse(readFileSync(localIntegrationsPath, "utf8")) as Integration[];
@@ -76,6 +90,37 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
         }
         if (!currentUser) return json(response, 401, { message: "Sessão necessária." });
         if (currentUser.profile === "CLIENT" && url.startsWith("/integrations")) return json(response, 403, { message: "Clientes externos não acessam a Central de Conexões." });
+        if (url === "/permissions/catalog" && request.method === "GET") return json(response, 200, { modules: permissionCatalog });
+        if (url === "/roles" && request.method === "GET") return json(response, 200, { roles: [...roles.values()].map(role => ({ ...role, userCount: [...users.values()].filter(user => user.roleId === role.id).length })) });
+        if (url === "/roles" && request.method === "POST") {
+          if (currentUser.profile !== "MASTER") return json(response, 403, { message: "Somente o dono pode criar cargos nesta fase." });
+          const input = await body(request);
+          if (!input.name) return json(response, 400, { message: "Informe o nome do cargo." });
+          const role: Role = { id: randomUUID(), name: input.name, description: input.description || "", level: Number(input.level || 10), system: false, permissions: Array.isArray(input.permissions) ? input.permissions.filter(permission => allPermissions.includes(permission)) : [] };
+          roles.set(role.id, role); persistRoles();
+          return json(response, 201, { role });
+        }
+        const roleMatch = url.match(/^\/roles\/([^/]+)$/);
+        if (roleMatch && request.method === "PATCH") {
+          if (currentUser.profile !== "MASTER") return json(response, 403, { message: "Permissão insuficiente." });
+          const role = roles.get(roleMatch[1]);
+          if (!role || role.system) return json(response, 403, { message: "Cargo protegido." });
+          const input = await body(request);
+          role.name = input.name || role.name; role.description = input.description ?? role.description; role.level = Number(input.level || role.level);
+          role.permissions = Array.isArray(input.permissions) ? input.permissions.filter(permission => allPermissions.includes(permission)) : role.permissions;
+          roles.set(role.id, role);
+          users.forEach(user => { if (user.roleId === role.id) user.role = role.name; });
+          persistRoles(); persistUsers();
+          return json(response, 200, { role });
+        }
+        if (roleMatch && request.method === "DELETE") {
+          if (currentUser.profile !== "MASTER") return json(response, 403, { message: "Permissão insuficiente." });
+          const role = roles.get(roleMatch[1]);
+          if (!role || role.system) return json(response, 403, { message: "Cargo protegido." });
+          if ([...users.values()].some(user => user.roleId === role.id)) return json(response, 409, { message: "Reatribua os usuários antes de excluir este cargo." });
+          roles.delete(role.id); persistRoles();
+          return json(response, 200, { ok: true });
+        }
         if (url === "/users" && request.method === "GET") return json(response, 200, { users: [...users.values()].map(publicUser) });
         if (url === "/users" && request.method === "POST") {
           if (currentUser.profile !== "MASTER") return json(response, 403, { message: "Permissão insuficiente." });
@@ -83,10 +128,34 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
           if (!input.name || !input.email || !input.password) return json(response, 400, { message: "Preencha nome, e-mail e senha inicial." });
           if ([...users.values()].some(item => item.email === input.email.toLowerCase())) return json(response, 409, { message: "E-mail já cadastrado." });
           const userSalt = randomBytes(16).toString("hex");
-          const user: User = { id: randomUUID(), name: input.name, email: input.email.toLowerCase(), profile: input.profile || "COLLABORATOR", role: input.role || "Colaborador", salt: userSalt, passwordHash: hash(input.password, userSalt) };
+          const selectedRole = input.roleId && roles.get(input.roleId);
+          if (!selectedRole || selectedRole.system) return json(response, 400, { message: "Selecione um cargo válido." });
+          const user: User = { id: randomUUID(), name: input.name, email: input.email.toLowerCase(), profile: input.profile || "COLLABORATOR", role: selectedRole.name, roleId: selectedRole.id, permissionOverrides: {}, salt: userSalt, passwordHash: hash(input.password, userSalt) };
           users.set(user.id, user);
           persistUsers();
           return json(response, 201, { user: publicUser(user) });
+        }
+        const userAccessMatch = url.match(/^\/users\/([^/]+)\/access$/);
+        if (userAccessMatch && request.method === "PATCH") {
+          if (currentUser.profile !== "MASTER") return json(response, 403, { message: "Somente o dono pode alterar acessos nesta fase." });
+          const user = users.get(userAccessMatch[1]);
+          if (!user || user.profile === "MASTER") return json(response, 403, { message: "O acesso do dono é protegido." });
+          const input = await body(request);
+          const role = roles.get(input.roleId);
+          if (!role || role.system) return json(response, 400, { message: "Cargo inválido." });
+          const overrides = input.permissionOverrides && typeof input.permissionOverrides === "object" ? input.permissionOverrides : {};
+          user.roleId = role.id; user.role = role.name;
+          user.permissionOverrides = Object.fromEntries(Object.entries(overrides).filter(([permission,effect]) => allPermissions.includes(permission) && ["ALLOW","DENY"].includes(String(effect)))) as Record<string, "ALLOW" | "DENY">;
+          users.set(user.id, user); persistUsers();
+          return json(response, 200, { user: publicUser(user), effectivePermissions: allPermissions.map(permission => ({ permission, allowed: user.permissionOverrides?.[permission] ? user.permissionOverrides[permission] === "ALLOW" : role.permissions.includes(permission), source: user.permissionOverrides?.[permission] ? `USER_${user.permissionOverrides[permission]}` : "ROLE" })) });
+        }
+        const userMatch = url.match(/^\/users\/([^/]+)$/);
+        if (userMatch && request.method === "DELETE") {
+          if (currentUser.profile !== "MASTER") return json(response, 403, { message: "Permissão insuficiente." });
+          const user = users.get(userMatch[1]);
+          if (!user || user.profile === "MASTER") return json(response, 403, { message: "A conta do dono não pode ser excluída." });
+          users.delete(user.id); persistUsers();
+          return json(response, 200, { ok: true });
         }
         if (url === "/integrations" && request.method === "GET") return json(response, 200, { integrations: [...integrations.values()] });
         const demoMatch = url.match(/^\/integrations\/(google_ads|meta_ads)\/demo$/);

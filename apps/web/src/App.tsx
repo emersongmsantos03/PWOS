@@ -9,6 +9,7 @@ import {
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { campaigns, clients, trend, type Health } from "./data";
 import { Connections } from "./Connections";
+import { AccessManagement } from "./AccessManagement";
 
 const money = (value: number) => value.toLocaleString("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 0 });
 const nav = [
@@ -65,7 +66,7 @@ function Shell({ user, onLogout }: { user: SessionUser; onLogout: () => void }) 
         <Route path="/midia" element={<Media />} />
         <Route path="/midia/:id" element={<CampaignDetail />} />
         <Route path="/relatorios" element={<Reports />} />
-        <Route path="/equipe" element={<Team />} />
+        <Route path="/equipe" element={<AccessManagement />} />
         <Route path="/configuracoes/integracoes" element={<Connections />} />
         <Route path="*" element={<Dashboard />} />
       </Routes>
