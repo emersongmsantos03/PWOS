@@ -7,7 +7,7 @@ import { VitePWA } from "vite-plugin-pwa";
 import { allPermissions, permissionCatalog } from "./packages/permissions/src/catalog";
 
 type User = { id: string; name: string; email: string; phone?: string; avatarDataUrl?: string; profile: string; role: string; roleId?: string; permissionOverrides?: Record<string, "ALLOW" | "DENY">; mustChangePassword: boolean; salt: string; passwordHash: string };
-type Role = { id: string; name: string; description: string; level: number; system: boolean; permissions: string[] };
+type Role = { id: string; name: string; description: string; level: number; system: boolean; assignable?: boolean; permissions: string[] };
 type Integration = { id: string; platform: "GOOGLE_ADS" | "META_ADS"; name: string; status: string; demo: boolean; managerName: string; accountCount: number; campaignCount: number; responsible: string; lastSyncAt: string | null; nextSyncAt: string | null; frequency: string };
 const sessions = new Map<string, string>();
 const users = new Map<string, User>();
@@ -43,14 +43,16 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
   const localRolesPath = "data/roles.local.json";
   const localIntegrationsPath = "data/integrations.local.json";
   const localMasterProfilePath = "data/master-profile.local.json";
-  const ownerRole: Role = { id: "owner-system-role", name: "CEO", description: "Acesso executivo total e protegido a todos os módulos.", level: 100, system: true, permissions: [...allPermissions] };
-  roles.set(ownerRole.id, ownerRole);
+  const developerRole: Role = { id: "developer-system-role", name: "Desenvolvedor", description: "Acesso técnico total e protegido para desenvolvimento e manutenção do PW OS.", level: 100, system: true, assignable: false, permissions: [...allPermissions] };
+  const ceoRole: Role = { id: "owner-system-role", name: "CEO", description: "Acesso executivo total e protegido para a direção da empresa.", level: 99, system: true, assignable: true, permissions: [...allPermissions] };
+  roles.set(developerRole.id, developerRole);
+  roles.set(ceoRole.id, ceoRole);
   if (existsSync(localRolesPath)) {
     const storedRoles = JSON.parse(readFileSync(localRolesPath, "utf8")) as Role[];
     storedRoles.forEach(role => roles.set(role.id, role));
   }
   const salt = randomBytes(16).toString("hex");
-  const master: User = { id: randomUUID(), name: "Emerson Santos", email: masterEmail.toLowerCase(), profile: "MASTER", role: ownerRole.name, roleId: ownerRole.id, permissionOverrides: {}, mustChangePassword: false, salt, passwordHash: hash(masterPassword, salt) };
+  const master: User = { id: randomUUID(), name: "Emerson Santos", email: masterEmail.toLowerCase(), profile: "MASTER", role: developerRole.name, roleId: developerRole.id, permissionOverrides: {}, mustChangePassword: false, salt, passwordHash: hash(masterPassword, salt) };
   if (existsSync(localMasterProfilePath)) Object.assign(master, JSON.parse(readFileSync(localMasterProfilePath, "utf8")));
   users.set(master.id, master);
   if (existsSync(localUsersPath)) {
@@ -176,7 +178,7 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
           const userSalt = randomBytes(16).toString("hex");
           if (input.profile === "CLIENT") return json(response, 400, { message: "Clientes externos devem ser cadastrados dentro do cliente correspondente." });
           const selectedRole = input.roleId && roles.get(input.roleId);
-          if (!selectedRole) return json(response, 400, { message: "Selecione um cargo válido." });
+          if (!selectedRole || selectedRole.assignable === false) return json(response, 400, { message: "Selecione um cargo válido para este usuário." });
           const user: User = { id: randomUUID(), name: input.name, email: input.email.toLowerCase(), profile: input.profile || "COLLABORATOR", role: selectedRole.name, roleId: selectedRole.id, permissionOverrides: {}, mustChangePassword: true, salt: userSalt, passwordHash: hash(input.password, userSalt) };
           users.set(user.id, user);
           persistUsers();
@@ -189,7 +191,7 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
           if (!user || user.profile === "MASTER") return json(response, 403, { message: "O acesso do dono é protegido." });
           const input = await body(request);
           const role = roles.get(input.roleId);
-          if (!role) return json(response, 400, { message: "Cargo inválido." });
+          if (!role || role.assignable === false) return json(response, 400, { message: "Cargo inválido para este usuário." });
           const overrides = input.permissionOverrides && typeof input.permissionOverrides === "object" ? input.permissionOverrides : {};
           user.roleId = role.id; user.role = role.name;
           user.permissionOverrides = Object.fromEntries(Object.entries(overrides).filter(([permission,effect]) => allPermissions.includes(permission) && ["ALLOW","DENY"].includes(String(effect)))) as Record<string, "ALLOW" | "DENY">;
