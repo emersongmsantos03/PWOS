@@ -10,7 +10,8 @@ const first=(name:string)=>name.split(" ")[0];
 export function DashboardBoards({user}:{user:User}){
   const [tickets,setTickets]=useState<Ticket[]>([]),[clients,setClients]=useState<Client[]>([]);
   useEffect(()=>{Promise.all([fetch("/api/tickets"),fetch("/api/clients")]).then(async([tr,cr])=>{const [td,cd]=await Promise.all([tr.json(),cr.json()]);if(tr.ok)setTickets(td.tickets||[]);if(cr.ok)setClients(cd.clients||[])}).catch(()=>{})},[]);
-  const executive=user.role.toLowerCase().includes("ceo")||user.role.toLowerCase().includes("diretor");
+  const normalizedRole=user.role.toLowerCase();
+  const executive=user.profile==="MASTER"||normalizedRole.includes("ceo")||normalizedRole.includes("diretor")||normalizedRole.includes("desenvolvedor")||normalizedRole.includes("desenvolvimento");
   return executive?<ExecutiveBoard user={user} tickets={tickets} clients={clients}/>:<CollaboratorBoard user={user} tickets={tickets} clients={clients}/>;
 }
 

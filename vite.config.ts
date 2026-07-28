@@ -6,11 +6,11 @@ import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 import { allPermissions, permissionCatalog } from "./packages/permissions/src/catalog";
 
-type User = { id: string; name: string; email: string; phone?: string; avatarDataUrl?: string; profile: string; role: string; roleId?: string; permissionOverrides?: Record<string, "ALLOW" | "DENY">; mustChangePassword: boolean; salt: string; passwordHash: string };
+type User = { id: string; name: string; email: string; phone?: string; avatarDataUrl?: string; profile: string; role: string; roleId?: string; departmentId?: string; departmentName?: string; permissionOverrides?: Record<string, "ALLOW" | "DENY">; mustChangePassword: boolean; salt: string; passwordHash: string };
 type Role = { id: string; name: string; description: string; level: number; system: boolean; assignable?: boolean; permissions: string[] };
 type Integration = { id: string; platform: "GOOGLE_ADS" | "META_ADS"; name: string; status: string; demo: boolean; managerName: string; accountCount: number; campaignCount: number; responsible: string; lastSyncAt: string | null; nextSyncAt: string | null; frequency: string };
 type Client = { id:string; name:string; legalName:string; document:string; status:"ACTIVE"|"ATTENTION"|"RISK"|"INACTIVE"; segment:string; website:string; primaryContactName:string; primaryContactEmail:string; primaryContactPhone:string; owner:string; notes:string; createdAt:string; updatedAt:string };
-type Department = { id:string; name:string; description:string; active:boolean; createdAt:string };
+type Department = { id:string; name:string; description:string; active:boolean; managerUserId?:string; managerName?:string; createdAt:string };
 type TicketComment = { id:string; authorId:string; authorName:string; message:string; mentions:string[]; createdAt:string };
 type Ticket = { id:string; code:string; title:string; description:string; departmentId:string; requesterId:string; requesterName:string; assigneeId:string; assigneeName:string; priority:"LOW"|"MEDIUM"|"HIGH"|"URGENT"; status:"OPEN"|"IN_PROGRESS"|"WAITING"|"RESOLVED"|"CLOSED"; dueAt:string; participantIds:string[]; comments:TicketComment[]; createdAt:string; updatedAt:string };
 const sessions = new Map<string, string>();
@@ -21,6 +21,12 @@ const clients = new Map<string, Client>();
 const departments = new Map<string, Department>();
 const tickets = new Map<string, Ticket>();
 const hash = (password: string, salt: string) => scryptSync(password, salt, 64).toString("hex");
+const onlyDigits=(value:string)=>value.replace(/\D/g,"");
+const repeatedDigits=(value:string)=>/^(\d)\1+$/.test(value);
+const validCPF=(value:string)=>{const raw=onlyDigits(value);if(raw.length!==11||repeatedDigits(raw))return false;const check=(length:number)=>{let sum=0;for(let i=0;i<length;i++)sum+=Number(raw[i])*(length+1-i);const mod=(sum*10)%11;return(mod===10?0:mod)===Number(raw[length])};return check(9)&&check(10)};
+const validCNPJ=(value:string)=>{const raw=onlyDigits(value);if(raw.length!==14||repeatedDigits(raw))return false;const calc=(base:string)=>{let factor=base.length-7,sum=0;for(const digit of base){sum+=Number(digit)*factor--;if(factor===1)factor=9}const mod=sum%11;return mod<2?0:11-mod};return calc(raw.slice(0,12))===Number(raw[12])&&calc(raw.slice(0,13))===Number(raw[13])};
+const validDocument=(value:string)=>{const raw=onlyDigits(value);return raw.length===11?validCPF(raw):raw.length===14?validCNPJ(raw):false};
+const validPhone=(value:string)=>{const raw=onlyDigits(value);return !value||raw.length===10||raw.length===11};
 const safeEqual = (a: string, b: string) => {
   const left = Buffer.from(a);
   const right = Buffer.from(b);
@@ -158,7 +164,7 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
           const phone = String(input.phone || "").trim();
           const avatarDataUrl = String(input.avatarDataUrl || "");
           if (name.length < 2 || name.length > 100) return json(response, 400, { message: "Informe um nome válido." });
-          if (phone.length > 30) return json(response, 400, { message: "Telefone inválido." });
+          if (!validPhone(phone)) return json(response, 400, { message: "Informe um telefone válido com DDD." });
           if (avatarDataUrl && (!/^data:image\/(png|jpeg|webp);base64,/.test(avatarDataUrl) || avatarDataUrl.length > 1_600_000)) return json(response, 400, { message: "Use uma imagem PNG, JPG ou WebP de até 1 MB." });
           currentUser.name = name; currentUser.phone = phone; currentUser.avatarDataUrl = avatarDataUrl;
           users.set(currentUser.id, currentUser); persistUser(currentUser);
@@ -183,6 +189,7 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
         if(departmentMatch&&request.method==="DELETE"){
           if(!hasPermission(currentUser,"tickets.manage_departments"))return json(response,403,{message:"Permissão insuficiente."});
           if([...tickets.values()].some(ticket=>ticket.departmentId===departmentMatch[1]))return json(response,409,{message:"Este setor possui chamados e não pode ser excluído."});
+          if([...users.values()].some(user=>user.departmentId===departmentMatch[1]))return json(response,409,{message:"Este setor possui colaboradores vinculados. Reatribua-os antes de excluir."});
           departments.delete(departmentMatch[1]);persistDepartments();return json(response,200,{ok:true});
         }
         const canSeeTicket=(ticket:Ticket)=>hasPermission(currentUser,"tickets.view_all")||ticket.requesterId===currentUser.id||ticket.assigneeId===currentUser.id||ticket.participantIds.includes(currentUser.id);
@@ -234,10 +241,13 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
           if (!hasPermission(currentUser, "clients.create")) return json(response, 403, { message: "Você não possui permissão para criar clientes." });
           const input = await body(request);
           const name = String(input.name || "").trim();
+          const document=String(input.document||"").trim(),primaryContactPhone=String(input.primaryContactPhone||"").trim();
           if (name.length < 2 || name.length > 120) return json(response, 400, { message: "Informe um nome de cliente válido." });
+          if(document&&!validDocument(document))return json(response,400,{message:"Informe um CPF ou CNPJ válido."});
+          if(!validPhone(primaryContactPhone))return json(response,400,{message:"Informe um telefone válido com DDD."});
           if ([...clients.values()].some(client=>client.name.toLowerCase()===name.toLowerCase())) return json(response, 409, { message: "Já existe um cliente com este nome." });
           const now = new Date().toISOString();
-          const client:Client = { id:randomUUID(), name, legalName:String(input.legalName||"").trim(), document:String(input.document||"").trim(), status:["ACTIVE","ATTENTION","RISK","INACTIVE"].includes(input.status)?input.status:"ACTIVE", segment:String(input.segment||"").trim(), website:String(input.website||"").trim(), primaryContactName:String(input.primaryContactName||"").trim(), primaryContactEmail:String(input.primaryContactEmail||"").trim().toLowerCase(), primaryContactPhone:String(input.primaryContactPhone||"").trim(), owner:String(input.owner||"").trim(), notes:String(input.notes||"").trim(), createdAt:now, updatedAt:now };
+          const client:Client = { id:randomUUID(), name, legalName:String(input.legalName||"").trim(), document, status:["ACTIVE","ATTENTION","RISK","INACTIVE"].includes(input.status)?input.status:"ACTIVE", segment:String(input.segment||"").trim(), website:String(input.website||"").trim(), primaryContactName:String(input.primaryContactName||"").trim(), primaryContactEmail:String(input.primaryContactEmail||"").trim().toLowerCase(), primaryContactPhone, owner:String(input.owner||"").trim(), notes:String(input.notes||"").trim(), createdAt:now, updatedAt:now };
           clients.set(client.id,client);persistClients();
           return json(response,201,{client});
         }
@@ -250,9 +260,12 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
           if(!hasPermission(currentUser,"clients.edit"))return json(response,403,{message:"Você não possui permissão para editar clientes."});
           const client=clients.get(clientMatch[1]);if(!client)return json(response,404,{message:"Cliente não encontrado."});
           const input=await body(request);const name=String(input.name||"").trim();
+          const document=String(input.document||"").trim(),primaryContactPhone=String(input.primaryContactPhone||"").trim();
           if(name.length<2||name.length>120)return json(response,400,{message:"Informe um nome de cliente válido."});
+          if(document&&!validDocument(document))return json(response,400,{message:"Informe um CPF ou CNPJ válido."});
+          if(!validPhone(primaryContactPhone))return json(response,400,{message:"Informe um telefone válido com DDD."});
           if([...clients.values()].some(item=>item.id!==client.id&&item.name.toLowerCase()===name.toLowerCase()))return json(response,409,{message:"Já existe outro cliente com este nome."});
-          Object.assign(client,{name,legalName:String(input.legalName||"").trim(),document:String(input.document||"").trim(),status:["ACTIVE","ATTENTION","RISK","INACTIVE"].includes(input.status)?input.status:client.status,segment:String(input.segment||"").trim(),website:String(input.website||"").trim(),primaryContactName:String(input.primaryContactName||"").trim(),primaryContactEmail:String(input.primaryContactEmail||"").trim().toLowerCase(),primaryContactPhone:String(input.primaryContactPhone||"").trim(),owner:String(input.owner||"").trim(),notes:String(input.notes||"").trim(),updatedAt:new Date().toISOString()});
+          Object.assign(client,{name,legalName:String(input.legalName||"").trim(),document,status:["ACTIVE","ATTENTION","RISK","INACTIVE"].includes(input.status)?input.status:client.status,segment:String(input.segment||"").trim(),website:String(input.website||"").trim(),primaryContactName:String(input.primaryContactName||"").trim(),primaryContactEmail:String(input.primaryContactEmail||"").trim().toLowerCase(),primaryContactPhone,owner:String(input.owner||"").trim(),notes:String(input.notes||"").trim(),updatedAt:new Date().toISOString()});
           clients.set(client.id,client);persistClients();return json(response,200,{client});
         }
         if(clientMatch&&request.method==="DELETE"){
@@ -301,9 +314,12 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
           const userSalt = randomBytes(16).toString("hex");
           if (input.profile === "CLIENT") return json(response, 400, { message: "Clientes externos devem ser cadastrados dentro do cliente correspondente." });
           const selectedRole = input.roleId && roles.get(input.roleId);
+          const selectedDepartment=input.departmentId&&departments.get(String(input.departmentId));
           if (!selectedRole || selectedRole.assignable === false) return json(response, 400, { message: "Selecione um cargo válido para este usuário." });
-          const user: User = { id: randomUUID(), name: input.name, email: input.email.toLowerCase(), profile: input.profile || "COLLABORATOR", role: selectedRole.name, roleId: selectedRole.id, permissionOverrides: {}, mustChangePassword: true, salt: userSalt, passwordHash: hash(input.password, userSalt) };
+          if(input.departmentId&&!selectedDepartment)return json(response,400,{message:"Selecione um setor válido."});
+          const user: User = { id: randomUUID(), name: input.name, email: input.email.toLowerCase(), profile: input.profile || "COLLABORATOR", role: selectedRole.name, roleId: selectedRole.id, departmentId:selectedDepartment?.id, departmentName:selectedDepartment?.name, permissionOverrides: {}, mustChangePassword: true, salt: userSalt, passwordHash: hash(input.password, userSalt) };
           users.set(user.id, user);
+          if(selectedDepartment&&input.departmentManager===true){selectedDepartment.managerUserId=user.id;selectedDepartment.managerName=user.name;departments.set(selectedDepartment.id,selectedDepartment);persistDepartments()}
           persistUsers();
           return json(response, 201, { user: publicUser(user) });
         }
@@ -314,9 +330,14 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
           if (!user || user.profile === "MASTER") return json(response, 403, { message: "O acesso do dono é protegido." });
           const input = await body(request);
           const role = roles.get(input.roleId);
+          const department=input.departmentId?departments.get(String(input.departmentId)):undefined;
           if (!role || role.assignable === false) return json(response, 400, { message: "Cargo inválido para este usuário." });
+          if(input.departmentId&&!department)return json(response,400,{message:"Setor inválido para este usuário."});
           const overrides = input.permissionOverrides && typeof input.permissionOverrides === "object" ? input.permissionOverrides : {};
+          const previousDepartment=user.departmentId;
           user.roleId = role.id; user.role = role.name;
+          user.departmentId=department?.id;user.departmentName=department?.name;
+          if(previousDepartment&&previousDepartment!==user.departmentId){const previous=departments.get(previousDepartment);if(previous?.managerUserId===user.id){delete previous.managerUserId;delete previous.managerName;departments.set(previous.id,previous);persistDepartments()}}
           user.permissionOverrides = Object.fromEntries(Object.entries(overrides).filter(([permission,effect]) => allPermissions.includes(permission) && ["ALLOW","DENY"].includes(String(effect)))) as Record<string, "ALLOW" | "DENY">;
           users.set(user.id, user); persistUsers();
           return json(response, 200, { user: publicUser(user), effectivePermissions: allPermissions.map(permission => ({ permission, allowed: user.permissionOverrides?.[permission] ? user.permissionOverrides[permission] === "ALLOW" : role.permissions.includes(permission), source: user.permissionOverrides?.[permission] ? `USER_${user.permissionOverrides[permission]}` : "ROLE" })) });
@@ -326,6 +347,7 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
           if (!hasPermission(currentUser, "users.edit")) return json(response, 403, { message: "Permissão insuficiente." });
           const user = users.get(userMatch[1]);
           if (!user || user.profile === "MASTER") return json(response, 403, { message: "A conta do dono não pode ser excluída." });
+          if(user.departmentId){const department=departments.get(user.departmentId);if(department?.managerUserId===user.id){delete department.managerUserId;delete department.managerName;departments.set(department.id,department);persistDepartments()}}
           users.delete(user.id); persistUsers();
           return json(response, 200, { ok: true });
         }
