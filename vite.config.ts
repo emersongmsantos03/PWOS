@@ -46,6 +46,7 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
   const localIntegrationsPath = "data/integrations.local.json";
   const localClientsPath = "data/clients.local.json";
   const localMasterProfilePath = "data/master-profile.local.json";
+  const localMasterUserPath = "data/master-user.local.json";
   const developerRole: Role = { id: "developer-system-role", name: "Desenvolvedor", description: "Acesso técnico total e protegido para desenvolvimento e manutenção do PW OS.", level: 100, system: true, assignable: false, permissions: [...allPermissions] };
   const ceoRole: Role = { id: "owner-system-role", name: "CEO", description: "Acesso executivo total e protegido para a direção da empresa.", level: 99, system: true, assignable: true, permissions: [...allPermissions] };
   roles.set(developerRole.id, developerRole);
@@ -56,7 +57,11 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
   }
   const salt = randomBytes(16).toString("hex");
   const master: User = { id: randomUUID(), name: "Emerson Santos", email: masterEmail.toLowerCase(), profile: "MASTER", role: developerRole.name, roleId: developerRole.id, permissionOverrides: {}, mustChangePassword: false, salt, passwordHash: hash(masterPassword, salt) };
-  if (existsSync(localMasterProfilePath)) Object.assign(master, JSON.parse(readFileSync(localMasterProfilePath, "utf8")));
+  if (existsSync(localMasterUserPath)) {
+    Object.assign(master, JSON.parse(readFileSync(localMasterUserPath, "utf8")), { email: masterEmail.toLowerCase(), profile: "MASTER", role: developerRole.name, roleId: developerRole.id });
+  } else if (existsSync(localMasterProfilePath)) {
+    Object.assign(master, JSON.parse(readFileSync(localMasterProfilePath, "utf8")));
+  }
   users.set(master.id, master);
   if (existsSync(localUsersPath)) {
     const storedUsers = JSON.parse(readFileSync(localUsersPath, "utf8")) as User[];
@@ -66,10 +71,10 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
     mkdirSync("data", { recursive: true });
     writeFileSync(localUsersPath, JSON.stringify([...users.values()].filter(user => user.profile !== "MASTER"), null, 2), { mode: 0o600 });
   };
-  const persistUserProfile = (user: User) => {
+  const persistUser = (user: User) => {
     if (user.profile === "MASTER") {
       mkdirSync("data", { recursive: true });
-      writeFileSync(localMasterProfilePath, JSON.stringify({ name: user.name, phone: user.phone || "", avatarDataUrl: user.avatarDataUrl || "" }, null, 2), { mode: 0o600 });
+      writeFileSync(localMasterUserPath, JSON.stringify(user, null, 2), { mode: 0o600 });
     } else persistUsers();
   };
   const persistRoles = () => {
@@ -132,7 +137,7 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
           currentUser.salt = randomBytes(16).toString("hex");
           currentUser.passwordHash = hash(password, currentUser.salt);
           currentUser.mustChangePassword = false;
-          users.set(currentUser.id, currentUser); persistUsers();
+          users.set(currentUser.id, currentUser); persistUser(currentUser);
           return json(response, 200, { user: publicUser(currentUser) });
         }
         if (currentUser.mustChangePassword) return json(response, 403, { message: "Troque sua senha antes de continuar.", code: "PASSWORD_CHANGE_REQUIRED" });
@@ -145,7 +150,7 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
           if (phone.length > 30) return json(response, 400, { message: "Telefone inválido." });
           if (avatarDataUrl && (!/^data:image\/(png|jpeg|webp);base64,/.test(avatarDataUrl) || avatarDataUrl.length > 1_600_000)) return json(response, 400, { message: "Use uma imagem PNG, JPG ou WebP de até 1 MB." });
           currentUser.name = name; currentUser.phone = phone; currentUser.avatarDataUrl = avatarDataUrl;
-          users.set(currentUser.id, currentUser); persistUserProfile(currentUser);
+          users.set(currentUser.id, currentUser); persistUser(currentUser);
           return json(response, 200, { user: publicUser(currentUser) });
         }
         if (url === "/clients" && request.method === "GET") {
