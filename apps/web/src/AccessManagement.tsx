@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { Check, Crown, Edit3, KeyRound, LockKeyhole, MoreHorizontal, Plus, Search, ShieldCheck, SlidersHorizontal, UserPlus, Users, X } from "lucide-react";
+import { Check, ChevronDown, Crown, Edit3, KeyRound, LockKeyhole, MoreHorizontal, Plus, Search, ShieldCheck, SlidersHorizontal, UserPlus, Users, X } from "lucide-react";
 
 type Effect = "ALLOW" | "DENY";
 type User = { id: string; name: string; email: string; profile: string; role: string; roleId?: string; permissionOverrides?: Record<string, Effect> };
@@ -54,9 +54,45 @@ function RoleEditor({role,catalog,onClose,onSave}:{role?:Role;catalog:CatalogMod
   const [description,setDescription]=useState(role?.description||"");
   const [level,setLevel]=useState(role?.level||10);
   const [permissions,setPermissions]=useState<string[]>(role?.permissions||[]);
+  const [expanded,setExpanded]=useState<string[]>(() => {
+    const selectedModules=catalog.filter(module=>module.actions.some(action=>(role?.permissions||[]).includes(`${module.key}.${action}`))).map(module=>module.key);
+    return selectedModules.length ? selectedModules : catalog.slice(0,2).map(module=>module.key);
+  });
   const toggle=(permission:string)=>setPermissions(value=>value.includes(permission)?value.filter(item=>item!==permission):[...value,permission]);
   const toggleModule=(module:CatalogModule)=>{const keys=module.actions.map(action=>`${module.key}.${action}`);const all=keys.every(key=>permissions.includes(key));setPermissions(value=>all?value.filter(item=>!keys.includes(item)):Array.from(new Set([...value,...keys])))};
-  return <Modal wide title={role?"Editar cargo":"Novo cargo"} subtitle="Configure o acesso padrão. Exceções individuais continuam disponíveis em cada usuário." icon={<ShieldCheck/>} onClose={onClose}><div className="role-form"><div className="role-basics"><label>Nome do cargo<input value={name} onChange={event=>setName(event.target.value)} placeholder="Ex.: Gestor de Tráfego" autoFocus/></label><label>Nível hierárquico<input type="number" min={1} max={99} value={level} onChange={event=>setLevel(Number(event.target.value))}/></label><label className="role-description">Descrição<input value={description} onChange={event=>setDescription(event.target.value)} placeholder="Descreva brevemente a responsabilidade deste cargo"/></label></div><div className="permission-editor-head"><div><b>Permissões do cargo</b><p>{permissions.length} de {catalog.reduce((sum,module)=>sum+module.actions.length,0)} ações selecionadas</p></div><span>Cada ação é independente.</span></div><div className="permission-matrix">{catalog.map(module=>{const keys=module.actions.map(action=>`${module.key}.${action}`);const checked=keys.every(key=>permissions.includes(key));return <section key={module.key}><header><div><span className="permission-module-icon"><ShieldCheck/></span><span><b>{module.module}</b><small>{module.actions.length} ações</small></span></div><label className="select-module"><input type="checkbox" checked={checked} onChange={()=>toggleModule(module)}/><span>Selecionar tudo</span></label></header><div>{module.actions.map(action=>{const key=`${module.key}.${action}`;return <label key={key}><span>{actionNames[action]||action}<small>{key}</small></span><input type="checkbox" checked={permissions.includes(key)} onChange={()=>toggle(key)}/></label>})}</div></section>})}</div><div className="sticky-modal-actions"><button className="secondary" onClick={onClose}>Cancelar</button><button className="primary" disabled={!name} onClick={()=>onSave({name,description,level,permissions})}>{role?"Salvar alterações":"Criar cargo"}</button></div></div></Modal>;
+  const toggleExpanded=(key:string)=>setExpanded(value=>value.includes(key)?value.filter(item=>item!==key):[...value,key]);
+  const allExpanded=expanded.length===catalog.length;
+  return <Modal wide title={role?"Editar cargo":"Novo cargo"} subtitle="Configure o acesso padrão. Exceções individuais continuam disponíveis em cada usuário." icon={<ShieldCheck/>} onClose={onClose}>
+    <div className="role-form">
+      <div className="role-basics">
+        <label>Nome do cargo<input value={name} onChange={event=>setName(event.target.value)} placeholder="Ex.: Gestor de Tráfego" autoFocus/></label>
+        <label>Nível hierárquico<input type="number" min={1} max={99} value={level} onChange={event=>setLevel(Number(event.target.value))}/></label>
+        <label className="role-description">Descrição<input value={description} onChange={event=>setDescription(event.target.value)} placeholder="Descreva brevemente a responsabilidade deste cargo"/></label>
+      </div>
+      <div className="permission-editor-head"><div><b>Permissões do cargo</b><p>{permissions.length} de {catalog.reduce((sum,module)=>sum+module.actions.length,0)} ações selecionadas</p></div><button onClick={()=>setExpanded(allExpanded?[]:catalog.map(module=>module.key))}>{allExpanded?"Recolher todos":"Expandir todos"}</button></div>
+      <div className="permission-matrix">{catalog.map(module=>{
+        const keys=module.actions.map(action=>`${module.key}.${action}`);
+        const checked=keys.every(key=>permissions.includes(key));
+        const selectedCount=keys.filter(key=>permissions.includes(key)).length;
+        const isExpanded=expanded.includes(module.key);
+        return <section className={isExpanded?"expanded":""} key={module.key}>
+          <header>
+            <button className="module-toggle" onClick={()=>toggleExpanded(module.key)} aria-expanded={isExpanded}>
+              <span className="permission-module-icon"><ShieldCheck/></span>
+              <span><b>{module.module}</b><small>{selectedCount} de {module.actions.length} selecionadas</small></span>
+              <ChevronDown/>
+            </button>
+            <label className="select-module"><input type="checkbox" checked={checked} onChange={()=>toggleModule(module)}/><span>Selecionar tudo</span></label>
+          </header>
+          <div className="module-actions">{module.actions.map(action=>{
+            const key=`${module.key}.${action}`;
+            return <label key={key}><span>{actionNames[action]||action}<small>{key}</small></span><input type="checkbox" checked={permissions.includes(key)} onChange={()=>toggle(key)}/></label>
+          })}</div>
+        </section>;
+      })}</div>
+      <div className="sticky-modal-actions"><button className="secondary" onClick={onClose}>Cancelar</button><button className="primary" disabled={!name} onClick={()=>onSave({name,description,level,permissions})}>{role?"Salvar alterações":"Criar cargo"}</button></div>
+    </div>
+  </Modal>;
 }
 
 function UserAccessEditor({user,roles,catalog,onClose,onSave}:{user:User;roles:Role[];catalog:CatalogModule[];onClose:()=>void;onSave:(input:{roleId:string;permissionOverrides:Record<string,Effect>})=>void}) {
