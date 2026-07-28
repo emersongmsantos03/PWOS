@@ -4,13 +4,14 @@ import {
   Activity, AlertTriangle, ArrowLeft, ArrowRight, BarChart3, Bell, BriefcaseBusiness, Camera,
   CalendarDays, Check, ChevronDown, CircleDollarSign, Download, FileText, Gauge,
   Eye, EyeOff, HelpCircle, LayoutDashboard, LockKeyhole, LogOut, Megaphone, Menu, MoreHorizontal, Plus, Search,
-  Plug, Settings, ShieldCheck, Sparkles, Sun, Moon, TrendingDown, TrendingUp, UserPlus, Users, X
+  Plug, Settings, ShieldCheck, Sparkles, Sun, Moon, TrendingDown, TrendingUp, UserPlus, Users, X, MessagesSquare
 } from "lucide-react";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { campaigns, clients, trend, type Health } from "./data";
 import { Connections } from "./Connections";
 import { AccessManagement } from "./AccessManagement";
 import { ClientsManagement } from "./ClientsManagement";
+import { TicketsManagement } from "./TicketsManagement";
 
 const money = (value: number) => value.toLocaleString("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 0 });
 const nav = [
@@ -18,6 +19,7 @@ const nav = [
   { to: "/clientes", icon: BriefcaseBusiness, label: "Clientes" },
   { to: "/midia", icon: Megaphone, label: "Mídia paga" },
   { to: "/relatorios", icon: FileText, label: "Relatórios" },
+  { to: "/chamados", icon: MessagesSquare, label: "Chamados internos" },
   { to: "/equipe", icon: Users, label: "Equipe & acesso" },
   { to: "/configuracoes/integracoes", icon: Plug, label: "Central de Conexões" },
 ];
@@ -74,6 +76,7 @@ function Shell({ user, onLogout, onUserUpdate }: { user: SessionUser; onLogout: 
         <Route path="/midia" element={<Media />} />
         <Route path="/midia/:id" element={<CampaignDetail />} />
         <Route path="/relatorios" element={<Reports />} />
+        <Route path="/chamados" element={<TicketsManagement user={user}/>} />
         <Route path="/equipe" element={<AccessManagement />} />
         <Route path="/configuracoes/integracoes" element={<Connections />} />
         <Route path="*" element={<Dashboard />} />

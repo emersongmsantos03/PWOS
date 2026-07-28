@@ -10,11 +10,16 @@ type User = { id: string; name: string; email: string; phone?: string; avatarDat
 type Role = { id: string; name: string; description: string; level: number; system: boolean; assignable?: boolean; permissions: string[] };
 type Integration = { id: string; platform: "GOOGLE_ADS" | "META_ADS"; name: string; status: string; demo: boolean; managerName: string; accountCount: number; campaignCount: number; responsible: string; lastSyncAt: string | null; nextSyncAt: string | null; frequency: string };
 type Client = { id:string; name:string; legalName:string; document:string; status:"ACTIVE"|"ATTENTION"|"RISK"|"INACTIVE"; segment:string; website:string; primaryContactName:string; primaryContactEmail:string; primaryContactPhone:string; owner:string; notes:string; createdAt:string; updatedAt:string };
+type Department = { id:string; name:string; description:string; active:boolean; createdAt:string };
+type TicketComment = { id:string; authorId:string; authorName:string; message:string; mentions:string[]; createdAt:string };
+type Ticket = { id:string; code:string; title:string; description:string; departmentId:string; requesterId:string; requesterName:string; assigneeId:string; assigneeName:string; priority:"LOW"|"MEDIUM"|"HIGH"|"URGENT"; status:"OPEN"|"IN_PROGRESS"|"WAITING"|"RESOLVED"|"CLOSED"; dueAt:string; participantIds:string[]; comments:TicketComment[]; createdAt:string; updatedAt:string };
 const sessions = new Map<string, string>();
 const users = new Map<string, User>();
 const roles = new Map<string, Role>();
 const integrations = new Map<string, Integration>();
 const clients = new Map<string, Client>();
+const departments = new Map<string, Department>();
+const tickets = new Map<string, Ticket>();
 const hash = (password: string, salt: string) => scryptSync(password, salt, 64).toString("hex");
 const safeEqual = (a: string, b: string) => {
   const left = Buffer.from(a);
@@ -47,6 +52,8 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
   const localClientsPath = "data/clients.local.json";
   const localMasterProfilePath = "data/master-profile.local.json";
   const localMasterUserPath = "data/master-user.local.json";
+  const localDepartmentsPath = "data/departments.local.json";
+  const localTicketsPath = "data/tickets.local.json";
   const developerRole: Role = { id: "developer-system-role", name: "Desenvolvedor", description: "Acesso técnico total e protegido para desenvolvimento e manutenção do PW OS.", level: 100, system: true, assignable: false, permissions: [...allPermissions] };
   const ceoRole: Role = { id: "owner-system-role", name: "CEO", description: "Acesso executivo total e protegido para a direção da empresa.", level: 99, system: true, assignable: true, permissions: [...allPermissions] };
   roles.set(developerRole.id, developerRole);
@@ -97,6 +104,10 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
     mkdirSync("data", { recursive: true });
     writeFileSync(localClientsPath, JSON.stringify([...clients.values()], null, 2), { mode: 0o600 });
   };
+  if (existsSync(localDepartmentsPath)) (JSON.parse(readFileSync(localDepartmentsPath,"utf8")) as Department[]).forEach(item=>departments.set(item.id,item));
+  if (existsSync(localTicketsPath)) (JSON.parse(readFileSync(localTicketsPath,"utf8")) as Ticket[]).forEach(item=>tickets.set(item.id,item));
+  const persistDepartments=()=>{mkdirSync("data",{recursive:true});writeFileSync(localDepartmentsPath,JSON.stringify([...departments.values()],null,2),{mode:0o600})};
+  const persistTickets=()=>{mkdirSync("data",{recursive:true});writeFileSync(localTicketsPath,JSON.stringify([...tickets.values()],null,2),{mode:0o600})};
   return {
     name: "pw-os-local-api",
     configureServer(server) {
@@ -152,6 +163,68 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
           currentUser.name = name; currentUser.phone = phone; currentUser.avatarDataUrl = avatarDataUrl;
           users.set(currentUser.id, currentUser); persistUser(currentUser);
           return json(response, 200, { user: publicUser(currentUser) });
+        }
+        if(url==="/departments"&&request.method==="GET") return json(response,200,{departments:[...departments.values()].sort((a,b)=>a.name.localeCompare(b.name,"pt-BR"))});
+        if(url==="/departments"&&request.method==="POST"){
+          if(!hasPermission(currentUser,"tickets.manage_departments"))return json(response,403,{message:"Você não possui permissão para gerenciar setores."});
+          const input=await body(request);const name=String(input.name||"").trim();
+          if(name.length<2)return json(response,400,{message:"Informe o nome do setor."});
+          if([...departments.values()].some(item=>item.name.toLowerCase()===name.toLowerCase()))return json(response,409,{message:"Este setor já existe."});
+          const department:Department={id:randomUUID(),name,description:String(input.description||"").trim(),active:true,createdAt:new Date().toISOString()};
+          departments.set(department.id,department);persistDepartments();return json(response,201,{department});
+        }
+        const departmentMatch=url.match(/^\/departments\/([^/]+)$/);
+        if(departmentMatch&&request.method==="PATCH"){
+          if(!hasPermission(currentUser,"tickets.manage_departments"))return json(response,403,{message:"Permissão insuficiente."});
+          const department=departments.get(departmentMatch[1]);if(!department)return json(response,404,{message:"Setor não encontrado."});
+          const input=await body(request);department.name=String(input.name||department.name).trim();department.description=String(input.description??department.description).trim();department.active=input.active!==false;
+          departments.set(department.id,department);persistDepartments();return json(response,200,{department});
+        }
+        if(departmentMatch&&request.method==="DELETE"){
+          if(!hasPermission(currentUser,"tickets.manage_departments"))return json(response,403,{message:"Permissão insuficiente."});
+          if([...tickets.values()].some(ticket=>ticket.departmentId===departmentMatch[1]))return json(response,409,{message:"Este setor possui chamados e não pode ser excluído."});
+          departments.delete(departmentMatch[1]);persistDepartments();return json(response,200,{ok:true});
+        }
+        const canSeeTicket=(ticket:Ticket)=>hasPermission(currentUser,"tickets.view_all")||ticket.requesterId===currentUser.id||ticket.assigneeId===currentUser.id||ticket.participantIds.includes(currentUser.id);
+        if(url==="/tickets"&&request.method==="GET"){
+          if(!hasPermission(currentUser,"tickets.view"))return json(response,403,{message:"Você não possui acesso aos chamados."});
+          return json(response,200,{tickets:[...tickets.values()].filter(canSeeTicket).sort((a,b)=>b.updatedAt.localeCompare(a.updatedAt)),canViewAll:hasPermission(currentUser,"tickets.view_all"),canManageDepartments:hasPermission(currentUser,"tickets.manage_departments")});
+        }
+        if(url==="/tickets"&&request.method==="POST"){
+          if(!hasPermission(currentUser,"tickets.create"))return json(response,403,{message:"Você não possui permissão para abrir chamados."});
+          const input=await body(request);const title=String(input.title||"").trim();const assignee=users.get(String(input.assigneeId||""));
+          if(title.length<4||!departments.has(String(input.departmentId||"")))return json(response,400,{message:"Informe título e setor válidos."});
+          if(!assignee)return json(response,400,{message:"Selecione um responsável válido."});
+          const now=new Date().toISOString();const sequence=String(tickets.size+1).padStart(4,"0");
+          const ticket:Ticket={id:randomUUID(),code:`CH-${new Date().getFullYear()}-${sequence}`,title,description:String(input.description||"").trim(),departmentId:String(input.departmentId),requesterId:currentUser.id,requesterName:currentUser.name,assigneeId:assignee.id,assigneeName:assignee.name,priority:["LOW","MEDIUM","HIGH","URGENT"].includes(input.priority)?input.priority:"MEDIUM",status:"OPEN",dueAt:String(input.dueAt||""),participantIds:[currentUser.id,assignee.id],comments:[],createdAt:now,updatedAt:now};
+          tickets.set(ticket.id,ticket);persistTickets();return json(response,201,{ticket});
+        }
+        const ticketCommentMatch=url.match(/^\/tickets\/([^/]+)\/comments$/);
+        if(ticketCommentMatch&&request.method==="POST"){
+          const ticket=tickets.get(ticketCommentMatch[1]);if(!ticket||!canSeeTicket(ticket))return json(response,404,{message:"Chamado não encontrado."});
+          if(!hasPermission(currentUser,"tickets.comment"))return json(response,403,{message:"Você não possui permissão para comentar."});
+          const input=await body(request);const message=String(input.message||"").trim();if(!message)return json(response,400,{message:"Escreva uma atualização."});
+          const mentioned=[...users.values()].filter(user=>message.toLowerCase().includes(`@${user.name.toLowerCase()}`));
+          const comment:TicketComment={id:randomUUID(),authorId:currentUser.id,authorName:currentUser.name,message,mentions:mentioned.map(user=>user.id),createdAt:new Date().toISOString()};
+          ticket.comments.push(comment);ticket.participantIds=[...new Set([...ticket.participantIds,...comment.mentions])];ticket.updatedAt=comment.createdAt;tickets.set(ticket.id,ticket);persistTickets();return json(response,201,{comment,ticket});
+        }
+        const ticketMatch=url.match(/^\/tickets\/([^/]+)$/);
+        if(ticketMatch&&request.method==="GET"){const ticket=tickets.get(ticketMatch[1]);return ticket&&canSeeTicket(ticket)?json(response,200,{ticket}):json(response,404,{message:"Chamado não encontrado."})}
+        if(ticketMatch&&request.method==="PATCH"){
+          const ticket=tickets.get(ticketMatch[1]);if(!ticket||!canSeeTicket(ticket))return json(response,404,{message:"Chamado não encontrado."});
+          if(!hasPermission(currentUser,"tickets.edit"))return json(response,403,{message:"Você não possui permissão para editar chamados."});
+          const input=await body(request);const assignee=input.assigneeId&&users.get(String(input.assigneeId));
+          if(input.title)ticket.title=String(input.title).trim();if(input.description!==undefined)ticket.description=String(input.description).trim();
+          if(input.departmentId&&departments.has(String(input.departmentId)))ticket.departmentId=String(input.departmentId);
+          if(assignee){ticket.assigneeId=assignee.id;ticket.assigneeName=assignee.name;ticket.participantIds=[...new Set([...ticket.participantIds,assignee.id])]}
+          if(["LOW","MEDIUM","HIGH","URGENT"].includes(input.priority))ticket.priority=input.priority;
+          if(["OPEN","IN_PROGRESS","WAITING","RESOLVED","CLOSED"].includes(input.status))ticket.status=input.status;
+          if(input.dueAt!==undefined)ticket.dueAt=String(input.dueAt);ticket.updatedAt=new Date().toISOString();tickets.set(ticket.id,ticket);persistTickets();return json(response,200,{ticket});
+        }
+        if(ticketMatch&&request.method==="DELETE"){
+          const ticket=tickets.get(ticketMatch[1]);if(!ticket||!canSeeTicket(ticket))return json(response,404,{message:"Chamado não encontrado."});
+          if(!hasPermission(currentUser,"tickets.delete"))return json(response,403,{message:"Você não possui permissão para excluir chamados."});
+          tickets.delete(ticket.id);persistTickets();return json(response,200,{ok:true});
         }
         if (url === "/clients" && request.method === "GET") {
           if (!hasPermission(currentUser, "clients.view")) return json(response, 403, { message: "Você não possui acesso aos clientes." });
