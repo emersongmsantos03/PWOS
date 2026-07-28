@@ -6,7 +6,7 @@ import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 import { allPermissions, permissionCatalog } from "./packages/permissions/src/catalog";
 
-type User = { id: string; name: string; email: string; profile: string; role: string; roleId?: string; permissionOverrides?: Record<string, "ALLOW" | "DENY">; salt: string; passwordHash: string };
+type User = { id: string; name: string; email: string; profile: string; role: string; roleId?: string; permissionOverrides?: Record<string, "ALLOW" | "DENY">; mustChangePassword: boolean; salt: string; passwordHash: string };
 type Role = { id: string; name: string; description: string; level: number; system: boolean; permissions: string[] };
 type Integration = { id: string; platform: "GOOGLE_ADS" | "META_ADS"; name: string; status: string; demo: boolean; managerName: string; accountCount: number; campaignCount: number; responsible: string; lastSyncAt: string | null; nextSyncAt: string | null; frequency: string };
 const sessions = new Map<string, string>();
@@ -43,11 +43,11 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
     storedRoles.forEach(role => roles.set(role.id, role));
   }
   const salt = randomBytes(16).toString("hex");
-  const master: User = { id: randomUUID(), name: "Emerson Santos", email: masterEmail.toLowerCase(), profile: "MASTER", role: ownerRole.name, roleId: ownerRole.id, permissionOverrides: {}, salt, passwordHash: hash(masterPassword, salt) };
+  const master: User = { id: randomUUID(), name: "Emerson Santos", email: masterEmail.toLowerCase(), profile: "MASTER", role: ownerRole.name, roleId: ownerRole.id, permissionOverrides: {}, mustChangePassword: false, salt, passwordHash: hash(masterPassword, salt) };
   users.set(master.id, master);
   if (existsSync(localUsersPath)) {
     const storedUsers = JSON.parse(readFileSync(localUsersPath, "utf8")) as User[];
-    storedUsers.forEach(user => users.set(user.id, user));
+    storedUsers.forEach(user => users.set(user.id, { ...user, mustChangePassword: user.mustChangePassword ?? true }));
   }
   const persistUsers = () => {
     mkdirSync("data", { recursive: true });
@@ -89,6 +89,24 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
           return json(response, 200, { ok: true });
         }
         if (!currentUser) return json(response, 401, { message: "Sessão necessária." });
+        if (url === "/auth/change-password" && request.method === "POST") {
+          const input = await body(request);
+          const password = String(input.password || "");
+          const confirmation = String(input.confirmation || "");
+          const localPart = currentUser.email.split("@")[0].toLowerCase();
+          const commonPasswords = ["password","senha123","12345678","qwerty","admin123","welcome"];
+          const strong = password.length >= 12 && /[a-z]/.test(password) && /[A-Z]/.test(password) && /\d/.test(password) && /[^A-Za-z0-9]/.test(password) && !/\s/.test(password);
+          if (password !== confirmation) return json(response, 400, { message: "A confirmação não corresponde à nova senha." });
+          if (!strong) return json(response, 400, { message: "A senha precisa atender a todos os requisitos de segurança." });
+          if (commonPasswords.some(value => password.toLowerCase().includes(value)) || password.toLowerCase().includes(localPart) || currentUser.name.toLowerCase().split(/\s+/).some((part: string) => part.length >= 4 && password.toLowerCase().includes(part))) return json(response, 400, { message: "A senha não pode conter seu nome, e-mail ou sequências comuns." });
+          if (safeEqual(currentUser.passwordHash, hash(password, currentUser.salt))) return json(response, 400, { message: "A nova senha deve ser diferente da senha inicial." });
+          currentUser.salt = randomBytes(16).toString("hex");
+          currentUser.passwordHash = hash(password, currentUser.salt);
+          currentUser.mustChangePassword = false;
+          users.set(currentUser.id, currentUser); persistUsers();
+          return json(response, 200, { user: publicUser(currentUser) });
+        }
+        if (currentUser.mustChangePassword) return json(response, 403, { message: "Troque sua senha antes de continuar.", code: "PASSWORD_CHANGE_REQUIRED" });
         if (currentUser.profile === "CLIENT" && url.startsWith("/integrations")) return json(response, 403, { message: "Clientes externos não acessam a Central de Conexões." });
         if (url === "/permissions/catalog" && request.method === "GET") return json(response, 200, { modules: permissionCatalog });
         if (url === "/roles" && request.method === "GET") return json(response, 200, { roles: [...roles.values()].map(role => ({ ...role, userCount: [...users.values()].filter(user => user.roleId === role.id).length })) });
@@ -128,9 +146,10 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
           if (!input.name || !input.email || !input.password) return json(response, 400, { message: "Preencha nome, e-mail e senha inicial." });
           if ([...users.values()].some(item => item.email === input.email.toLowerCase())) return json(response, 409, { message: "E-mail já cadastrado." });
           const userSalt = randomBytes(16).toString("hex");
+          if (input.profile === "CLIENT") return json(response, 400, { message: "Clientes externos devem ser cadastrados dentro do cliente correspondente." });
           const selectedRole = input.roleId && roles.get(input.roleId);
           if (!selectedRole || selectedRole.system) return json(response, 400, { message: "Selecione um cargo válido." });
-          const user: User = { id: randomUUID(), name: input.name, email: input.email.toLowerCase(), profile: input.profile || "COLLABORATOR", role: selectedRole.name, roleId: selectedRole.id, permissionOverrides: {}, salt: userSalt, passwordHash: hash(input.password, userSalt) };
+          const user: User = { id: randomUUID(), name: input.name, email: input.email.toLowerCase(), profile: input.profile || "COLLABORATOR", role: selectedRole.name, roleId: selectedRole.id, permissionOverrides: {}, mustChangePassword: true, salt: userSalt, passwordHash: hash(input.password, userSalt) };
           users.set(user.id, user);
           persistUsers();
           return json(response, 201, { user: publicUser(user) });

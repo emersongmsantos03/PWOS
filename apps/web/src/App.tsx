@@ -26,7 +26,7 @@ function Status({ value }: { value: Health | string }) {
   return <span className={`status ${value.toLowerCase().replace(" ", "-")}`}>{icon}{value}</span>;
 }
 
-type SessionUser = { id: string; name: string; email: string; profile: string; role: string };
+type SessionUser = { id: string; name: string; email: string; profile: string; role: string; mustChangePassword: boolean };
 
 function Shell({ user, onLogout }: { user: SessionUser; onLogout: () => void }) {
   const [menu, setMenu] = useState(false);
@@ -198,11 +198,33 @@ function Login({ onLogin }: { onLogin: (user: SessionUser) => void }) {
   return <main className="login-page"><section className="login-brand"><div className="brand login-logo"><span>PW</span><strong>OS</strong><small>PERFORMANCE WORKSPACE</small></div><div><span className="eyebrow">PW MEDIA</span><h1>Estratégia, operação e resultados em um só lugar.</h1><p>Uma visão clara para transformar dados em próximas ações.</p></div><small>Ambiente local protegido</small></section><section className="login-area"><div className="login-card"><span className="login-badge"><ShieldCheck/> Acesso seguro</span><h2>Bem-vindo</h2><p>Entre com sua conta para acessar o PW OS.</p><form onSubmit={submit}><label>E-mail<input name="email" type="email" autoComplete="username" required placeholder="seuemail@empresa.com" /></label><label>Senha<div className="password-field"><input name="password" type={showPassword ? "text" : "password"} autoComplete="current-password" required placeholder="Digite sua senha" /><button type="button" onClick={() => setShowPassword(value => !value)} aria-label={showPassword ? "Ocultar senha" : "Mostrar senha"}>{showPassword ? <EyeOff/> : <Eye/>}</button></div></label><div className="login-options"><label><input type="checkbox"/> Manter conectado</label><button type="button">Esqueci minha senha</button></div>{error && <div className="form-error"><AlertTriangle/>{error}</div>}<button className="primary login-submit" disabled={loading}>{loading ? "Entrando..." : "Entrar no PW OS"}<ArrowRight/></button></form><small>Suas credenciais são validadas somente no ambiente local.</small></div></section></main>;
 }
 
+function PasswordSetup({ user, onComplete, onLogout }: { user: SessionUser; onComplete: (user: SessionUser) => void; onLogout: () => void }) {
+  const [password,setPassword]=useState("");
+  const [confirmation,setConfirmation]=useState("");
+  const [show,setShow]=useState(false);
+  const [error,setError]=useState("");
+  const [loading,setLoading]=useState(false);
+  const normalized=password.toLowerCase();
+  const nameParts=user.name.toLowerCase().split(/\s+/).filter(part=>part.length>=4);
+  const rules=[
+    {label:"Pelo menos 12 caracteres",valid:password.length>=12},
+    {label:"Uma letra maiúscula e uma minúscula",valid:/[A-Z]/.test(password)&&/[a-z]/.test(password)},
+    {label:"Um número",valid:/\d/.test(password)},
+    {label:"Um símbolo especial",valid:/[^A-Za-z0-9]/.test(password)},
+    {label:"Sem espaços, nome ou parte do e-mail",valid:password.length>0&&!/\s/.test(password)&&!nameParts.some(part=>normalized.includes(part))&&!normalized.includes(user.email.split("@")[0].toLowerCase())},
+  ];
+  const strong=rules.every(rule=>rule.valid)&&password===confirmation;
+  const submit=async(event:React.FormEvent<HTMLFormElement>)=>{event.preventDefault();if(!strong)return;setLoading(true);setError("");const response=await fetch("/api/auth/change-password",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password,confirmation})});const data=await response.json();if(!response.ok)setError(data.message);else onComplete(data.user);setLoading(false)};
+  return <main className="password-setup-page"><section className="password-setup-card"><div className="password-security-icon"><ShieldCheck/></div><span className="eyebrow">PRIMEIRO ACESSO</span><h1>Crie sua senha definitiva</h1><p>Olá, {user.name.split(" ")[0]}. Por segurança, substitua a senha temporária antes de acessar o PW OS.</p><form onSubmit={submit}><label>Nova senha<div className="password-field"><input value={password} onChange={event=>setPassword(event.target.value)} type={show?"text":"password"} autoComplete="new-password" autoFocus/><button type="button" onClick={()=>setShow(value=>!value)}>{show?<EyeOff/>:<Eye/>}</button></div></label><div className="password-strength"><div><i className={rules.filter(rule=>rule.valid).length>=2?"active":""}/><i className={rules.filter(rule=>rule.valid).length>=3?"active":""}/><i className={rules.filter(rule=>rule.valid).length>=5?"active strong":""}/></div><span>{rules.every(rule=>rule.valid)?"Senha forte":"Complete os requisitos abaixo"}</span></div><ul className="password-rules">{rules.map(rule=><li className={rule.valid?"valid":""} key={rule.label}>{rule.valid?<Check/>:<span/>}{rule.label}</li>)}</ul><label>Confirmar nova senha<input value={confirmation} onChange={event=>setConfirmation(event.target.value)} type="password" autoComplete="new-password"/>{confirmation&&<small className={password===confirmation?"match":"mismatch"}>{password===confirmation?"As senhas correspondem":"As senhas não correspondem"}</small>}</label>{error&&<div className="form-error"><AlertTriangle/>{error}</div>}<button className="primary password-submit" disabled={!strong||loading}>{loading?"Salvando...":"Salvar senha e continuar"}<ArrowRight/></button></form><button className="logout-setup" onClick={onLogout}>Sair e usar outra conta</button></section></main>;
+}
+
 export function App() {
   const [user, setUser] = useState<SessionUser | null>(null);
   const [checking, setChecking] = useState(true);
   useEffect(() => { fetch("/api/auth/session").then(async response => response.ok && setUser((await response.json()).user)).finally(() => setChecking(false)); }, []);
   const logout = async () => { await fetch("/api/auth/logout", { method: "POST" }); setUser(null); };
   if (checking) return <div className="app-loading"><div className="brand login-logo"><span>PW</span><strong>OS</strong></div><p>Carregando ambiente seguro...</p></div>;
-  return user ? <Shell user={user} onLogout={logout} /> : <Login onLogin={setUser} />;
+  if (!user) return <Login onLogin={setUser} />;
+  if (user.mustChangePassword) return <PasswordSetup user={user} onComplete={setUser} onLogout={logout}/>;
+  return <Shell user={user} onLogout={logout} />;
 }
