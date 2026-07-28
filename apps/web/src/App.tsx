@@ -12,6 +12,7 @@ import { Connections } from "./Connections";
 import { AccessManagement } from "./AccessManagement";
 import { ClientsManagement } from "./ClientsManagement";
 import { TicketsManagement } from "./TicketsManagement";
+import { MediaDashboard } from "./MediaDashboard";
 
 const money = (value: number) => value.toLocaleString("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 0 });
 const nav = [
@@ -73,7 +74,7 @@ function Shell({ user, onLogout, onUserUpdate }: { user: SessionUser; onLogout: 
       <Routes>
         <Route path="/" element={<Dashboard />} />
         <Route path="/clientes" element={<ClientsManagement />} />
-        <Route path="/midia" element={<Media />} />
+        <Route path="/midia" element={<MediaDashboard />} />
         <Route path="/midia/:id" element={<CampaignDetail />} />
         <Route path="/relatorios" element={<Reports />} />
         <Route path="/chamados" element={<TicketsManagement user={user}/>} />
