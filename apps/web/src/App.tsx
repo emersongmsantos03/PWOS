@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams, Routes, Route, NavLink } from "react-router-dom";
 import {
-  Activity, AlertTriangle, ArrowLeft, ArrowRight, BarChart3, Bell, BriefcaseBusiness,
+  Activity, AlertTriangle, ArrowLeft, ArrowRight, BarChart3, Bell, BriefcaseBusiness, Camera,
   CalendarDays, Check, ChevronDown, CircleDollarSign, Download, FileText, Gauge,
-  Eye, EyeOff, HelpCircle, LayoutDashboard, LogOut, Megaphone, Menu, MoreHorizontal, Plus, Search,
+  Eye, EyeOff, HelpCircle, LayoutDashboard, LockKeyhole, LogOut, Megaphone, Menu, MoreHorizontal, Plus, Search,
   Plug, Settings, ShieldCheck, Sparkles, Sun, Moon, TrendingDown, TrendingUp, UserPlus, Users, X
 } from "lucide-react";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
@@ -26,10 +26,17 @@ function Status({ value }: { value: Health | string }) {
   return <span className={`status ${value.toLowerCase().replace(" ", "-")}`}>{icon}{value}</span>;
 }
 
-type SessionUser = { id: string; name: string; email: string; profile: string; role: string; mustChangePassword: boolean };
+type SessionUser = { id: string; name: string; email: string; phone?: string; avatarDataUrl?: string; profile: string; role: string; mustChangePassword: boolean };
 
-function Shell({ user, onLogout }: { user: SessionUser; onLogout: () => void }) {
+function UserAvatar({ user, className = "" }: { user: SessionUser; className?: string }) {
+  const initials=user.name.split(" ").map(part=>part[0]).join("").slice(0,2);
+  return <span className={`avatar ${className}`}>{user.avatarDataUrl?<img src={user.avatarDataUrl} alt="Foto do perfil"/>:initials}</span>;
+}
+
+function Shell({ user, onLogout, onUserUpdate }: { user: SessionUser; onLogout: () => void; onUserUpdate: (user: SessionUser) => void }) {
   const [menu, setMenu] = useState(false);
+  const [accountMenu,setAccountMenu]=useState(false);
+  const [profilePanel,setProfilePanel]=useState<"profile"|"security"|null>(null);
   const [theme, setTheme] = useState<"light" | "dark">(() =>
     document.documentElement.dataset.theme === "dark" ? "dark" : "light"
   );
@@ -50,7 +57,7 @@ function Shell({ user, onLogout }: { user: SessionUser; onLogout: () => void }) 
       <div className="sidebar-bottom">
         <NavLink to="/configuracoes"><Settings />Configurações</NavLink>
         <button><HelpCircle />Central de ajuda</button>
-        <div className="user-card"><span className="avatar">{user.name.split(" ").map(part => part[0]).join("").slice(0, 2)}</span><div><b>{user.name}</b><small>{user.role}</small></div><button onClick={onLogout} aria-label="Sair"><LogOut /></button></div>
+        <div className="user-card"><UserAvatar user={user}/><div><b>{user.name}</b><small>{user.role}</small></div><button onClick={onLogout} aria-label="Sair"><LogOut /></button></div>
       </div>
     </aside>
     {menu && <button className="backdrop" onClick={() => setMenu(false)} aria-label="Fechar menu" />}
@@ -58,7 +65,7 @@ function Shell({ user, onLogout }: { user: SessionUser; onLogout: () => void }) 
       <header className="topbar">
         <button className="menu" onClick={() => setMenu(true)} aria-label="Abrir menu"><Menu /></button>
         <div className="search"><Search /><input aria-label="Buscar" placeholder="Buscar cliente, campanha ou relatório..." /><kbd>⌘ K</kbd></div>
-        <div className="top-actions"><span className="sync"><span /> Ambiente local</span><button className="theme-toggle" onClick={toggleTheme} aria-label={`Ativar tema ${theme === "light" ? "escuro" : "claro"}`} title={`Ativar tema ${theme === "light" ? "escuro" : "claro"}`}>{theme === "light" ? <Moon /> : <Sun />}</button><button className="icon-button" aria-label="Notificações"><Bell /></button><button className="profile">{user.name.split(" ").map(part => part[0]).join("").slice(0, 2)}<ChevronDown /></button></div>
+        <div className="top-actions"><span className="sync"><span /> Ambiente local</span><button className="theme-toggle" onClick={toggleTheme} aria-label={`Ativar tema ${theme === "light" ? "escuro" : "claro"}`} title={`Ativar tema ${theme === "light" ? "escuro" : "claro"}`}>{theme === "light" ? <Moon /> : <Sun />}</button><button className="icon-button" aria-label="Notificações"><Bell /></button><div className="account-menu-wrap"><button className="profile" onClick={()=>setAccountMenu(value=>!value)} aria-expanded={accountMenu} aria-haspopup="menu"><UserAvatar user={user}/><ChevronDown /></button>{accountMenu&&<><button className="account-menu-dismiss" onClick={()=>setAccountMenu(false)} aria-label="Fechar menu"/><div className="account-dropdown" role="menu"><header><UserAvatar user={user} className="large"/><div><b>{user.name}</b><span>{user.email}</span><small>{user.role}</small></div></header><div className="account-menu-items"><button onClick={()=>{setProfilePanel("profile");setAccountMenu(false)}}><UserPlus/><span><b>Meu perfil</b><small>Nome, telefone e foto</small></span></button><button onClick={()=>{setProfilePanel("security");setAccountMenu(false)}}><LockKeyhole/><span><b>Segurança</b><small>Senha e acesso à conta</small></span></button><button onClick={toggleTheme}>{theme==="light"?<Moon/>:<Sun/>}<span><b>Aparência</b><small>Usar tema {theme==="light"?"escuro":"claro"}</small></span></button></div><footer><span>PW OS · {user.profile}</span><button onClick={onLogout}><LogOut/> Sair da conta</button></footer></div></>}</div></div>
       </header>
       <Routes>
         <Route path="/" element={<Dashboard />} />
@@ -71,6 +78,7 @@ function Shell({ user, onLogout }: { user: SessionUser; onLogout: () => void }) 
         <Route path="*" element={<Dashboard />} />
       </Routes>
       <MobileNav />
+      {profilePanel&&<ProfilePanel user={user} initialTab={profilePanel} onClose={()=>setProfilePanel(null)} onUserUpdate={onUserUpdate}/>}
     </main>
   </div>;
 }
@@ -171,6 +179,20 @@ function Team() {
   </div>;
 }
 
+function ProfilePanel({ user, initialTab, onClose, onUserUpdate }: { user: SessionUser; initialTab: "profile"|"security"; onClose: () => void; onUserUpdate: (user: SessionUser) => void }) {
+  const [tab,setTab]=useState(initialTab);
+  const [name,setName]=useState(user.name);
+  const [phone,setPhone]=useState(user.phone||"");
+  const [avatar,setAvatar]=useState(user.avatarDataUrl||"");
+  const [message,setMessage]=useState("");
+  const [error,setError]=useState("");
+  const [saving,setSaving]=useState(false);
+  const upload=(file?:File)=>{if(!file)return;setError("");if(!["image/png","image/jpeg","image/webp"].includes(file.type)||file.size>1_000_000)return setError("Use uma imagem PNG, JPG ou WebP de até 1 MB.");const reader=new FileReader();reader.onload=()=>setAvatar(String(reader.result));reader.readAsDataURL(file)};
+  const saveProfile=async(event:React.FormEvent)=>{event.preventDefault();setSaving(true);setError("");setMessage("");const response=await fetch("/api/profile",{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({name,phone,avatarDataUrl:avatar})});const data=await response.json();if(!response.ok)setError(data.message);else{onUserUpdate(data.user);setMessage("Perfil atualizado com sucesso.")}setSaving(false)};
+  const changePassword=async(event:React.FormEvent<HTMLFormElement>)=>{event.preventDefault();setSaving(true);setError("");setMessage("");const input=Object.fromEntries(new FormData(event.currentTarget));const response=await fetch("/api/auth/change-password",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(input)});const data=await response.json();if(!response.ok)setError(data.message);else{event.currentTarget.reset();setMessage("Senha alterada com segurança.")}setSaving(false)};
+  return <div className="modal-backdrop account-settings-backdrop"><section className="account-settings" role="dialog" aria-modal="true"><header><div><UserAvatar user={{...user,name,avatarDataUrl:avatar}} className="settings-avatar"/><div><h2>Configurações da conta</h2><p>{user.email}</p></div></div><button onClick={onClose}><X/></button></header><div className="account-settings-layout"><nav><button className={tab==="profile"?"active":""} onClick={()=>{setTab("profile");setError("");setMessage("")}}><UserPlus/> Meu perfil</button><button className={tab==="security"?"active":""} onClick={()=>{setTab("security");setError("");setMessage("")}}><LockKeyhole/> Segurança</button></nav><main>{tab==="profile"?<form onSubmit={saveProfile}><div className="settings-title"><h3>Informações pessoais</h3><p>Atualize como você aparece no PW OS.</p></div><div className="avatar-editor"><UserAvatar user={{...user,name,avatarDataUrl:avatar}} className="profile-preview"/><div><label className="upload-avatar"><Camera/> Alterar foto<input type="file" accept="image/png,image/jpeg,image/webp" onChange={event=>upload(event.target.files?.[0])}/></label>{avatar&&<button type="button" onClick={()=>setAvatar("")}>Remover</button>}<small>PNG, JPG ou WebP. Máximo 1 MB.</small></div></div><div className="settings-fields"><label>Nome completo<input value={name} onChange={event=>setName(event.target.value)} required/></label><label>E-mail<input value={user.email} disabled/><small>O e-mail de acesso não pode ser alterado aqui.</small></label><label>Telefone<input value={phone} onChange={event=>setPhone(event.target.value)} placeholder="(00) 00000-0000"/></label><label>Cargo<input value={user.role} disabled/></label></div>{error&&<div className="form-error">{error}</div>}{message&&<div className="form-success"><Check/>{message}</div>}<div className="settings-actions"><button type="button" className="secondary" onClick={onClose}>Cancelar</button><button className="primary" disabled={saving}>{saving?"Salvando...":"Salvar alterações"}</button></div></form>:<form onSubmit={changePassword}><div className="settings-title"><h3>Senha e segurança</h3><p>Use uma senha exclusiva e difícil de adivinhar.</p></div><div className="security-card"><ShieldCheck/><div><b>Sessão protegida</b><p>Sua sessão usa cookie HttpOnly e não expõe credenciais ao navegador.</p></div></div><div className="settings-fields one-column"><label>Senha atual<input name="currentPassword" type="password" required autoComplete="current-password"/></label><label>Nova senha<input name="password" type="password" minLength={12} required autoComplete="new-password"/><small>12+ caracteres, maiúscula, minúscula, número e símbolo.</small></label><label>Confirmar nova senha<input name="confirmation" type="password" minLength={12} required autoComplete="new-password"/></label></div>{error&&<div className="form-error">{error}</div>}{message&&<div className="form-success"><Check/>{message}</div>}<div className="settings-actions"><button type="button" className="secondary" onClick={onClose}>Cancelar</button><button className="primary" disabled={saving}>{saving?"Alterando...":"Alterar senha"}</button></div></form>}</main></div></section></div>;
+}
+
 function MobileNav() {
   return <nav className="mobile-nav">{nav.slice(0,4).map(item=><NavLink key={item.to} to={item.to} end={item.to==="/"}><item.icon/><span>{item.label.split(" ")[0]}</span></NavLink>)}</nav>;
 }
@@ -226,5 +248,5 @@ export function App() {
   if (checking) return <div className="app-loading"><div className="brand login-logo"><span>PW</span><strong>OS</strong></div><p>Carregando ambiente seguro...</p></div>;
   if (!user) return <Login onLogin={setUser} />;
   if (user.mustChangePassword) return <PasswordSetup user={user} onComplete={setUser} onLogout={logout}/>;
-  return <Shell user={user} onLogout={logout} />;
+  return <Shell user={user} onLogout={logout} onUserUpdate={setUser} />;
 }

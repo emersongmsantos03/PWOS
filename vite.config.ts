@@ -6,7 +6,7 @@ import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 import { allPermissions, permissionCatalog } from "./packages/permissions/src/catalog";
 
-type User = { id: string; name: string; email: string; profile: string; role: string; roleId?: string; permissionOverrides?: Record<string, "ALLOW" | "DENY">; mustChangePassword: boolean; salt: string; passwordHash: string };
+type User = { id: string; name: string; email: string; phone?: string; avatarDataUrl?: string; profile: string; role: string; roleId?: string; permissionOverrides?: Record<string, "ALLOW" | "DENY">; mustChangePassword: boolean; salt: string; passwordHash: string };
 type Role = { id: string; name: string; description: string; level: number; system: boolean; permissions: string[] };
 type Integration = { id: string; platform: "GOOGLE_ADS" | "META_ADS"; name: string; status: string; demo: boolean; managerName: string; accountCount: number; campaignCount: number; responsible: string; lastSyncAt: string | null; nextSyncAt: string | null; frequency: string };
 const sessions = new Map<string, string>();
@@ -42,6 +42,7 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
   const localUsersPath = "data/users.local.json";
   const localRolesPath = "data/roles.local.json";
   const localIntegrationsPath = "data/integrations.local.json";
+  const localMasterProfilePath = "data/master-profile.local.json";
   const ownerRole: Role = { id: "owner-system-role", name: "CEO", description: "Acesso executivo total e protegido a todos os módulos.", level: 100, system: true, permissions: [...allPermissions] };
   roles.set(ownerRole.id, ownerRole);
   if (existsSync(localRolesPath)) {
@@ -50,6 +51,7 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
   }
   const salt = randomBytes(16).toString("hex");
   const master: User = { id: randomUUID(), name: "Emerson Santos", email: masterEmail.toLowerCase(), profile: "MASTER", role: ownerRole.name, roleId: ownerRole.id, permissionOverrides: {}, mustChangePassword: false, salt, passwordHash: hash(masterPassword, salt) };
+  if (existsSync(localMasterProfilePath)) Object.assign(master, JSON.parse(readFileSync(localMasterProfilePath, "utf8")));
   users.set(master.id, master);
   if (existsSync(localUsersPath)) {
     const storedUsers = JSON.parse(readFileSync(localUsersPath, "utf8")) as User[];
@@ -58,6 +60,12 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
   const persistUsers = () => {
     mkdirSync("data", { recursive: true });
     writeFileSync(localUsersPath, JSON.stringify([...users.values()].filter(user => user.profile !== "MASTER"), null, 2), { mode: 0o600 });
+  };
+  const persistUserProfile = (user: User) => {
+    if (user.profile === "MASTER") {
+      mkdirSync("data", { recursive: true });
+      writeFileSync(localMasterProfilePath, JSON.stringify({ name: user.name, phone: user.phone || "", avatarDataUrl: user.avatarDataUrl || "" }, null, 2), { mode: 0o600 });
+    } else persistUsers();
   };
   const persistRoles = () => {
     mkdirSync("data", { recursive: true });
@@ -97,8 +105,10 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
         if (!currentUser) return json(response, 401, { message: "Sessão necessária." });
         if (url === "/auth/change-password" && request.method === "POST") {
           const input = await body(request);
+          const currentPassword = String(input.currentPassword || "");
           const password = String(input.password || "");
           const confirmation = String(input.confirmation || "");
+          if (!currentUser.mustChangePassword && !safeEqual(currentUser.passwordHash, hash(currentPassword, currentUser.salt))) return json(response, 400, { message: "A senha atual está incorreta." });
           const localPart = currentUser.email.split("@")[0].toLowerCase();
           const commonPasswords = ["password","senha123","12345678","qwerty","admin123","welcome"];
           const strong = password.length >= 12 && /[a-z]/.test(password) && /[A-Z]/.test(password) && /\d/.test(password) && /[^A-Za-z0-9]/.test(password) && !/\s/.test(password);
@@ -113,6 +123,18 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
           return json(response, 200, { user: publicUser(currentUser) });
         }
         if (currentUser.mustChangePassword) return json(response, 403, { message: "Troque sua senha antes de continuar.", code: "PASSWORD_CHANGE_REQUIRED" });
+        if (url === "/profile" && request.method === "PATCH") {
+          const input = await body(request);
+          const name = String(input.name || "").trim();
+          const phone = String(input.phone || "").trim();
+          const avatarDataUrl = String(input.avatarDataUrl || "");
+          if (name.length < 2 || name.length > 100) return json(response, 400, { message: "Informe um nome válido." });
+          if (phone.length > 30) return json(response, 400, { message: "Telefone inválido." });
+          if (avatarDataUrl && (!/^data:image\/(png|jpeg|webp);base64,/.test(avatarDataUrl) || avatarDataUrl.length > 1_600_000)) return json(response, 400, { message: "Use uma imagem PNG, JPG ou WebP de até 1 MB." });
+          currentUser.name = name; currentUser.phone = phone; currentUser.avatarDataUrl = avatarDataUrl;
+          users.set(currentUser.id, currentUser); persistUserProfile(currentUser);
+          return json(response, 200, { user: publicUser(currentUser) });
+        }
         if (currentUser.profile === "CLIENT" && url.startsWith("/integrations")) return json(response, 403, { message: "Clientes externos não acessam a Central de Conexões." });
         if (url === "/permissions/catalog" && request.method === "GET") return json(response, 200, { modules: permissionCatalog });
         if (url === "/roles" && request.method === "GET") return json(response, 200, { roles: [...roles.values()].map(role => ({ ...role, userCount: [...users.values()].filter(user => user.roleId === role.id).length })) });
