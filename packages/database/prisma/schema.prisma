@@ -1,0 +1,55 @@
+generator client { provider = "prisma-client-js" }
+datasource db { provider = "postgresql"; url = env("DATABASE_URL") }
+
+enum TechnicalProfile { MASTER ADMIN COLLABORATOR CLIENT }
+enum UserStatus { INVITED ACTIVE BLOCKED DISABLED }
+enum PermissionEffect { ALLOW DENY }
+
+model Organization {
+  id String @id @default(uuid()) @db.Uuid
+  name String
+  users User[]
+  clients Client[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model User {
+  id String @id @default(uuid()) @db.Uuid
+  organizationId String @db.Uuid
+  organization Organization @relation(fields: [organizationId], references: [id])
+  email String
+  name String
+  profile TechnicalProfile
+  status UserStatus @default(INVITED)
+  mustChangePassword Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  deletedAt DateTime?
+  @@unique([organizationId, email])
+  @@index([organizationId, status])
+}
+
+model Client {
+  id String @id @default(uuid()) @db.Uuid
+  organizationId String @db.Uuid
+  organization Organization @relation(fields: [organizationId], references: [id])
+  name String
+  status String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  deletedAt DateTime?
+  @@index([organizationId, status])
+}
+
+model AuditLog {
+  id String @id @default(uuid()) @db.Uuid
+  organizationId String @db.Uuid
+  actorUserId String? @db.Uuid
+  action String
+  targetType String
+  targetId String?
+  metadata Json?
+  createdAt DateTime @default(now())
+  @@index([organizationId, createdAt])
+}
