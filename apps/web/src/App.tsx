@@ -13,6 +13,7 @@ import { AccessManagement } from "./AccessManagement";
 import { ClientsManagement } from "./ClientsManagement";
 import { TicketsManagement } from "./TicketsManagement";
 import { MediaDashboard } from "./MediaDashboard";
+import { DashboardBoards } from "./DashboardBoards";
 
 const money = (value: number) => value.toLocaleString("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 0 });
 const nav = [
@@ -72,7 +73,7 @@ function Shell({ user, onLogout, onUserUpdate }: { user: SessionUser; onLogout: 
         <div className="top-actions"><span className="sync"><span /> Ambiente local</span><button className="theme-toggle" onClick={toggleTheme} aria-label={`Ativar tema ${theme === "light" ? "escuro" : "claro"}`} title={`Ativar tema ${theme === "light" ? "escuro" : "claro"}`}>{theme === "light" ? <Moon /> : <Sun />}</button><button className="icon-button" aria-label="Notificações"><Bell /></button><div className="account-menu-wrap"><button className="profile" onClick={()=>setAccountMenu(value=>!value)} aria-expanded={accountMenu} aria-haspopup="menu"><UserAvatar user={user}/><ChevronDown /></button>{accountMenu&&<><button className="account-menu-dismiss" onClick={()=>setAccountMenu(false)} aria-label="Fechar menu"/><div className="account-dropdown" role="menu"><div className="account-cover"><span>PW</span><i/></div><header><UserAvatar user={user} className="large"/><div><b>{user.name}</b><span>{user.email}</span><small><i/>{user.role}</small></div></header><div className="account-section-label">SUA CONTA</div><div className="account-menu-items"><button onClick={()=>{setProfilePanel("profile");setAccountMenu(false)}}><span className="menu-item-icon"><UserPlus/></span><span><b>Meu perfil</b><small>Dados pessoais e foto</small></span><ChevronDown/></button><button onClick={()=>{setProfilePanel("security");setAccountMenu(false)}}><span className="menu-item-icon"><LockKeyhole/></span><span><b>Segurança</b><small>Senha e proteção da conta</small></span><ChevronDown/></button><button onClick={toggleTheme}><span className="menu-item-icon">{theme==="light"?<Moon/>:<Sun/>}</span><span><b>Aparência</b><small>Tema {theme==="light"?"claro":"escuro"} ativo</small></span><span className="theme-pill">{theme==="light"?"Claro":"Escuro"}</span></button></div><footer><span>PW OS · {user.profile}</span><button onClick={onLogout}><LogOut/> Sair</button></footer></div></>}</div></div>
       </header>
       <Routes>
-        <Route path="/" element={<Dashboard />} />
+        <Route path="/" element={<DashboardBoards user={user}/>} />
         <Route path="/clientes" element={<ClientsManagement />} />
         <Route path="/midia" element={<MediaDashboard />} />
         <Route path="/midia/:id" element={<CampaignDetail />} />
@@ -80,7 +81,7 @@ function Shell({ user, onLogout, onUserUpdate }: { user: SessionUser; onLogout: 
         <Route path="/chamados" element={<TicketsManagement user={user}/>} />
         <Route path="/equipe" element={<AccessManagement />} />
         <Route path="/configuracoes/integracoes" element={<Connections />} />
-        <Route path="*" element={<Dashboard />} />
+        <Route path="*" element={<DashboardBoards user={user}/>} />
       </Routes>
       <MobileNav />
       {profilePanel&&<ProfilePanel user={user} initialTab={profilePanel} onClose={()=>setProfilePanel(null)} onUserUpdate={onUserUpdate}/>}
