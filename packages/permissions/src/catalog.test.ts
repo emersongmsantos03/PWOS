@@ -6,6 +6,8 @@ describe("catálogo e exceções individuais", () => {
     expect(allPermissions).toContain("clients.view");
     expect(allPermissions).toContain("clients.delete");
     expect(allPermissions).toContain("integrations.sync");
+    expect(allPermissions).toContain("crm.manage_pipelines");
+    expect(allPermissions).toContain("crm.convert");
   });
   it("negação individual prevalece sobre o cargo", () => {
     expect(effectivePermissions(["clients.delete"], { "clients.delete": "DENY" })[0]).toMatchObject({ allowed: false, source: "USER_DENY" });

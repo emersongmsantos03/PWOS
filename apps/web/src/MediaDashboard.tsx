@@ -1,41 +1,94 @@
 import { useEffect, useMemo, useState } from "react";
-import { Activity, AlertTriangle, ArrowDownRight, ArrowRight, ArrowUpRight, BarChart3, CalendarDays, Check, CircleDollarSign, Download, Eye, Filter, Gauge, Megaphone, MousePointerClick, Search, Sparkles, Target, Users } from "lucide-react";
-import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { BarChart3, CheckCircle2, Clock3, ExternalLink, Link2, Megaphone, RefreshCw, ShieldCheck } from "lucide-react";
+import { NavLink } from "react-router-dom";
 
-type Client={id:string;name:string;owner:string;status:string};
-type Platform="Meta Ads"|"Google Ads";
-type Campaign={id:string;client:string;name:string;platform:Platform;status:"Ativa"|"Atenção"|"Pausada";objective:string;daily:number;spend:number;budget:number;reach:number;impressions:number;clicks:number;leads:number;conversions:number;score:number;owner:string};
-const brl=(value:number)=>value.toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
-const number=(value:number)=>value.toLocaleString("pt-BR");
-const demoClients=["Ecoflex Londrina","Dom Colchões","Casa dos Colchões","Restonic Batel"];
-const hash=(value:string)=>[...value].reduce((total,char)=>total+char.charCodeAt(0),0);
-const makeCampaigns=(clients:Client[]):Campaign[]=>clients.flatMap((client,index)=>{
-  const seed=hash(client.name)+index*31, base=680+seed%720;
-  return [
-    {id:`${client.id}-meta`,client:client.name,name:index%2?"Conversões — WhatsApp":"Tráfego WhatsApp — Linha Premium",platform:"Meta Ads" as Platform,status:index%3===2?"Atenção" as const:"Ativa" as const,objective:"Conversas",daily:90+seed%100,spend:base*1.38,budget:base*1.8,reach:68000+seed*117,impressions:142000+seed*233,clicks:980+seed*3,leads:34+seed%110,conversions:12+seed%43,score:72+seed%27,owner:client.owner||"Equipe PW"},
-    {id:`${client.id}-google`,client:client.name,name:index%2?"Pesquisa — Intenção de compra":"Performance Max — Captação",platform:"Google Ads" as Platform,status:index%4===3?"Pausada" as const:"Ativa" as const,objective:"Leads",daily:70+seed%80,spend:base*.94,budget:base*1.35,reach:42000+seed*73,impressions:97000+seed*149,clicks:620+seed*2,leads:22+seed%70,conversions:8+seed%31,score:68+seed%30,owner:client.owner||"Equipe PW"}
-  ];
-});
-const trend=Array.from({length:14},(_,index)=>({day:String(index+1).padStart(2,"0"),investimento:2100+Math.round(Math.sin(index*.7)*460)+index*62,leads:48+Math.round(Math.cos(index*.55)*14)+index*2}));
+type Platform = "GOOGLE_ADS" | "META_ADS";
+type Integration = {
+  id: string;
+  platform: Platform;
+  name: string;
+  status: string;
+  accountCount: number;
+  campaignCount: number;
+  responsible: string;
+  lastSyncAt: string | null;
+};
 
-export function MediaDashboard(){
-  const [clients,setClients]=useState<Client[]>([]),[platform,setPlatform]=useState<"Todas"|Platform>("Todas"),[client,setClient]=useState("Todos"),[search,setSearch]=useState(""),[selected,setSelected]=useState<Campaign|null>(null);
-  useEffect(()=>{fetch("/api/clients").then(async response=>{const data=await response.json();if(response.ok)setClients(data.clients||[])}).catch(()=>{})},[]);
-  const sourceClients=clients.length?clients:demoClients.map((name,index)=>({id:`demo-${index}`,name,owner:index%2?"Larissa":"Priscila",status:"ACTIVE"}));
-  const campaigns=useMemo(()=>makeCampaigns(sourceClients),[sourceClients]);
-  const visible=campaigns.filter(item=>(platform==="Todas"||item.platform===platform)&&(client==="Todos"||item.client===client)&&(!search||`${item.client} ${item.name}`.toLowerCase().includes(search.toLowerCase())));
-  const totals=visible.reduce((sum,item)=>({spend:sum.spend+item.spend,budget:sum.budget+item.budget,reach:sum.reach+item.reach,impressions:sum.impressions+item.impressions,clicks:sum.clicks+item.clicks,leads:sum.leads+item.leads,conversions:sum.conversions+item.conversions}),{spend:0,budget:0,reach:0,impressions:0,clicks:0,leads:0,conversions:0});
-  const cpl=totals.leads?totals.spend/totals.leads:0,score=visible.length?Math.round(visible.reduce((n,c)=>n+c.score,0)/visible.length):0;
-  return <div className="page media-analytics-page"><div className="media-head"><div><span className="eyebrow">MÍDIA PAGA · AMBIENTE DEMONSTRATIVO</span><h1>{platform==="Todas"?"Todas as campanhas":platform}</h1><p>{platform==="Todas"?"Visão consolidada de Meta Ads e Google Ads para análise operacional.":`Desempenho e análise das campanhas de ${platform}.`}</p></div><div><label><CalendarDays/><span>01–28 jul 2026</span></label><button className="secondary"><Download/> Exportar relatório</button></div></div>
-    <nav className="media-network-switch" aria-label="Selecionar rede de anúncios">{(["Todas","Google Ads","Meta Ads"] as const).map(network=><button key={network} className={platform===network?"active":""} onClick={()=>setPlatform(network)} aria-pressed={platform===network}>{network==="Todas"?<span className="network-all"><BarChart3/><Activity/></span>:<AdNetworkLogo network={network}/>}<span><b>{network==="Todas"?"Todas":network}</b><small>{network==="Todas"?`${campaigns.length} campanhas`:`${campaigns.filter(item=>item.platform===network).length} campanhas fictícias`}</small></span>{platform===network&&<Check/>}</button>)}</nav>
-    <section className="media-kpis"><MediaKpi icon={CircleDollarSign} label="Investimento diário" value={brl(totals.spend/28)} change="+12,6%"/><MediaKpi icon={BarChart3} label="Investimento no período" value={brl(totals.spend)} change="+12,6%"/><MediaKpi icon={Users} label="Alcance" value={number(totals.reach)} change="+18,9%"/><MediaKpi icon={Eye} label="Impressões" value={number(totals.impressions)} change="+15,4%"/><MediaKpi icon={MousePointerClick} label="Cliques" value={number(totals.clicks)} change="+21,3%"/><MediaKpi icon={Target} label="Leads" value={number(totals.leads)} change="+19,8%"/><MediaKpi icon={Gauge} label="CPL médio" value={brl(cpl)} change="-8,7%" goodDown/><MediaKpi icon={CircleDollarSign} label="Saldo total" value={brl(totals.budget-totals.spend)} change={`${visible.filter(c=>c.budget-c.spend<c.daily*3).length} alertas`}/><article className="media-score"><small>Score médio</small><div style={{"--score":`${score*3.6}deg`} as React.CSSProperties}><b>{score}</b><span>/100</span></div><em>{score>=85?"Excelente":"Otimizar"}</em></article></section>
-    <div className="media-filters"><div className="search"><Search/><input value={search} onChange={event=>setSearch(event.target.value)} placeholder="Buscar campanha ou cliente..."/></div><label><span>Cliente</span><select value={client} onChange={event=>setClient(event.target.value)}><option>Todos</option>{sourceClients.map(item=><option key={item.id}>{item.name}</option>)}</select></label><label><span>Rede</span><select value={platform} onChange={event=>setPlatform(event.target.value as typeof platform)}><option>Todas</option><option>Meta Ads</option><option>Google Ads</option></select></label><button className="secondary"><Filter/> Mais filtros</button></div>
-    <section className="panel media-campaign-table"><header><div><h2>Desempenho das campanhas</h2><p>{visible.length} campanhas fictícias · dados atualizados automaticamente</p></div><span className="demo-data-badge"><Sparkles/> Dados demonstrativos</span></header><div className="table-scroll"><table><thead><tr><th>Cliente / campanha</th><th>Rede</th><th>Status</th><th>Investimento</th><th>Alcance</th><th>Cliques</th><th>Leads</th><th>CPL</th><th>Saldo</th><th>Score</th><th/></tr></thead><tbody>{visible.map(item=><tr key={item.id}><td><b>{item.client}</b><small>{item.name}</small></td><td><span className="table-network"><AdNetworkLogo network={item.platform}/>{item.platform}</span></td><td><span className={`campaign-state ${item.status.toLowerCase().replace("ç","c")}`}>{item.status}</span></td><td>{brl(item.spend)}<small>{brl(item.daily)}/dia</small></td><td>{number(item.reach)}</td><td>{number(item.clicks)}</td><td>{item.leads}</td><td>{brl(item.spend/item.leads)}</td><td className={item.budget-item.spend<item.daily*3?"negative":"positive"}>{brl(item.budget-item.spend)}</td><td><span className={`score-dot ${item.score<75?"warning":""}`}>{item.score}</span></td><td><button className="analyze" onClick={()=>setSelected(item)}>Analisar <ArrowRight/></button></td></tr>)}</tbody></table></div></section>
-    <section className="media-insights-grid"><article className="panel media-trend"><header><div><h2>Investimento e geração de leads</h2><p>Evolução diária do período</p></div><span className="positive"><ArrowUpRight/> 18,4%</span></header><ResponsiveContainer width="100%" height={220}><AreaChart data={trend}><defs><linearGradient id="mediaFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#f84607" stopOpacity=".28"/><stop offset="1" stopColor="#f84607" stopOpacity="0"/></linearGradient></defs><CartesianGrid strokeDasharray="3 3" vertical={false}/><XAxis dataKey="day" axisLine={false} tickLine={false}/><YAxis axisLine={false} tickLine={false}/><Tooltip/><Area type="monotone" dataKey="investimento" stroke="#f84607" fill="url(#mediaFill)" strokeWidth={2}/></AreaChart></ResponsiveContainer></article><article className="panel media-funnel"><h2>Funil de conversão</h2><p>Da impressão ao resultado</p><div>{[{label:"Impressões",value:totals.impressions,width:100},{label:"Cliques",value:totals.clicks,width:78},{label:"Leads",value:totals.leads,width:55},{label:"Conversões",value:totals.conversions,width:34}].map((item,index)=><span key={item.label} style={{width:`${item.width}%`}}><b>{number(item.value)}</b><small>{item.label}{index>0&&` · ${((item.value/[totals.impressions,totals.clicks,totals.leads][index-1])*100).toFixed(1)}%`}</small></span>)}</div></article><article className="panel media-alerts"><h2>Alertas e recomendações</h2><p>Leitura automática dos dados fictícios</p><ul><li><AlertTriangle/><span><b>Saldo abaixo de 3 dias</b>Revise o orçamento de {visible.filter(c=>c.budget-c.spend<c.daily*3).length} campanhas.</span></li><li><ArrowDownRight/><span><b>CPL em queda</b>O custo por lead melhorou 8,7%.</span></li><li><Check/><span><b>Bom ritmo de entrega</b>{visible.filter(c=>c.score>=85).length} campanhas com score saudável.</span></li></ul></article></section>
-    {selected&&<CampaignDrawer campaign={selected} onClose={()=>setSelected(null)}/>}
-  </div>
+const platformName = (platform: Platform) => platform === "GOOGLE_ADS" ? "Google Ads" : "Meta Ads";
+
+function NetworkMark({ platform }: { platform: Platform }) {
+  return platform === "GOOGLE_ADS"
+    ? <span className="network-logo google-ads-mark" aria-label="Google Ads"><i /><i /><i /></span>
+    : <span className="network-logo meta-ads-mark" aria-label="Meta Ads">∞</span>;
 }
 
-function MediaKpi({icon:Icon,label,value,change,goodDown=false}:{icon:typeof Activity;label:string;value:string;change:string;goodDown?:boolean}){const positive=change.startsWith("+")||goodDown;return <article><Icon/><small>{label}</small><b>{value}</b><span className={positive?"positive":"attention"}>{positive?<ArrowUpRight/>:<AlertTriangle/>}{change}</span></article>}
-function AdNetworkLogo({network}:{network:Platform}){return network==="Google Ads"?<span className="network-logo google-ads-mark" aria-label="Google Ads"><i/><i/><i/></span>:<span className="network-logo meta-ads-mark" aria-label="Meta Ads">∞</span>}
-function CampaignDrawer({campaign,onClose}:{campaign:Campaign;onClose:()=>void}){const cpl=campaign.spend/campaign.leads;return <div className="modal-backdrop media-detail-backdrop"><aside className="media-detail"><header><button onClick={onClose}>×</button><span className="demo-data-badge">ANÁLISE FICTÍCIA</span><small>{campaign.platform} · {campaign.client}</small><h2>{campaign.name}</h2><div><span className="campaign-state ativa">Ativa</span><span className="score-dot">{campaign.score}</span></div></header><main><section className="media-detail-kpis"><div><small>Investimento</small><b>{brl(campaign.spend)}</b></div><div><small>Leads</small><b>{campaign.leads}</b></div><div><small>CPL</small><b>{brl(cpl)}</b></div><div><small>Conversões</small><b>{campaign.conversions}</b></div></section><section><h3>Funil da campanha</h3><dl><div><dt>Impressões</dt><dd>{number(campaign.impressions)}</dd></div><div><dt>Cliques</dt><dd>{number(campaign.clicks)}</dd></div><div><dt>CTR</dt><dd>{(campaign.clicks/campaign.impressions*100).toFixed(2)}%</dd></div><div><dt>Taxa lead/conversão</dt><dd>{(campaign.conversions/campaign.leads*100).toFixed(1)}%</dd></div></dl></section><section className="media-reading"><Sparkles/><div><h3>Leitura PW</h3><p>A campanha apresenta ritmo saudável. Recomendamos testar novos criativos e ampliar gradualmente o orçamento mantendo o CPL abaixo de {brl(cpl*1.15)}.</p></div></section><section><h3>Próximas ações sugeridas</h3><ul className="media-next-actions"><li><Check/>Testar duas novas variações de criativo</li><li><Check/>Revisar públicos com maior frequência</li><li><Check/>Aumentar orçamento em 15% se o CPL permanecer estável</li></ul></section></main></aside></div>}
+export function MediaDashboard() {
+  const [integrations, setIntegrations] = useState<Integration[]>([]);
+  const [network, setNetwork] = useState<"ALL" | Platform>("ALL");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  const load = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const response = await fetch("/api/integrations");
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || "Não foi possível consultar as integrações.");
+      setIntegrations((data.integrations || []).filter((item: Integration) => !("demo" in item) || !(item as Integration & { demo: boolean }).demo));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Não foi possível consultar as integrações.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { void load(); }, []);
+  const visible = useMemo(() => integrations.filter(item => network === "ALL" || item.platform === network), [integrations, network]);
+  const connected = visible.filter(item => item.status === "CONNECTED");
+  const totalAccounts = connected.reduce((sum, item) => sum + Number(item.accountCount || 0), 0);
+  const totalCampaigns = connected.reduce((sum, item) => sum + Number(item.campaignCount || 0), 0);
+
+  return <div className="page media-analytics-page">
+    <div className="page-head">
+      <div><span className="eyebrow">MÍDIA PAGA</span><h1>Contas de anúncios</h1><p>Dados reais de Meta Ads e Google Ads aparecem somente após uma conexão autorizada.</p></div>
+      <button className="secondary" onClick={() => void load()} disabled={loading}><RefreshCw className={loading ? "spin" : ""} /> Atualizar</button>
+    </div>
+
+    <nav className="media-network-switch" aria-label="Selecionar rede de anúncios">
+      {([
+        ["ALL", "Todas"],
+        ["GOOGLE_ADS", "Google Ads"],
+        ["META_ADS", "Meta Ads"]
+      ] as const).map(([value, label]) => {
+        const count = integrations.filter(item => value === "ALL" || item.platform === value).length;
+        return <button key={value} className={network === value ? "active" : ""} onClick={() => setNetwork(value)}>
+          {value === "ALL" ? <span className="network-all"><BarChart3 /><Megaphone /></span> : <NetworkMark platform={value} />}
+          <span><b>{label}</b><small>{count} {count === 1 ? "conexão" : "conexões"}</small></span>
+          {network === value && <CheckCircle2 />}
+        </button>;
+      })}
+    </nav>
+
+    <section className="operations-kpis">
+      <article><Link2 /><span><small>Conexões ativas</small><b>{connected.length}</b></span></article>
+      <article><ShieldCheck /><span><small>Contas autorizadas</small><b>{totalAccounts}</b></span></article>
+      <article><BarChart3 /><span><small>Campanhas sincronizadas</small><b>{totalCampaigns}</b></span></article>
+      <article><Clock3 /><span><small>Origem dos dados</small><b>API</b></span></article>
+    </section>
+
+    {error && <div className="form-error">{error}</div>}
+    <section className="panel media-real-panel">
+      <header><div><h2>Integrações de mídia</h2><p>Nenhum resultado é estimado ou preenchido artificialmente.</p></div></header>
+      {loading ? <div className="inline-empty"><RefreshCw className="spin" /><h3>Consultando conexões</h3><p>Aguarde enquanto verificamos as contas autorizadas.</p></div>
+        : visible.length === 0 ? <div className="inline-empty"><Megaphone /><h3>Nenhuma conta conectada</h3><p>Conecte uma conta oficial para importar campanhas e métricas reais.</p><NavLink className="primary" to="/configuracoes/integracoes"><Link2 /> Abrir Central de Conexões</NavLink></div>
+        : <div className="integration-status-list">{visible.map(item => <article key={item.id}>
+          <NetworkMark platform={item.platform} />
+          <div><b>{item.name || platformName(item.platform)}</b><small>{platformName(item.platform)} · responsável: {item.responsible || "Não informado"}</small></div>
+          <span className={`connection-state ${item.status.toLowerCase()}`}>{item.status === "CONNECTED" ? "Conectada" : item.status}</span>
+          <dl><div><dt>Contas</dt><dd>{item.accountCount || 0}</dd></div><div><dt>Campanhas</dt><dd>{item.campaignCount || 0}</dd></div><div><dt>Última sincronização</dt><dd>{item.lastSyncAt ? new Date(item.lastSyncAt).toLocaleString("pt-BR") : "Ainda não sincronizada"}</dd></div></dl>
+          <NavLink to="/configuracoes/integracoes">Gerenciar <ExternalLink /></NavLink>
+        </article>)}</div>}
+    </section>
+  </div>;
+}

@@ -4,7 +4,7 @@ import {
   Activity, AlertTriangle, ArrowLeft, ArrowRight, BarChart3, Bell, BriefcaseBusiness, Camera,
   CalendarDays, Check, ChevronDown, CircleDollarSign, Download, FileText, Gauge,
   Eye, EyeOff, HelpCircle, LayoutDashboard, LockKeyhole, LogOut, Megaphone, Menu, MoreHorizontal, Plus, Search,
-  Plug, Settings, ShieldCheck, Sparkles, Sun, Moon, TrendingDown, TrendingUp, UserPlus, Users, X, MessagesSquare
+  Plug, Settings, ShieldCheck, Sparkles, Sun, Moon, TrendingDown, TrendingUp, UserPlus, Users, X, MessagesSquare, KanbanSquare, ListTodo
 } from "lucide-react";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { campaigns, clients, trend, type Health } from "./data";
@@ -14,12 +14,21 @@ import { ClientsManagement } from "./ClientsManagement";
 import { TicketsManagement } from "./TicketsManagement";
 import { MediaDashboard } from "./MediaDashboard";
 import { DashboardBoards } from "./DashboardBoards";
+import { CrmManagement } from "./CrmManagement";
+import { TasksManagement } from "./TasksManagement";
+import { CalendarManagement } from "./CalendarManagement";
+import { OperationalReports } from "./OperationalReports";
+import { FinancialManagement } from "./FinancialManagement";
 import { maskPhone } from "./inputMasks";
 
 const money = (value: number) => value.toLocaleString("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 0 });
 const nav = [
   { to: "/", icon: LayoutDashboard, label: "Visão geral" },
   { to: "/clientes", icon: BriefcaseBusiness, label: "Clientes" },
+  { to: "/crm", icon: KanbanSquare, label: "CRM's" },
+  { to: "/tarefas", icon: ListTodo, label: "Tarefas" },
+  { to: "/agenda", icon: CalendarDays, label: "Agenda" },
+  { to: "/financeiro", icon: CircleDollarSign, label: "Financeiro" },
   { to: "/midia", icon: Megaphone, label: "Mídia paga" },
   { to: "/relatorios", icon: FileText, label: "Relatórios" },
   { to: "/chamados", icon: MessagesSquare, label: "Chamados internos" },
@@ -76,9 +85,13 @@ function Shell({ user, onLogout, onUserUpdate }: { user: SessionUser; onLogout: 
       <Routes>
         <Route path="/" element={<DashboardBoards user={user}/>} />
         <Route path="/clientes" element={<ClientsManagement />} />
+        <Route path="/crm" element={<CrmManagement />} />
+        <Route path="/tarefas" element={<TasksManagement />} />
+        <Route path="/agenda" element={<CalendarManagement />} />
+        <Route path="/financeiro" element={<FinancialManagement />} />
         <Route path="/midia" element={<MediaDashboard />} />
-        <Route path="/midia/:id" element={<CampaignDetail />} />
-        <Route path="/relatorios" element={<Reports />} />
+        <Route path="/midia/:id" element={<MediaDashboard />} />
+        <Route path="/relatorios" element={<OperationalReports />} />
         <Route path="/chamados" element={<TicketsManagement user={user}/>} />
         <Route path="/equipe" element={<AccessManagement />} />
         <Route path="/configuracoes/integracoes" element={<Connections />} />
