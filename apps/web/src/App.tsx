@@ -1,10 +1,10 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams, Routes, Route, NavLink } from "react-router-dom";
 import {
   Activity, AlertTriangle, ArrowLeft, ArrowRight, BarChart3, Bell, BriefcaseBusiness,
   CalendarDays, Check, ChevronDown, CircleDollarSign, Download, FileText, Gauge,
   HelpCircle, LayoutDashboard, Megaphone, Menu, MoreHorizontal, Plus, Search,
-  Settings, ShieldCheck, Sparkles, TrendingDown, TrendingUp, Users, X
+  Settings, ShieldCheck, Sparkles, Sun, Moon, TrendingDown, TrendingUp, Users, X
 } from "lucide-react";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { campaigns, clients, trend, type Health } from "./data";
@@ -25,6 +25,18 @@ function Status({ value }: { value: Health | string }) {
 
 function Shell() {
   const [menu, setMenu] = useState(false);
+  const [theme, setTheme] = useState<"light" | "dark">(() =>
+    document.documentElement.dataset.theme === "dark" ? "dark" : "light"
+  );
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    document.documentElement.style.colorScheme = theme;
+    localStorage.setItem("pw-os-theme", theme);
+  }, [theme]);
+
+  const toggleTheme = () => setTheme(current => current === "light" ? "dark" : "light");
+
   return <div className="app-shell">
     <aside className={menu ? "sidebar open" : "sidebar"}>
       <div className="brand"><span>PW</span><strong>OS</strong><small>PERFORMANCE WORKSPACE</small></div>
@@ -41,7 +53,7 @@ function Shell() {
       <header className="topbar">
         <button className="menu" onClick={() => setMenu(true)} aria-label="Abrir menu"><Menu /></button>
         <div className="search"><Search /><input aria-label="Buscar" placeholder="Buscar cliente, campanha ou relatório..." /><kbd>⌘ K</kbd></div>
-        <div className="top-actions"><span className="sync"><span /> Dados atualizados há 8 min</span><button className="icon-button" aria-label="Notificações"><Bell /><i>3</i></button><button className="profile">ES<ChevronDown /></button></div>
+        <div className="top-actions"><span className="sync"><span /> Dados atualizados há 8 min</span><button className="theme-toggle" onClick={toggleTheme} aria-label={`Ativar tema ${theme === "light" ? "escuro" : "claro"}`} title={`Ativar tema ${theme === "light" ? "escuro" : "claro"}`}>{theme === "light" ? <Moon /> : <Sun />}</button><button className="icon-button" aria-label="Notificações"><Bell /><i>3</i></button><button className="profile">ES<ChevronDown /></button></div>
       </header>
       <Routes>
         <Route path="/" element={<Dashboard />} />
