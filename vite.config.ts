@@ -9,10 +9,12 @@ import { allPermissions, permissionCatalog } from "./packages/permissions/src/ca
 type User = { id: string; name: string; email: string; phone?: string; avatarDataUrl?: string; profile: string; role: string; roleId?: string; permissionOverrides?: Record<string, "ALLOW" | "DENY">; mustChangePassword: boolean; salt: string; passwordHash: string };
 type Role = { id: string; name: string; description: string; level: number; system: boolean; assignable?: boolean; permissions: string[] };
 type Integration = { id: string; platform: "GOOGLE_ADS" | "META_ADS"; name: string; status: string; demo: boolean; managerName: string; accountCount: number; campaignCount: number; responsible: string; lastSyncAt: string | null; nextSyncAt: string | null; frequency: string };
+type Client = { id:string; name:string; legalName:string; document:string; status:"ACTIVE"|"ATTENTION"|"RISK"|"INACTIVE"; segment:string; website:string; primaryContactName:string; primaryContactEmail:string; primaryContactPhone:string; owner:string; notes:string; createdAt:string; updatedAt:string };
 const sessions = new Map<string, string>();
 const users = new Map<string, User>();
 const roles = new Map<string, Role>();
 const integrations = new Map<string, Integration>();
+const clients = new Map<string, Client>();
 const hash = (password: string, salt: string) => scryptSync(password, salt, 64).toString("hex");
 const safeEqual = (a: string, b: string) => {
   const left = Buffer.from(a);
@@ -42,6 +44,7 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
   const localUsersPath = "data/users.local.json";
   const localRolesPath = "data/roles.local.json";
   const localIntegrationsPath = "data/integrations.local.json";
+  const localClientsPath = "data/clients.local.json";
   const localMasterProfilePath = "data/master-profile.local.json";
   const developerRole: Role = { id: "developer-system-role", name: "Desenvolvedor", description: "Acesso técnico total e protegido para desenvolvimento e manutenção do PW OS.", level: 100, system: true, assignable: false, permissions: [...allPermissions] };
   const ceoRole: Role = { id: "owner-system-role", name: "CEO", description: "Acesso executivo total e protegido para a direção da empresa.", level: 99, system: true, assignable: true, permissions: [...allPermissions] };
@@ -80,6 +83,14 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
   const persistIntegrations = () => {
     mkdirSync("data", { recursive: true });
     writeFileSync(localIntegrationsPath, JSON.stringify([...integrations.values()], null, 2), { mode: 0o600 });
+  };
+  if (existsSync(localClientsPath)) {
+    const storedClients = JSON.parse(readFileSync(localClientsPath, "utf8")) as Client[];
+    storedClients.forEach(client => clients.set(client.id, client));
+  }
+  const persistClients = () => {
+    mkdirSync("data", { recursive: true });
+    writeFileSync(localClientsPath, JSON.stringify([...clients.values()], null, 2), { mode: 0o600 });
   };
   return {
     name: "pw-os-local-api",
@@ -136,6 +147,40 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
           currentUser.name = name; currentUser.phone = phone; currentUser.avatarDataUrl = avatarDataUrl;
           users.set(currentUser.id, currentUser); persistUserProfile(currentUser);
           return json(response, 200, { user: publicUser(currentUser) });
+        }
+        if (url === "/clients" && request.method === "GET") {
+          if (!hasPermission(currentUser, "clients.view")) return json(response, 403, { message: "Você não possui acesso aos clientes." });
+          return json(response, 200, { clients: [...clients.values()].sort((a,b)=>a.name.localeCompare(b.name,"pt-BR")) });
+        }
+        if (url === "/clients" && request.method === "POST") {
+          if (!hasPermission(currentUser, "clients.create")) return json(response, 403, { message: "Você não possui permissão para criar clientes." });
+          const input = await body(request);
+          const name = String(input.name || "").trim();
+          if (name.length < 2 || name.length > 120) return json(response, 400, { message: "Informe um nome de cliente válido." });
+          if ([...clients.values()].some(client=>client.name.toLowerCase()===name.toLowerCase())) return json(response, 409, { message: "Já existe um cliente com este nome." });
+          const now = new Date().toISOString();
+          const client:Client = { id:randomUUID(), name, legalName:String(input.legalName||"").trim(), document:String(input.document||"").trim(), status:["ACTIVE","ATTENTION","RISK","INACTIVE"].includes(input.status)?input.status:"ACTIVE", segment:String(input.segment||"").trim(), website:String(input.website||"").trim(), primaryContactName:String(input.primaryContactName||"").trim(), primaryContactEmail:String(input.primaryContactEmail||"").trim().toLowerCase(), primaryContactPhone:String(input.primaryContactPhone||"").trim(), owner:String(input.owner||"").trim(), notes:String(input.notes||"").trim(), createdAt:now, updatedAt:now };
+          clients.set(client.id,client);persistClients();
+          return json(response,201,{client});
+        }
+        const clientMatch=url.match(/^\/clients\/([^/]+)$/);
+        if(clientMatch&&request.method==="GET"){
+          if(!hasPermission(currentUser,"clients.view"))return json(response,403,{message:"Permissão insuficiente."});
+          const client=clients.get(clientMatch[1]);return client?json(response,200,{client}):json(response,404,{message:"Cliente não encontrado."});
+        }
+        if(clientMatch&&request.method==="PATCH"){
+          if(!hasPermission(currentUser,"clients.edit"))return json(response,403,{message:"Você não possui permissão para editar clientes."});
+          const client=clients.get(clientMatch[1]);if(!client)return json(response,404,{message:"Cliente não encontrado."});
+          const input=await body(request);const name=String(input.name||"").trim();
+          if(name.length<2||name.length>120)return json(response,400,{message:"Informe um nome de cliente válido."});
+          if([...clients.values()].some(item=>item.id!==client.id&&item.name.toLowerCase()===name.toLowerCase()))return json(response,409,{message:"Já existe outro cliente com este nome."});
+          Object.assign(client,{name,legalName:String(input.legalName||"").trim(),document:String(input.document||"").trim(),status:["ACTIVE","ATTENTION","RISK","INACTIVE"].includes(input.status)?input.status:client.status,segment:String(input.segment||"").trim(),website:String(input.website||"").trim(),primaryContactName:String(input.primaryContactName||"").trim(),primaryContactEmail:String(input.primaryContactEmail||"").trim().toLowerCase(),primaryContactPhone:String(input.primaryContactPhone||"").trim(),owner:String(input.owner||"").trim(),notes:String(input.notes||"").trim(),updatedAt:new Date().toISOString()});
+          clients.set(client.id,client);persistClients();return json(response,200,{client});
+        }
+        if(clientMatch&&request.method==="DELETE"){
+          if(!hasPermission(currentUser,"clients.delete"))return json(response,403,{message:"Você não possui permissão para excluir clientes."});
+          const client=clients.get(clientMatch[1]);if(!client)return json(response,404,{message:"Cliente não encontrado."});
+          clients.delete(client.id);persistClients();return json(response,200,{ok:true});
         }
         if (currentUser.profile === "CLIENT" && url.startsWith("/integrations")) return json(response, 403, { message: "Clientes externos não acessam a Central de Conexões." });
         if (url === "/permissions/catalog" && request.method === "GET") return json(response, 200, { modules: permissionCatalog });
