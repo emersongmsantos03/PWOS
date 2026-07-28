@@ -36,7 +36,7 @@ function localApi(masterEmail: string, masterPassword: string): Plugin {
   const localUsersPath = "data/users.local.json";
   const localRolesPath = "data/roles.local.json";
   const localIntegrationsPath = "data/integrations.local.json";
-  const ownerRole: Role = { id: "owner-system-role", name: "Dono da empresa", description: "Acesso total protegido. Este cargo não pode ser reduzido ou excluído.", level: 100, system: true, permissions: [...allPermissions] };
+  const ownerRole: Role = { id: "owner-system-role", name: "CEO", description: "Acesso executivo total e protegido a todos os módulos.", level: 100, system: true, permissions: [...allPermissions] };
   roles.set(ownerRole.id, ownerRole);
   if (existsSync(localRolesPath)) {
     const storedRoles = JSON.parse(readFileSync(localRolesPath, "utf8")) as Role[];
