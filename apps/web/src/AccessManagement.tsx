@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Building2, Check, ChevronDown, Crown, Edit3, KeyRound, LockKeyhole, MoreHorizontal, Plus, Search, ShieldCheck, SlidersHorizontal, Trash2, UserPlus, Users, X } from "lucide-react";
+import "./PermissionRefinements.css";
 
 type Effect = "ALLOW" | "DENY";
 type User = { id: string; name: string; email: string; avatarDataUrl?: string; profile: string; role: string; roleId?: string; departmentId?:string; departmentName?:string; permissionOverrides?: Record<string, Effect> };
