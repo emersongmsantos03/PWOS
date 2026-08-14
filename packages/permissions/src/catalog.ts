@@ -1,6 +1,6 @@
 export const permissionCatalog = [
   { module: "Visão geral", key: "dashboard", actions: ["view"] },
-  { module: "Clientes", key: "clients", actions: ["view", "create", "edit", "delete", "assign"] },
+  { module: "Clientes", key: "clients", actions: ["view", "create", "edit", "delete", "assign", "create_access"] },
   { module: "CRM", key: "crm", actions: ["view", "create", "edit", "delete", "assign", "move_stage", "convert", "reverse_conversion", "view_values", "export", "manage_pipelines"] },
   { module: "Tarefas", key: "tasks", actions: ["view", "create", "edit", "delete", "assign", "view_all", "edit_all", "review"] },
   { module: "Agenda", key: "calendar", actions: ["view", "create", "edit", "delete", "view_team", "edit_all"] },

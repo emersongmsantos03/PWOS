@@ -119,6 +119,7 @@ export function ClientsManagement({ permissions = [], profile = "" }: { permissi
   const canCreate = hasPermission("clients.create");
   const canEdit = hasPermission("clients.edit");
   const canDelete = hasPermission("clients.delete");
+  const canCreateAccess = hasPermission("clients.create_access");
   const [clients, setClients] = useState<Client[]>([]);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState<"ALL" | ClientStatus>("ALL");
@@ -349,6 +350,7 @@ export function ClientsManagement({ permissions = [], profile = "" }: { permissi
           client={viewing}
           canEdit={canEdit}
           canDelete={canDelete}
+          canCreateAccess={canCreateAccess}
           onClose={() => setViewing(null)}
           onEdit={() => {
             setEditing(viewing);
@@ -548,6 +550,7 @@ function ClientDetails({
   client,
   canEdit,
   canDelete,
+  canCreateAccess,
   onClose,
   onEdit,
   onDelete,
@@ -555,6 +558,7 @@ function ClientDetails({
   client: Client;
   canEdit: boolean;
   canDelete: boolean;
+  canCreateAccess: boolean;
   onClose: () => void;
   onEdit: () => void;
   onDelete: () => void;
@@ -694,7 +698,7 @@ function ClientDetails({
           ))}
         </nav>
         <main>
-          {tab === "ACCESS" && <section className="client-access-section"><div className="client-access-heading"><div><h3><Users/> Portal do Cliente</h3><p>Até 2 usuários, com visualização somente das campanhas vinculadas.</p><small>Link de acesso: <b>/portal-cliente</b></small></div>{canEdit && <button className="primary" disabled={portalUsers.length >= 2} onClick={() => setAddingAccess(true)}><Plus/> Criar acesso</button>}</div><div className="client-access-list">{portalUsers.map(user => <article key={user.id}><span className="client-company-avatar">{user.name.slice(0,2).toUpperCase()}</span><div><b>{user.name}</b><small>{user.email}</small></div><em>{user.mustChangePassword ? "Troca de senha pendente" : "Acesso ativo"}</em></article>)}{Array.from({ length: 2 - portalUsers.length }).map((_, index) => <article className="empty" key={index}><span><UserRound/></span><div><b>Acesso disponível</b><small>Cadastre outro usuário deste cliente</small></div></article>)}</div>{error && <div className="form-error">{error}</div>}</section>}
+          {tab === "ACCESS" && <section className="client-access-section"><div className="client-access-heading"><div><h3><Users/> Portal do Cliente</h3><p>Até 2 usuários, com visualização somente das campanhas vinculadas.</p><small>Link de acesso: <b>/portal-cliente</b></small></div>{canCreateAccess && <button className="primary" disabled={portalUsers.length >= 2} onClick={() => setAddingAccess(true)}><Plus/> Criar acesso</button>}</div><div className="client-access-list">{portalUsers.map(user => <article key={user.id}><span className="client-company-avatar">{user.name.slice(0,2).toUpperCase()}</span><div><b>{user.name}</b><small>{user.email}</small></div><em>{user.mustChangePassword ? "Troca de senha pendente" : "Acesso ativo"}</em></article>)}{Array.from({ length: 2 - portalUsers.length }).map((_, index) => <article className="empty" key={index}><span><UserRound/></span><div><b>Acesso disponível</b><small>Cadastre outro usuário deste cliente</small></div></article>)}</div>{error && <div className="form-error">{error}</div>}</section>}
           {tab === "OVERVIEW" && (
             <>
               <section className="client-operational-summary client-summary-legacy">

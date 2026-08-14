@@ -16,7 +16,7 @@ const actionNames: Record<string,string> = {
   authorize:"Autorizar", manage_accounts:"Gerenciar contas", manage_campaigns:"Gerenciar campanhas",
   manage_client_access:"Gerenciar portal do cliente", view_logs:"Ver logs", revoke:"Revogar acesso",
   review:"Revisar e aprovar demandas", view_all:"Visualizar todas", edit_all:"Editar todas",
-  comment:"Comentar", manage_departments:"Gerenciar setores"
+  comment:"Comentar", manage_departments:"Gerenciar setores", create_access:"Criar acesso do cliente"
 };
 
 export function AccessManagement({permissions,profile,role,roleId}:{permissions:string[];profile:string;role:string;roleId?:string}) {

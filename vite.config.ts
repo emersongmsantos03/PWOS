@@ -744,6 +744,8 @@ function localApi(
     ) as Role[];
     storedRoles.forEach((role) => roles.set(role.id, role));
   }
+  roles.set(developerRole.id, developerRole);
+  roles.set(ceoRole.id, ceoRole);
   const salt = randomBytes(16).toString("hex");
   const master: User = {
     id: randomUUID(),
@@ -6498,7 +6500,7 @@ function localApi(
           });
         }
         if (clientUserCollection && request.method === "POST") {
-          if (!hasPermission(currentUser, "clients.edit"))
+          if (!hasPermission(currentUser, "clients.create_access"))
             return json(response, 403, { message: "Permissão insuficiente." });
           const client = clients.get(clientUserCollection[1]);
           if (!client) return json(response, 404, { message: "Cliente não encontrado." });
