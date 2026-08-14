@@ -2537,7 +2537,7 @@ function localApi(
             .map((department) => department.id),
           teamDepartmentIds = new Set([
             ...managedDepartmentIds,
-            ...(hasPermission(currentUser, "tasks.view_team") && currentUser.departmentId
+            ...((hasPermission(currentUser, "tasks.view_team") || hasPermission(currentUser, "creative_ops.view_team_demands")) && currentUser.departmentId
               ? [currentUser.departmentId]
               : []),
           ]),
@@ -6454,7 +6454,7 @@ function localApi(
           return json(response, 200, { ok: true });
         }
         if (url === "/users" && request.method === "GET") {
-          if (!hasPermission(currentUser, "users.view") && !hasPermission(currentUser, "tasks.assign") && !hasPermission(currentUser, "tasks.view_team"))
+          if (!hasPermission(currentUser, "users.view") && !hasPermission(currentUser, "tasks.assign") && !hasPermission(currentUser, "tasks.view_team") && !hasPermission(currentUser, "creative_ops.view_team_demands"))
             return json(response, 403, { message: "Permissão insuficiente." });
           return json(response, 200, {
             users: [...users.values()].map(publicUser),
