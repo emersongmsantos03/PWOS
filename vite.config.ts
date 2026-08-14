@@ -2568,7 +2568,11 @@ function localApi(
               .filter((task) => !task.archivedAt && canSeeTask(task))
               .sort((a, b) =>
                 (a.dueAt || "9999").localeCompare(b.dueAt || "9999"),
-              ),
+              )
+              .map((task) => ({
+                ...task,
+                responsibleAvatarDataUrl: users.get(task.responsibleId)?.avatarDataUrl || "",
+              })),
             canViewAll: canViewTaskTeam,
             canEditAll: hasPermission(currentUser, "tasks.edit_team"),
             canReview: hasPermission(currentUser, "creative_ops.review"),
