@@ -16,7 +16,7 @@ const actionNames: Record<string,string> = {
   sync:"Sincronizar", share:"Compartilhar", download:"Baixar", block:"Bloquear usuário",
   authorize:"Autorizar", manage_accounts:"Gerenciar contas", manage_campaigns:"Gerenciar campanhas",
   manage_client_access:"Gerenciar portal do cliente", view_logs:"Ver logs", revoke:"Revogar acesso",
-  review:"Revisar e aprovar demandas", view_all:"Visualizar todas", edit_all:"Editar todas",
+  review:"Revisar e aprovar demandas", view_all:"Visualizar todas", edit_all:"Editar todas", edit_team:"Editar demandas da equipe",
   comment:"Comentar", manage_departments:"Gerenciar setores", create_access:"Criar acesso do cliente"
 };
 

@@ -2535,14 +2535,20 @@ function localApi(
         const managedDepartmentIds = [...departments.values()]
             .filter((department) => department.managerUserId === currentUser.id)
             .map((department) => department.id),
+          teamDepartmentIds = new Set([
+            ...managedDepartmentIds,
+            ...(hasPermission(currentUser, "tasks.view_team") && currentUser.departmentId
+              ? [currentUser.departmentId]
+              : []),
+          ]),
           managedTeamUserIds = new Set(
             [...users.values()]
-              .filter((user) => user.departmentId && managedDepartmentIds.includes(user.departmentId))
+              .filter((user) => user.departmentId && teamDepartmentIds.has(user.departmentId))
               .map((user) => user.id),
           ),
-          isTaskTeamLeader = currentUser.profile === "MASTER" || managedDepartmentIds.length > 0;
+          canViewTaskTeam = currentUser.profile === "MASTER" || teamDepartmentIds.size > 0;
         const canSeeTask = (task: WorkTask) =>
-          (isTaskTeamLeader &&
+          (canViewTaskTeam &&
             (currentUser.profile === "MASTER" ||
               managedTeamUserIds.has(task.responsibleId) ||
               managedTeamUserIds.has(task.createdBy) ||
@@ -2563,8 +2569,8 @@ function localApi(
               .sort((a, b) =>
                 (a.dueAt || "9999").localeCompare(b.dueAt || "9999"),
               ),
-            canViewAll: isTaskTeamLeader,
-            canEditAll: hasPermission(currentUser, "tasks.edit_all"),
+            canViewAll: canViewTaskTeam,
+            canEditAll: hasPermission(currentUser, "tasks.edit_team"),
             canReview: hasPermission(currentUser, "creative_ops.review"),
           });
         }
@@ -2577,6 +2583,8 @@ function localApi(
             title = String(input.title || "").trim(),
             responsible = users.get(String(input.responsibleId || "")),
             dueAt = String(input.dueAt || "");
+          if (responsible && responsible.id !== currentUser.id && !hasPermission(currentUser, "tasks.assign"))
+            return json(response, 403, { message: "Você não possui permissão para criar demandas para outras pessoas." });
           if (title.length < 3)
             return json(response, 400, {
               message: "Informe um título de tarefa válido.",
@@ -2706,7 +2714,7 @@ function localApi(
           if (
             task.responsibleId !== currentUser.id &&
             task.createdBy !== currentUser.id &&
-            !hasPermission(currentUser, "tasks.edit_all")
+            !hasPermission(currentUser, "tasks.edit_team")
           )
             return json(response, 403, {
               message: "Somente quem executa a demanda pode enviá-la para revisão.",
@@ -3068,7 +3076,7 @@ function localApi(
             !hasPermission(currentUser, "tasks.edit") ||
             (task.responsibleId !== currentUser.id &&
               task.createdBy !== currentUser.id &&
-              !hasPermission(currentUser, "tasks.edit_all"))
+              !hasPermission(currentUser, "tasks.edit_team"))
           )
             return json(response, 403, {
               message: "Você só pode editar suas próprias tarefas.",
@@ -6446,7 +6454,7 @@ function localApi(
           return json(response, 200, { ok: true });
         }
         if (url === "/users" && request.method === "GET") {
-          if (!hasPermission(currentUser, "users.view"))
+          if (!hasPermission(currentUser, "users.view") && !hasPermission(currentUser, "tasks.assign") && !hasPermission(currentUser, "tasks.view_team"))
             return json(response, 403, { message: "Permissão insuficiente." });
           return json(response, 200, {
             users: [...users.values()].map(publicUser),
