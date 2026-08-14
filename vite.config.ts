@@ -2532,8 +2532,21 @@ function localApi(
           persistTickets();
           return json(response, 200, { ok: true });
         }
+        const managedDepartmentIds = [...departments.values()]
+            .filter((department) => department.managerUserId === currentUser.id)
+            .map((department) => department.id),
+          managedTeamUserIds = new Set(
+            [...users.values()]
+              .filter((user) => user.departmentId && managedDepartmentIds.includes(user.departmentId))
+              .map((user) => user.id),
+          ),
+          isTaskTeamLeader = currentUser.profile === "MASTER" || managedDepartmentIds.length > 0;
         const canSeeTask = (task: WorkTask) =>
-          hasPermission(currentUser, "tasks.view_all") ||
+          (isTaskTeamLeader &&
+            (currentUser.profile === "MASTER" ||
+              managedTeamUserIds.has(task.responsibleId) ||
+              managedTeamUserIds.has(task.createdBy) ||
+              task.participantIds.some((id) => managedTeamUserIds.has(id)))) ||
           (hasPermission(currentUser, "creative_ops.review") &&
             task.approvalStatus !== "NOT_REQUIRED") ||
           task.createdBy === currentUser.id ||
@@ -2550,7 +2563,7 @@ function localApi(
               .sort((a, b) =>
                 (a.dueAt || "9999").localeCompare(b.dueAt || "9999"),
               ),
-            canViewAll: hasPermission(currentUser, "tasks.view_all"),
+            canViewAll: isTaskTeamLeader,
             canEditAll: hasPermission(currentUser, "tasks.edit_all"),
             canReview: hasPermission(currentUser, "creative_ops.review"),
           });
