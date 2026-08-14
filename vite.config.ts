@@ -2936,15 +2936,15 @@ function localApi(
               "application/pdf",
             ],
             maxSize = contentType.startsWith("video/")
-              ? 250_000_000
-              : 25_000_000;
+              ? 5_000_000_000
+              : 100_000_000;
           if (!name || name.length > 180)
             return json(response, 400, { message: "Nome de arquivo inválido." });
           if (declaredSize <= 0 || declaredSize > maxSize)
             return json(response, 400, {
               message: contentType.startsWith("video/")
-                ? "Cada vídeo deve ter no máximo 250 MB."
-                : "Cada imagem ou documento deve ter no máximo 25 MB.",
+                ? "Cada vídeo deve ter no máximo 5 GB."
+                : "Cada imagem ou documento deve ter no máximo 100 MB.",
             });
           if (!allowed.includes(contentType))
             return json(response, 400, {
