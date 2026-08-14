@@ -271,6 +271,7 @@ function Shell({
       "/configuracoes/integracoes": "integrations.view",
       "/configuracoes": "settings.view",
     };
+    if (item.to === "/crm") return can("crm.view") || can("opportunities.view");
     return !permissionByPath[item.to] || can(permissionByPath[item.to]);
   });
   const firstAccessiblePath=visibleNav[0]?.to||"/ajuda";
@@ -547,7 +548,7 @@ function Shell({
         <Routes>
           <Route path="/" element={can("dashboard.view")?<DashboardBoards user={user}/>:<Navigate to={firstAccessiblePath} replace/>} />
           <Route path="/clientes" element={<ClientsManagement permissions={user.permissions || []} profile={user.profile} />} />
-          <Route path="/crm" element={<CrmManagement />} />
+          <Route path="/crm" element={<CrmManagement permissions={user.permissions || []} profile={user.profile} />} />
           <Route path="/tarefas" element={<TasksManagement />} />
           <Route path="/agenda" element={<CalendarManagement />} />
           <Route path="/financeiro" element={<FinancialManagement />} />

@@ -4052,7 +4052,7 @@ function localApi(
           return json(response, 201, { company });
         }
         if (url === "/crm/pipelines" && request.method === "GET") {
-          if (!hasPermission(currentUser, "crm.view"))
+          if (!hasPermission(currentUser, "crm.view") && !hasPermission(currentUser, "opportunities.view"))
             return json(response, 403, {
               message: "Você não possui acesso ao CRM.",
             });
@@ -4392,7 +4392,7 @@ function localApi(
           return json(response, 200, { pipeline });
         }
         if (url === "/crm/opportunities" && request.method === "GET") {
-          if (!hasPermission(currentUser, "crm.view"))
+          if (!hasPermission(currentUser, "opportunities.view"))
             return json(response, 403, {
               message: "Você não possui acesso ao CRM.",
             });
@@ -4406,7 +4406,7 @@ function localApi(
           });
         }
         if (url === "/crm/opportunities" && request.method === "POST") {
-          if (!hasPermission(currentUser, "crm.create"))
+          if (!hasPermission(currentUser, "opportunities.create"))
             return json(response, 403, {
               message: "Você não possui permissão para criar oportunidades.",
             });
@@ -4505,7 +4505,7 @@ function localApi(
           /^\/crm\/opportunities\/([^/]+)\/stage$/,
         );
         if (opportunityStageMatch && request.method === "POST") {
-          if (!hasPermission(currentUser, "crm.move_stage"))
+          if (!hasPermission(currentUser, "opportunities.move_stage"))
             return json(response, 403, {
               message: "Você não possui permissão para mover oportunidades.",
             });
@@ -4603,7 +4603,7 @@ function localApi(
           /^\/crm\/opportunities\/([^/]+)\/convert$/,
         );
         if (opportunityConvertMatch && request.method === "POST") {
-          if (!hasPermission(currentUser, "crm.convert"))
+          if (!hasPermission(currentUser, "opportunities.convert"))
             return json(response, 403, {
               message: "Você não possui permissão para converter leads.",
             });
@@ -4801,7 +4801,7 @@ function localApi(
           /^\/crm\/opportunities\/([^/]+)\/reverse-conversion$/,
         );
         if (opportunityReverseMatch && request.method === "POST") {
-          if (!hasPermission(currentUser, "crm.reverse_conversion"))
+          if (!hasPermission(currentUser, "opportunities.reverse_conversion"))
             return json(response, 403, {
               message: "Você não possui permissão para reverter conversões.",
             });
@@ -4874,7 +4874,7 @@ function localApi(
           /^\/crm\/opportunities\/([^/]+)\/activities$/,
         );
         if (opportunityActivityMatch && request.method === "POST") {
-          if (!hasPermission(currentUser, "crm.edit"))
+          if (!hasPermission(currentUser, "opportunities.edit"))
             return json(response, 403, {
               message: "Você não possui permissão para registrar atividades.",
             });
@@ -4934,7 +4934,7 @@ function localApi(
           /^\/crm\/opportunities\/([^/]+)\/proposals$/,
         );
         if (opportunityProposalMatch && request.method === "POST") {
-          if (!hasPermission(currentUser, "crm.edit"))
+          if (!hasPermission(currentUser, "opportunities.edit"))
             return json(response, 403, {
               message: "Você não possui permissão para adicionar propostas.",
             });
@@ -4991,7 +4991,7 @@ function localApi(
         }
         const opportunityMatch = url.match(/^\/crm\/opportunities\/([^/]+)$/);
         if (opportunityMatch && request.method === "GET") {
-          if (!hasPermission(currentUser, "crm.view"))
+          if (!hasPermission(currentUser, "opportunities.view"))
             return json(response, 403, {
               message: "Você não possui acesso ao CRM.",
             });
@@ -5004,7 +5004,7 @@ function localApi(
             : json(response, 404, { message: "Oportunidade não encontrada." });
         }
         if (opportunityMatch && request.method === "PATCH") {
-          if (!hasPermission(currentUser, "crm.edit"))
+          if (!hasPermission(currentUser, "opportunities.edit"))
             return json(response, 403, {
               message: "Você não possui permissão para editar oportunidades.",
             });
@@ -5098,7 +5098,7 @@ function localApi(
           return json(response, 200, { opportunity });
         }
         if (opportunityMatch && request.method === "DELETE") {
-          if (!hasPermission(currentUser, "crm.delete"))
+          if (!hasPermission(currentUser, "opportunities.delete"))
             return json(response, 403, {
               message: "Você não possui permissão para excluir oportunidades.",
             });
