@@ -2935,16 +2935,12 @@ function localApi(
               "video/quicktime",
               "application/pdf",
             ],
-            maxSize = contentType.startsWith("video/")
-              ? 5_000_000_000
-              : 100_000_000;
+            maxSize = 2_000_000_000;
           if (!name || name.length > 180)
             return json(response, 400, { message: "Nome de arquivo inválido." });
           if (declaredSize <= 0 || declaredSize > maxSize)
             return json(response, 400, {
-              message: contentType.startsWith("video/")
-                ? "Cada vídeo deve ter no máximo 5 GB."
-                : "Cada imagem ou documento deve ter no máximo 100 MB.",
+              message: "Cada arquivo deve ter no máximo 2 GB.",
             });
           if (!allowed.includes(contentType))
             return json(response, 400, {

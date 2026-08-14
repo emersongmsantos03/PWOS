@@ -109,7 +109,7 @@ function TaskDetail({task,clientName,users,onClose,onPatch,onReload}:{task:Task;
 
 function TaskReviewFlow({task,currentUserId,onReload}:{task:Task;currentUserId:string;onReload:()=>Promise<void>}){
   const[busy,setBusy]=useState(false),[error,setError]=useState("");
-  const latest=task.approvalHistory?.at(-1),canSubmit=task.responsibleId===currentUserId&&!["PENDING","APPROVED","REJECTED"].includes(task.approvalStatus)&&!["DONE","PUBLISHED","CANCELLED"].includes(task.status);
+  const latest=task.approvalHistory?.at(-1),canSubmit=(task.responsibleId===currentUserId||task.createdBy===currentUserId)&&!["PENDING","APPROVED","REJECTED"].includes(task.approvalStatus)&&!["DONE","PUBLISHED","CANCELLED"].includes(task.status);
   const submit=async()=>{setBusy(true);setError("");const response=await fetch(`/api/tasks/${task.id}/review/submit`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({comment:task.approvalStatus==="CHANGES_REQUESTED"?"Ajustes concluídos. Reenviando para aprovação.":"Entrega pronta para revisão."})}),payload=await response.json();if(!response.ok){setError(payload.message||"Não foi possível enviar para revisão.");setBusy(false);return}setBusy(false);await onReload()};
   return <aside className={`task-review-flow ${task.approvalStatus.toLowerCase()}`}><span>{task.approvalStatus==="PENDING"?<Clock3/>:task.approvalStatus==="APPROVED"?<CheckCircle2/>:task.approvalStatus==="REJECTED"?<X/>:<Inbox/>}</span><div><small>REVISÃO</small><b>{task.approvalStatus==="PENDING"?"Aguardando decisão":task.approvalStatus==="APPROVED"?"Entrega aprovada":task.approvalStatus==="CHANGES_REQUESTED"?"Ajustes solicitados":task.approvalStatus==="REJECTED"?"Entrega recusada":"Pronta para enviar?"}</b><p>{latest?.comment||(task.approvalStatus==="APPROVED"?"Você já pode seguir para publicação.":"Envie a entrega quando estiver finalizada.")}</p>{error&&<em>{error}</em>}</div>{canSubmit&&<button onClick={()=>void submit()} disabled={busy}><Send/> {busy?"Enviando...":task.approvalStatus==="CHANGES_REQUESTED"?"Reenviar ajustes":"Enviar para revisão"}</button>}</aside>
 }
@@ -122,8 +122,8 @@ function TaskAttachments({task,onReload}:{task:Task;onReload:()=>Promise<void>})
     setUploading(true);setError("");
     const errors:string[]=[];
     for(const file of Array.from(files)){
-      const isVideo=file.type.startsWith("video/"),max=isVideo?5_000_000_000:100_000_000;
-      if(file.size>max){errors.push(`${file.name}: limite de ${isVideo?"5 GB":"100 MB"}.`);continue}
+      const max=2_000_000_000;
+      if(file.size>max){errors.push(`${file.name}: limite de 2 GB.`);continue}
       const response=await fetch(`/api/tasks/${task.id}/attachments`,{method:"POST",headers:{"Content-Type":file.type||"application/octet-stream","X-File-Name":encodeURIComponent(file.name)},body:file});
       const payload=await response.json();if(!response.ok)errors.push(payload.message||`Falha ao enviar ${file.name}.`)
     }
@@ -140,7 +140,7 @@ function TaskAttachments({task,onReload}:{task:Task;onReload:()=>Promise<void>})
       <div className="attachment-meta"><b title={item.name}>{item.name}</b><small>{(item.sizeBytes/1_000_000).toFixed(1)} MB · expira em {daysLeft(item)} dia(s)</small></div>
       <div className="attachment-actions"><a href={src} download={item.name} title="Baixar original"><Download/></a><button onClick={()=>void remove(item.id)} title="Remover"><Trash2/></button></div>
     </article>})}</div>}
-    <label className={`attachment-dropzone ${uploading?"uploading":""}`}><span className="attachment-drop-icon"><Paperclip/></span><span><b>{uploading?"Enviando originais...":"Solte ou selecione fotos e vídeos"}</b><small>Imagens e PDF até 100 MB · vídeos MP4, MOV ou WebM até 5 GB · sem compressão</small></span><em>{uploading?"Aguarde":"Selecionar arquivos"}</em><input type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif,video/mp4,video/webm,video/quicktime,application/pdf" disabled={uploading||attachments.length>=12} onChange={event=>void upload(event.target.files)}/></label>
+    <label className={`attachment-dropzone ${uploading?"uploading":""}`}><span className="attachment-drop-icon"><Paperclip/></span><span><b>{uploading?"Enviando originais...":"Solte ou selecione fotos e vídeos"}</b><small>Imagens, PDFs e vídeos até 2 GB por arquivo · sem compressão</small></span><em>{uploading?"Aguarde":"Selecionar arquivos"}</em><input type="file" multiple accept="image/png,image/jpeg,image/webp,image/gif,video/mp4,video/webm,video/quicktime,application/pdf" disabled={uploading||attachments.length>=12} onChange={event=>void upload(event.target.files)}/></label>
     {error&&<div className="attachment-error"><AlertCircle/>{error}</div>}
     {viewer&&<div className="attachment-viewer" onMouseDown={event=>event.target===event.currentTarget&&setViewer(null)}><section><header><div><b>{viewer.name}</b><small>Original · {(viewer.sizeBytes/1_000_000).toFixed(1)} MB · {daysLeft(viewer)} dia(s) restantes</small></div><div><a href={source(viewer)} download={viewer.name}><Download/> Baixar</a><button onClick={()=>setViewer(null)}><X/></button></div></header><main>{viewer.contentType.startsWith("video/")?<video src={source(viewer)} controls autoPlay playsInline preload="metadata"/>:<img src={source(viewer)} alt={viewer.name}/>}</main></section></div>}
   </section>
