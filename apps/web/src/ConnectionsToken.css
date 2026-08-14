@@ -1,0 +1,123 @@
+.connection-admin-card {
+  position: relative;
+  overflow: hidden;
+}
+.connection-admin-card.is-connected:before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--green);
+}
+.meta-token-admin {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--divider);
+}
+.token-status-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px;
+  border-radius: 9px;
+  background: var(--surface-soft);
+}
+.token-status-row > svg {
+  width: 20px;
+  color: var(--accent);
+}
+.token-status-row > div {
+  display: flex;
+  flex-direction: column;
+}
+.token-status-row b {
+  font-size: 9px;
+  color: var(--heading);
+}
+.token-status-row p {
+  margin: 2px 0 0;
+  color: var(--subtle);
+  font-size: 7px;
+}
+.meta-token-admin form {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: end;
+  gap: 10px;
+  margin-top: 13px;
+}
+.meta-token-admin form > label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--heading);
+  font-size: 8px;
+  font-weight: 700;
+}
+.meta-token-admin label > div {
+  height: 39px;
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--field);
+  overflow: hidden;
+}
+.meta-token-admin input {
+  min-width: 0;
+  flex: 1;
+  padding: 0 11px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 9px;
+}
+.meta-token-admin label > div > button {
+  width: 40px;
+  border: 0;
+  background: transparent;
+  color: var(--subtle);
+}
+.meta-token-admin label > div svg {
+  width: 15px;
+}
+.meta-token-admin label > small {
+  color: var(--subtle);
+  font-size: 7px;
+  font-weight: 400;
+}
+.meta-token-admin form > .primary {
+  margin-bottom: 16px;
+}
+.token-master-only {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 12px;
+  padding: 11px;
+  border: 1px dashed var(--border);
+  border-radius: 9px;
+  color: var(--subtle);
+}
+.token-master-only > svg {
+  width: 18px;
+}
+.token-master-only > span {
+  display: flex;
+  flex-direction: column;
+}
+.token-master-only b {
+  font-size: 8px;
+}
+.token-master-only small {
+  font-size: 7px;
+}
+@media (max-width: 650px) {
+  .meta-token-admin form {
+    grid-template-columns: 1fr;
+  }
+  .meta-token-admin form > .primary {
+    width: 100%;
+    margin: 0;
+  }
+}

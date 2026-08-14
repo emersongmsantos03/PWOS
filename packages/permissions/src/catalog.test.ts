@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { allPermissions, effectivePermissions } from "./catalog";
+import { allPermissions, effectivePermissions, sanitizePermissions } from "./catalog";
 
 describe("catálogo e exceções individuais", () => {
   it("possui permissões específicas dentro dos módulos", () => {
@@ -14,5 +14,9 @@ describe("catálogo e exceções individuais", () => {
   });
   it("concessão individual adiciona acesso fora do cargo", () => {
     expect(effectivePermissions([], { "reports.share": "ALLOW" })[0]).toMatchObject({ allowed: true, source: "USER_ALLOW" });
+  });
+  it("remove permissões desconhecidas e duplicadas ao salvar um cargo", () => {
+    expect(sanitizePermissions(["clients.view", "clients.view", "unknown.all"]))
+      .toEqual(["clients.view"]);
   });
 });

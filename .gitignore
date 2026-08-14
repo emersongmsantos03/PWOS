@@ -43,4 +43,6 @@ next-env.d.ts
 /outputs/
 /work/
 /data/*.local.json
+/data/integration.local.key
 /data/postgres/
+/data/task-attachments/

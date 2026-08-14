@@ -17,6 +17,7 @@
     "db:start": "node scripts/start-postgres.mjs",
     "db:migrate": "prisma migrate dev --schema packages/database/prisma/schema.prisma",
     "db:deploy": "prisma migrate deploy --schema packages/database/prisma/schema.prisma",
+    "db:import-local": "node scripts/migrate-local-data-to-postgres.mjs",
     "db:studio": "prisma studio --schema packages/database/prisma/schema.prisma"
   },
   "dependencies": {

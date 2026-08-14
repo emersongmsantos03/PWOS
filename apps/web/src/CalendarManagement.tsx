@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type DragEvent, type FormEvent } from "react";
 import { CalendarDays, Check, CheckSquare2, ChevronLeft, ChevronRight, Clock3, Eye, EyeOff, MapPin, Plus, Users, X } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 
 type CalendarEvent={id:string;title:string;description:string;ownerId:string;ownerName:string;participantIds:string[];startAt:string;endAt:string;location:string;category:string};
 type Task={id:string;title:string;responsibleId:string;responsibleName:string;dueAt:string;priority:string;status:string};
@@ -18,6 +19,7 @@ const sameDay=(a:Date,b:Date)=>a.toDateString()===b.toDateString();
 const weekStart=(date:Date)=>addDays(startOfDay(date),-((date.getDay()+6)%7));
 const calendarColors=["#2563eb","#7c3aed","#db2777","#ea580c","#0891b2","#16a34a","#ca8a04","#dc2626","#4f46e5","#0d9488"];
 const ownerColor=(ownerId:string)=>calendarColors[[...ownerId].reduce((sum,char)=>sum+char.charCodeAt(0),0)%calendarColors.length];
+const initialCalendarDate=()=>{const value=new URLSearchParams(window.location.search).get("date"),date=value?new Date(value):new Date();return Number.isNaN(date.getTime())?new Date():date};
 
 export function CalendarManagement(){
   const [events,setEvents]=useState<CalendarEvent[]>([]);
@@ -30,7 +32,7 @@ export function CalendarManagement(){
   const [canEditAllEvents,setCanEditAllEvents]=useState(false);
   const [canEditAllTasks,setCanEditAllTasks]=useState(false);
   const [ownerIds,setOwnerIds]=useState<string[]>([]);
-  const [anchor,setAnchor]=useState(()=>new Date());
+  const [anchor,setAnchor]=useState(initialCalendarDate);
   const [view,setView]=useState<View>("WEEK");
   const [creating,setCreating]=useState(false);
   const [createType,setCreateType]=useState<CreateType>("EVENT");
@@ -117,8 +119,9 @@ export function CalendarManagement(){
 }
 
 function ItemCard({item,onDrag}:{item:CalendarItem;onDrag:(event:DragEvent,item:CalendarItem)=>void}){
+  const navigate=useNavigate();
   const color=ownerColor(item.ownerId);
-  return <article draggable={item.editable} onDragStart={event=>item.editable&&onDrag(event,item)} className={`calendar-item ${item.kind} ${item.category.toLowerCase()} ${item.editable?"editable":"read-only"}`} style={{"--owner-color":color} as React.CSSProperties} title={`${item.ownerName} · ${item.editable?"arraste para alterar o horário":"somente visualização"}`}><span>{item.kind==="task"?<CheckSquare2/>:<Clock3/>}</span><div><b>{item.title}</b><small>{item.start.toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"})}{item.kind==="event"&&` – ${item.end.toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"})}`} · {item.ownerName}</small></div>{!item.editable&&<Eye/>}</article>
+  return <article draggable={item.editable} onDragStart={event=>item.editable&&onDrag(event,item)} onClick={event=>{event.stopPropagation();if(item.kind==="task")navigate(`/tarefas?task=${item.id}`)}} className={`calendar-item ${item.kind} ${item.category.toLowerCase()} ${item.editable?"editable":"read-only"}`} style={{"--owner-color":color} as React.CSSProperties} title={item.kind==="task"?`${item.ownerName} · clique para abrir no Creative Ops`:`${item.ownerName} · ${item.editable?"arraste para alterar o horário":"somente visualização"}`}><span>{item.kind==="task"?<CheckSquare2/>:<Clock3/>}</span><div><b>{item.title}</b><small>{item.start.toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"})}{item.kind==="event"&&` – ${item.end.toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"})}`} · {item.ownerName}{item.kind==="task"&&" · Creative Ops"}</small></div>{!item.editable&&<Eye/>}</article>
 }
 
 function TimeGrid({days,items,onDrop,onDrag,onCreate}:{days:Date[];items:CalendarItem[];onDrop:(event:DragEvent,day:Date,hour?:number)=>void;onDrag:(event:DragEvent,item:CalendarItem)=>void;onCreate:(date:Date)=>void}){

@@ -1,0 +1,51 @@
+.campaign-client-code{
+  display:flex;
+  align-items:center;
+  gap:4px;
+  width:max-content;
+  margin-top:3px;
+  padding:0;
+  border:0;
+  background:transparent;
+  color:var(--accent);
+  font-size:6.5px;
+  font-weight:700;
+  line-height:1.4;
+}
+
+.traffic-client-summary{
+  cursor:pointer;
+}
+
+.traffic-client-identity .campaign-client-code{
+  margin-top:2px;
+}
+
+.campaign-client-code:hover{
+  text-decoration:underline;
+}
+
+.campaign-client-code svg{
+  width:9px;
+  height:9px;
+}
+
+.campaign-client-code em{
+  font-size:6px;
+  font-style:normal;
+}
+
+.campaign-client-code.copied{
+  color:var(--green);
+}
+
+.campaign-client-identifier{
+  width:max-content;
+}
+
+.campaign-client-identifier>small{
+  display:block;
+  margin-top:1px;
+  color:var(--subtle);
+  font-size:5.8px;
+}

@@ -84,435 +84,679 @@ enum FinancialAccountType {
   CARD
 }
 
+enum CreativeTaskType {
+  CONTENT
+  DESIGN
+  VIDEO
+  WEB
+  PAID_MEDIA
+  EMAIL
+  OTHER
+}
+
+enum CreativeTaskStatus {
+  TODO
+  IN_PROGRESS
+  REVIEW
+  WAITING_APPROVAL
+  CHANGES_REQUESTED
+  APPROVED
+  SCHEDULED
+  PUBLISHED
+  DONE
+  CANCELLED
+}
+
+enum CreativeTaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum ApprovalStatus {
+  NOT_REQUIRED
+  PENDING
+  APPROVED
+  CHANGES_REQUESTED
+  REJECTED
+}
+
+enum ApprovalType {
+  INTERNAL
+  CLIENT
+}
+
+enum CommentVisibility {
+  INTERNAL
+  CLIENT_VISIBLE
+}
+
 model Organization {
-  id String @id @default(uuid()) @db.Uuid
-  name String
-  users User[]
-  clients Client[]
-  pipelines Pipeline[]
-  leads Lead[]
-  opportunities Opportunity[]
-  departments Department[]
-  tags Tag[]
-  tasks Task[]
-  calendarEvents CalendarEvent[]
-  financialAccounts FinancialAccount[]
-  financialCategories FinancialCategory[]
-  financialEntries FinancialEntry[]
-  financialSuppliers FinancialSupplier[]
+  id                   String                @id @default(uuid()) @db.Uuid
+  name                 String
+  users                User[]
+  clients              Client[]
+  pipelines            Pipeline[]
+  leads                Lead[]
+  opportunities        Opportunity[]
+  departments          Department[]
+  tags                 Tag[]
+  tasks                Task[]
+  taskTypes            CreativeTaskSubtype[]
+  calendarEvents       CalendarEvent[]
+  financialAccounts    FinancialAccount[]
+  financialCategories  FinancialCategory[]
+  financialEntries     FinancialEntry[]
+  financialSuppliers   FinancialSupplier[]
   financialCostCenters FinancialCostCenter[]
-  financialAudits FinancialAudit[]
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  financialAudits      FinancialAudit[]
+  integrationConnections IntegrationConnection[]
+  mediaAlerts          MediaAlert[]
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
 }
 
 model User {
-  id String @id @default(uuid()) @db.Uuid
-  organizationId String @db.Uuid
-  organization Organization @relation(fields: [organizationId], references: [id])
-  email String
-  name String
-  profile TechnicalProfile
-  status UserStatus @default(INVITED)
-  mustChangePassword Boolean @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  deletedAt DateTime?
-  departmentId String? @db.Uuid
-  department Department? @relation(fields: [departmentId], references: [id])
-  assignedOpportunities Opportunity[] @relation("OpportunityResponsible")
-  conversions LeadConversion[] @relation("ConversionActor")
-  opportunityMemberships OpportunityMember[]
-  assignedTasks Task[] @relation("TaskResponsible")
-  ownedEvents CalendarEvent[] @relation("EventOwner")
-  createdFinancialEntries FinancialEntry[] @relation("FinancialEntryCreator")
+  id                      String              @id @default(uuid()) @db.Uuid
+  organizationId          String              @db.Uuid
+  organization            Organization        @relation(fields: [organizationId], references: [id])
+  email                   String
+  name                    String
+  phone                   String?
+  avatarDataUrl           String?
+  roleLabel               String?
+  profile                 TechnicalProfile
+  status                  UserStatus          @default(INVITED)
+  mustChangePassword      Boolean             @default(true)
+  createdAt               DateTime            @default(now())
+  updatedAt               DateTime            @updatedAt
+  deletedAt               DateTime?
+  departmentId            String?             @db.Uuid
+  department              Department?         @relation(fields: [departmentId], references: [id])
+  assignedOpportunities   Opportunity[]       @relation("OpportunityResponsible")
+  conversions             LeadConversion[]    @relation("ConversionActor")
+  opportunityMemberships  OpportunityMember[]
+  assignedTasks           Task[]              @relation("TaskResponsible")
+  createdTasks            Task[]              @relation("TaskCreator")
+  requestedTasks          Task[]              @relation("TaskRequester")
+  completedChecklistItems TaskChecklistItem[] @relation("ChecklistCompleter")
+  taskComments            TaskComment[]
+  taskActivities          TaskActivity[]
+  taskApprovalsRequested  TaskApproval[]      @relation("ApprovalRequester")
+  taskApprovalsAssigned   TaskApproval[]      @relation("ApprovalAssignee")
+  ownedEvents             CalendarEvent[]     @relation("EventOwner")
+  createdFinancialEntries FinancialEntry[]    @relation("FinancialEntryCreator")
+  mediaAccounts           ExternalAdAccount[] @relation("MediaAccountResponsible")
+  mediaAlerts             MediaAlert[]        @relation("MediaAlertResponsible")
+  clientId                String?             @db.Uuid
+  client                  Client?             @relation("ClientPortalUsers", fields: [clientId], references: [id], onDelete: Cascade)
+
   @@unique([organizationId, email])
   @@index([organizationId, status])
+  @@index([organizationId, clientId])
 }
 
 model Client {
-  id String @id @default(uuid()) @db.Uuid
-  organizationId String @db.Uuid
-  organization Organization @relation(fields: [organizationId], references: [id])
-  name String
-  status String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  deletedAt DateTime?
+  id                String           @id @default(uuid()) @db.Uuid
+  organizationId    String           @db.Uuid
+  organization      Organization     @relation(fields: [organizationId], references: [id])
+  name              String
+  legalName         String?
+  document          String?
+  status            String
+  segment           String?
+  website           String?
+  primaryContactName String?
+  primaryContactEmail String?
+  primaryContactPhone String?
+  owner             String?
+  notes             String?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+  deletedAt         DateTime?
   originConversions LeadConversion[]
-  services ClientService[]
-  contacts ClientContact[]
-  projects Project[]
-  tasks Task[]
-  calendarEvents CalendarEvent[]
-  financialEntries FinancialEntry[]
+  services          ClientService[]
+  contacts          ClientContact[]
+  projects          Project[]
+  tasks             Task[]
+  calendarEvents    CalendarEvent[]
+  financialEntries  FinancialEntry[]
+  mediaAccounts     ExternalAdAccount[]
+  mediaAlerts       MediaAlert[]
+  portalUsers       User[]           @relation("ClientPortalUsers")
+
   @@index([organizationId, status])
 }
 
 model Pipeline {
-  id String @id @default(uuid()) @db.Uuid
-  organizationId String @db.Uuid
-  organization Organization @relation(fields: [organizationId], references: [id])
-  name String
-  active Boolean @default(true)
-  stages PipelineStage[]
-  opportunities Opportunity[]
+  id               String                  @id @default(uuid()) @db.Uuid
+  organizationId   String                  @db.Uuid
+  organization     Organization            @relation(fields: [organizationId], references: [id])
+  name             String
+  active           Boolean                 @default(true)
+  stages           PipelineStage[]
+  opportunities    Opportunity[]
   departmentAccess CrmPipelineDepartment[]
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt        DateTime                @default(now())
+  updatedAt        DateTime                @updatedAt
+
   @@index([organizationId, active])
 }
 
 model Department {
-  id String @id @default(uuid()) @db.Uuid
-  organizationId String @db.Uuid
-  organization Organization @relation(fields: [organizationId], references: [id])
-  name String
-  active Boolean @default(true)
-  users User[]
-  crmAccess CrmPipelineDepartment[]
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id             String                  @id @default(uuid()) @db.Uuid
+  organizationId String                  @db.Uuid
+  organization   Organization            @relation(fields: [organizationId], references: [id])
+  name           String
+  active         Boolean                 @default(true)
+  users          User[]
+  crmAccess      CrmPipelineDepartment[]
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
+
   @@unique([organizationId, name])
 }
 
 model CrmPipelineDepartment {
-  pipelineId String @db.Uuid
-  pipeline Pipeline @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
-  departmentId String @db.Uuid
-  department Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
-  createdAt DateTime @default(now())
+  pipelineId   String     @db.Uuid
+  pipeline     Pipeline   @relation(fields: [pipelineId], references: [id], onDelete: Cascade)
+  departmentId String     @db.Uuid
+  department   Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  createdAt    DateTime   @default(now())
+
   @@id([pipelineId, departmentId])
 }
 
 model PipelineStage {
-  id String @id @default(uuid()) @db.Uuid
-  pipelineId String @db.Uuid
-  pipeline Pipeline @relation(fields: [pipelineId], references: [id])
-  name String
-  color String
-  position Int
-  probability Int
-  requiredFields String[] @default([])
-  terminalStatus OpportunityStatus?
-  opportunities Opportunity[]
-  transitionsFrom StageTransition[] @relation("TransitionFrom")
-  transitionsTo StageTransition[] @relation("TransitionTo")
+  id              String             @id @default(uuid()) @db.Uuid
+  pipelineId      String             @db.Uuid
+  pipeline        Pipeline           @relation(fields: [pipelineId], references: [id])
+  name            String
+  color           String
+  position        Int
+  probability     Int
+  requiredFields  String[]           @default([])
+  terminalStatus  OpportunityStatus?
+  opportunities   Opportunity[]
+  transitionsFrom StageTransition[]  @relation("TransitionFrom")
+  transitionsTo   StageTransition[]  @relation("TransitionTo")
+
   @@unique([pipelineId, position])
 }
 
 model Lead {
-  id String @id @default(uuid()) @db.Uuid
-  organizationId String @db.Uuid
-  organization Organization @relation(fields: [organizationId], references: [id])
-  name String
-  company String?
-  email String?
-  phone String?
-  whatsapp String?
-  source String?
-  sourceCampaign String?
-  status String @default("ACTIVE")
-  convertedClientId String? @db.Uuid
-  convertedAt DateTime?
-  opportunities Opportunity[]
-  conversions LeadConversion[]
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  deletedAt DateTime?
+  id                String           @id @default(uuid()) @db.Uuid
+  organizationId    String           @db.Uuid
+  organization      Organization     @relation(fields: [organizationId], references: [id])
+  name              String
+  company           String?
+  email             String?
+  phone             String?
+  whatsapp          String?
+  source            String?
+  sourceCampaign    String?
+  status            String           @default("ACTIVE")
+  convertedClientId String?          @db.Uuid
+  convertedAt       DateTime?
+  opportunities     Opportunity[]
+  conversions       LeadConversion[]
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+  deletedAt         DateTime?
+
   @@index([organizationId, status])
   @@index([organizationId, email])
 }
 
 model Opportunity {
-  id String @id @default(uuid()) @db.Uuid
-  organizationId String @db.Uuid
-  organization Organization @relation(fields: [organizationId], references: [id])
-  leadId String @db.Uuid
-  lead Lead @relation(fields: [leadId], references: [id])
-  pipelineId String @db.Uuid
-  pipeline Pipeline @relation(fields: [pipelineId], references: [id])
-  stageId String @db.Uuid
-  stage PipelineStage @relation(fields: [stageId], references: [id])
-  responsibleId String? @db.Uuid
-  responsible User? @relation("OpportunityResponsible", fields: [responsibleId], references: [id])
-  title String
+  id              String               @id @default(uuid()) @db.Uuid
+  organizationId  String               @db.Uuid
+  organization    Organization         @relation(fields: [organizationId], references: [id])
+  leadId          String               @db.Uuid
+  lead            Lead                 @relation(fields: [leadId], references: [id])
+  pipelineId      String               @db.Uuid
+  pipeline        Pipeline             @relation(fields: [pipelineId], references: [id])
+  stageId         String               @db.Uuid
+  stage           PipelineStage        @relation(fields: [stageId], references: [id])
+  responsibleId   String?              @db.Uuid
+  responsible     User?                @relation("OpportunityResponsible", fields: [responsibleId], references: [id])
+  title           String
   serviceInterest String?
-  potentialValue Decimal? @db.Decimal(14,2)
-  probability Int
-  temperature LeadTemperature @default(WARM)
-  priority CommercialPriority @default(MEDIUM)
-  status OpportunityStatus @default(OPEN)
-  lossReason String?
-  stageEnteredAt DateTime @default(now())
-  transitions StageTransition[]
-  activities CommercialActivity[]
-  proposals Proposal[]
-  members OpportunityMember[]
-  tags OpportunityTag[]
-  conversion LeadConversion?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  deletedAt DateTime?
+  potentialValue  Decimal?             @db.Decimal(14, 2)
+  probability     Int
+  temperature     LeadTemperature      @default(WARM)
+  priority        CommercialPriority   @default(MEDIUM)
+  status          OpportunityStatus    @default(OPEN)
+  lossReason      String?
+  stageEnteredAt  DateTime             @default(now())
+  transitions     StageTransition[]
+  activities      CommercialActivity[]
+  proposals       Proposal[]
+  members         OpportunityMember[]
+  tags            OpportunityTag[]
+  conversion      LeadConversion?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  deletedAt       DateTime?
+
   @@index([organizationId, pipelineId, stageId])
   @@index([organizationId, responsibleId, status])
 }
 
 model OpportunityMember {
-  opportunityId String @db.Uuid
-  opportunity Opportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
-  userId String @db.Uuid
-  user User @relation(fields: [userId], references: [id])
-  createdAt DateTime @default(now())
+  opportunityId String      @db.Uuid
+  opportunity   Opportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  userId        String      @db.Uuid
+  user          User        @relation(fields: [userId], references: [id])
+  createdAt     DateTime    @default(now())
+
   @@id([opportunityId, userId])
 }
 
 model Tag {
-  id String @id @default(uuid()) @db.Uuid
-  organizationId String @db.Uuid
-  organization Organization @relation(fields: [organizationId], references: [id])
-  name String
-  color String?
-  opportunities OpportunityTag[]
+  id             String           @id @default(uuid()) @db.Uuid
+  organizationId String           @db.Uuid
+  organization   Organization     @relation(fields: [organizationId], references: [id])
+  name           String
+  color          String?
+  opportunities  OpportunityTag[]
+
   @@unique([organizationId, name])
 }
 
 model OpportunityTag {
-  opportunityId String @db.Uuid
-  opportunity Opportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
-  tagId String @db.Uuid
-  tag Tag @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  opportunityId String      @db.Uuid
+  opportunity   Opportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  tagId         String      @db.Uuid
+  tag           Tag         @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
   @@id([opportunityId, tagId])
 }
 
 model Proposal {
-  id String @id @default(uuid()) @db.Uuid
-  opportunityId String @db.Uuid
-  opportunity Opportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
-  title String
-  value Decimal @db.Decimal(14,2)
-  status String
-  validUntil DateTime?
-  notes String?
-  createdById String @db.Uuid
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id            String      @id @default(uuid()) @db.Uuid
+  opportunityId String      @db.Uuid
+  opportunity   Opportunity @relation(fields: [opportunityId], references: [id], onDelete: Cascade)
+  title         String
+  value         Decimal     @db.Decimal(14, 2)
+  status        String
+  validUntil    DateTime?
+  notes         String?
+  createdById   String      @db.Uuid
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
   @@index([opportunityId, createdAt])
 }
 
 model StageTransition {
-  id String @id @default(uuid()) @db.Uuid
-  opportunityId String @db.Uuid
-  opportunity Opportunity @relation(fields: [opportunityId], references: [id])
-  fromStageId String? @db.Uuid
-  fromStage PipelineStage? @relation("TransitionFrom", fields: [fromStageId], references: [id])
-  toStageId String @db.Uuid
-  toStage PipelineStage @relation("TransitionTo", fields: [toStageId], references: [id])
-  actorUserId String @db.Uuid
-  reason String?
-  enteredAt DateTime
-  leftAt DateTime?
-  createdAt DateTime @default(now())
+  id            String         @id @default(uuid()) @db.Uuid
+  opportunityId String         @db.Uuid
+  opportunity   Opportunity    @relation(fields: [opportunityId], references: [id])
+  fromStageId   String?        @db.Uuid
+  fromStage     PipelineStage? @relation("TransitionFrom", fields: [fromStageId], references: [id])
+  toStageId     String         @db.Uuid
+  toStage       PipelineStage  @relation("TransitionTo", fields: [toStageId], references: [id])
+  actorUserId   String         @db.Uuid
+  reason        String?
+  enteredAt     DateTime
+  leftAt        DateTime?
+  createdAt     DateTime       @default(now())
+
   @@index([opportunityId, createdAt])
 }
 
 model CommercialActivity {
-  id String @id @default(uuid()) @db.Uuid
-  organizationId String @db.Uuid
-  opportunityId String @db.Uuid
-  opportunity Opportunity @relation(fields: [opportunityId], references: [id])
-  actorUserId String @db.Uuid
-  type String
-  description String
-  metadata Json?
-  occurredAt DateTime @default(now())
+  id             String      @id @default(uuid()) @db.Uuid
+  organizationId String      @db.Uuid
+  opportunityId  String      @db.Uuid
+  opportunity    Opportunity @relation(fields: [opportunityId], references: [id])
+  actorUserId    String      @db.Uuid
+  type           String
+  description    String
+  metadata       Json?
+  occurredAt     DateTime    @default(now())
+
   @@index([organizationId, opportunityId, occurredAt])
 }
 
 model LeadConversion {
-  id String @id @default(uuid()) @db.Uuid
-  organizationId String @db.Uuid
-  leadId String @unique @db.Uuid
-  lead Lead @relation(fields: [leadId], references: [id])
-  opportunityId String @unique @db.Uuid
-  opportunity Opportunity @relation(fields: [opportunityId], references: [id])
-  clientId String @db.Uuid
-  client Client @relation(fields: [clientId], references: [id])
-  convertedById String @db.Uuid
-  convertedBy User @relation("ConversionActor", fields: [convertedById], references: [id])
-  snapshot Json
-  convertedAt DateTime @default(now())
-  reversals ConversionReversal[]
+  id             String               @id @default(uuid()) @db.Uuid
+  organizationId String               @db.Uuid
+  leadId         String               @unique @db.Uuid
+  lead           Lead                 @relation(fields: [leadId], references: [id])
+  opportunityId  String               @unique @db.Uuid
+  opportunity    Opportunity          @relation(fields: [opportunityId], references: [id])
+  clientId       String               @db.Uuid
+  client         Client               @relation(fields: [clientId], references: [id])
+  convertedById  String               @db.Uuid
+  convertedBy    User                 @relation("ConversionActor", fields: [convertedById], references: [id])
+  snapshot       Json
+  convertedAt    DateTime             @default(now())
+  reversals      ConversionReversal[]
+
   @@index([organizationId, convertedAt])
 }
 
 model ConversionReversal {
-  id String @id @default(uuid()) @db.Uuid
-  conversionId String @db.Uuid
-  conversion LeadConversion @relation(fields: [conversionId], references: [id])
-  actorUserId String @db.Uuid
-  reason String
+  id             String         @id @default(uuid()) @db.Uuid
+  conversionId   String         @db.Uuid
+  conversion     LeadConversion @relation(fields: [conversionId], references: [id])
+  actorUserId    String         @db.Uuid
+  reason         String
   impactSnapshot Json
-  createdAt DateTime @default(now())
+  createdAt      DateTime       @default(now())
 }
 
 model ClientService {
-  id String @id @default(uuid()) @db.Uuid
-  clientId String @db.Uuid
-  client Client @relation(fields: [clientId], references: [id])
-  opportunityId String? @db.Uuid
-  name String
-  negotiatedValue Decimal @db.Decimal(14,2)
-  billingType BillingType
-  startDate DateTime
-  status String @default("ACTIVE")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id              String      @id @default(uuid()) @db.Uuid
+  clientId        String      @db.Uuid
+  client          Client      @relation(fields: [clientId], references: [id])
+  opportunityId   String?     @db.Uuid
+  name            String
+  negotiatedValue Decimal     @db.Decimal(14, 2)
+  billingType     BillingType
+  startDate       DateTime
+  status          String      @default("ACTIVE")
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
   @@index([clientId, status])
 }
 
 model ClientContact {
-  id String @id @default(uuid()) @db.Uuid
-  clientId String @db.Uuid
-  client Client @relation(fields: [clientId], references: [id])
-  name String
-  role String?
-  email String?
-  phone String?
-  whatsapp String?
-  primary Boolean @default(false)
+  id        String   @id @default(uuid()) @db.Uuid
+  clientId  String   @db.Uuid
+  client    Client   @relation(fields: [clientId], references: [id])
+  name      String
+  role      String?
+  email     String?
+  phone     String?
+  whatsapp  String?
+  primary   Boolean  @default(false)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
   @@index([clientId, primary])
 }
 
 model Project {
-  id String @id @default(uuid()) @db.Uuid
-  clientId String @db.Uuid
-  client Client @relation(fields: [clientId], references: [id])
-  serviceId String? @db.Uuid
-  name String
-  objective String?
-  responsibleId String? @db.Uuid
-  startDate DateTime?
-  dueDate DateTime?
-  status String
-  progress Int @default(0)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  tasks Task[]
+  id             String          @id @default(uuid()) @db.Uuid
+  clientId       String          @db.Uuid
+  client         Client          @relation(fields: [clientId], references: [id])
+  serviceId      String?         @db.Uuid
+  name           String
+  objective      String?
+  responsibleId  String?         @db.Uuid
+  startDate      DateTime?
+  dueDate        DateTime?
+  status         String
+  progress       Int             @default(0)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  tasks          Task[]
   calendarEvents CalendarEvent[]
+
   @@index([clientId, status])
 }
 
 model Task {
-  id String @id @default(uuid()) @db.Uuid
-  organizationId String @db.Uuid
-  organization Organization @relation(fields: [organizationId], references: [id])
-  clientId String? @db.Uuid
-  client Client? @relation(fields: [clientId], references: [id])
-  projectId String? @db.Uuid
-  project Project? @relation(fields: [projectId], references: [id])
-  responsibleId String? @db.Uuid
-  responsible User? @relation("TaskResponsible", fields: [responsibleId], references: [id])
-  title String
-  description String?
-  priority String
-  status String
-  startAt DateTime?
-  dueAt DateTime?
-  estimateMinutes Int @default(0)
-  trackedMinutes Int @default(0)
-  tags String[] @default([])
-  createdById String @db.Uuid
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  calendarEvents CalendarEvent[]
+  id              String               @id @default(uuid()) @db.Uuid
+  organizationId  String               @db.Uuid
+  organization    Organization         @relation(fields: [organizationId], references: [id])
+  clientId        String?              @db.Uuid
+  client          Client?              @relation(fields: [clientId], references: [id])
+  projectId       String?              @db.Uuid
+  project         Project?             @relation(fields: [projectId], references: [id])
+  responsibleId   String?              @db.Uuid
+  responsible     User?                @relation("TaskResponsible", fields: [responsibleId], references: [id])
+  createdBy       User                 @relation("TaskCreator", fields: [createdById], references: [id])
+  requestedById   String?              @db.Uuid
+  requestedBy     User?                @relation("TaskRequester", fields: [requestedById], references: [id])
+  subtypeId       String?              @db.Uuid
+  subtype         CreativeTaskSubtype? @relation(fields: [subtypeId], references: [id])
+  parentId        String?              @db.Uuid
+  parent          Task?                @relation("TaskSubtasks", fields: [parentId], references: [id])
+  subtasks        Task[]               @relation("TaskSubtasks")
+  title           String
+  description     String?
+  type            CreativeTaskType     @default(OTHER)
+  priority        CreativeTaskPriority @default(MEDIUM)
+  status          CreativeTaskStatus   @default(TODO)
+  approvalStatus  ApprovalStatus       @default(NOT_REQUIRED)
+  startAt         DateTime?
+  dueAt           DateTime?
+  plannedAt       DateTime?
+  completedAt     DateTime?
+  publishedAt     DateTime?
+  estimateMinutes Int                  @default(0)
+  trackedMinutes  Int                  @default(0)
+  tags            String[]             @default([])
+  createdById     String               @db.Uuid
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  archivedAt      DateTime?
+  calendarEvents  CalendarEvent[]
+  checklist       TaskChecklistItem[]
+  comments        TaskComment[]
+  attachments     TaskAttachment[]
+  approvals       TaskApproval[]
+  activities      TaskActivity[]
+  contentDetail   TaskContentDetail?
+  webDetail       TaskWebDetail?
+
   @@index([organizationId, responsibleId, status])
   @@index([organizationId, dueAt])
+  @@index([organizationId, clientId, status])
+  @@index([organizationId, type, status])
+  @@index([organizationId, approvalStatus])
+  @@index([parentId])
+}
+
+model CreativeTaskSubtype {
+  id             String           @id @default(uuid()) @db.Uuid
+  organizationId String           @db.Uuid
+  organization   Organization     @relation(fields: [organizationId], references: [id])
+  type           CreativeTaskType
+  key            String
+  name           String
+  active         Boolean          @default(true)
+  position       Int              @default(0)
+  tasks          Task[]
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  @@unique([organizationId, key])
+  @@index([organizationId, type, active])
+}
+
+model TaskChecklistItem {
+  id            String    @id @default(uuid()) @db.Uuid
+  taskId        String    @db.Uuid
+  task          Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  title         String
+  completed     Boolean   @default(false)
+  completedById String?   @db.Uuid
+  completedBy   User?     @relation("ChecklistCompleter", fields: [completedById], references: [id])
+  completedAt   DateTime?
+  position      Int
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@unique([taskId, position])
+  @@index([taskId, completed])
+}
+
+model TaskComment {
+  id         String            @id @default(uuid()) @db.Uuid
+  taskId     String            @db.Uuid
+  task       Task              @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  userId     String            @db.Uuid
+  user       User              @relation(fields: [userId], references: [id])
+  content    String
+  visibility CommentVisibility @default(INTERNAL)
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+  deletedAt  DateTime?
+
+  @@index([taskId, createdAt])
+}
+
+model TaskAttachment {
+  id           String   @id @default(uuid()) @db.Uuid
+  taskId       String   @db.Uuid
+  task         Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  name         String
+  storageKey   String?
+  url          String?
+  contentType  String?
+  sizeBytes    Int?
+  uploadedById String   @db.Uuid
+  createdAt    DateTime @default(now())
+  expiresAt    DateTime?
+
+  @@index([taskId, createdAt])
+  @@index([expiresAt])
+}
+
+model TaskApproval {
+  id              String         @id @default(uuid()) @db.Uuid
+  taskId          String         @db.Uuid
+  task            Task           @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  type            ApprovalType
+  status          ApprovalStatus @default(PENDING)
+  requestedById   String         @db.Uuid
+  requestedBy     User           @relation("ApprovalRequester", fields: [requestedById], references: [id])
+  requestedFromId String?        @db.Uuid
+  requestedFrom   User?          @relation("ApprovalAssignee", fields: [requestedFromId], references: [id])
+  comment         String?
+  requestedAt     DateTime       @default(now())
+  respondedAt     DateTime?
+  approvedAt      DateTime?
+
+  @@index([taskId, status])
+  @@index([requestedFromId, status])
+}
+
+model TaskActivity {
+  id          String   @id @default(uuid()) @db.Uuid
+  taskId      String   @db.Uuid
+  task        Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  actorUserId String   @db.Uuid
+  actor       User     @relation(fields: [actorUserId], references: [id])
+  action      String
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  @@index([taskId, createdAt])
+}
+
+model TaskContentDetail {
+  taskId    String    @id @db.Uuid
+  task      Task      @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  platform  String?
+  format    String?
+  caption   String?
+  hashtags  String?
+  cta       String?
+  publishAt DateTime?
+}
+
+model TaskWebDetail {
+  taskId          String  @id @db.Uuid
+  task            Task    @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  pageUrl         String?
+  environment     String?
+  requestedChange String?
+  referenceUrl    String?
 }
 
 model CalendarEvent {
-  id String @id @default(uuid()) @db.Uuid
-  organizationId String @db.Uuid
-  organization Organization @relation(fields: [organizationId], references: [id])
-  ownerId String @db.Uuid
-  owner User @relation("EventOwner", fields: [ownerId], references: [id])
-  clientId String? @db.Uuid
-  client Client? @relation(fields: [clientId], references: [id])
-  projectId String? @db.Uuid
-  project Project? @relation(fields: [projectId], references: [id])
-  taskId String? @db.Uuid
-  task Task? @relation(fields: [taskId], references: [id])
-  title String
-  description String?
-  startAt DateTime
-  endAt DateTime
-  location String?
-  category String
-  recurrence String
-  reminderMinutes Int @default(15)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id              String       @id @default(uuid()) @db.Uuid
+  organizationId  String       @db.Uuid
+  organization    Organization @relation(fields: [organizationId], references: [id])
+  ownerId         String       @db.Uuid
+  owner           User         @relation("EventOwner", fields: [ownerId], references: [id])
+  clientId        String?      @db.Uuid
+  client          Client?      @relation(fields: [clientId], references: [id])
+  projectId       String?      @db.Uuid
+  project         Project?     @relation(fields: [projectId], references: [id])
+  taskId          String?      @db.Uuid
+  task            Task?        @relation(fields: [taskId], references: [id])
+  title           String
+  description     String?
+  startAt         DateTime
+  endAt           DateTime
+  location        String?
+  category        String
+  recurrence      String
+  reminderMinutes Int          @default(15)
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
   @@index([organizationId, startAt])
   @@index([ownerId, startAt])
 }
 
 model FinancialAccount {
-  id String @id @default(uuid()) @db.Uuid
-  organizationId String @db.Uuid
-  organization Organization @relation(fields: [organizationId], references: [id])
-  name String
-  institution String?
-  type FinancialAccountType @default(CHECKING)
-  openingBalance Decimal @default(0) @db.Decimal(14, 2)
-  active Boolean @default(true)
-  entries FinancialEntry[]
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id             String               @id @default(uuid()) @db.Uuid
+  organizationId String               @db.Uuid
+  organization   Organization         @relation(fields: [organizationId], references: [id])
+  name           String
+  institution    String?
+  type           FinancialAccountType @default(CHECKING)
+  openingBalance Decimal              @default(0) @db.Decimal(14, 2)
+  active         Boolean              @default(true)
+  entries        FinancialEntry[]
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
   @@index([organizationId, active])
 }
 
 model FinancialCategory {
-  id String @id @default(uuid()) @db.Uuid
-  organizationId String @db.Uuid
-  organization Organization @relation(fields: [organizationId], references: [id])
-  name String
-  type FinancialEntryType
-  color String @default("#3b82f6")
-  active Boolean @default(true)
-  entries FinancialEntry[]
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id             String             @id @default(uuid()) @db.Uuid
+  organizationId String             @db.Uuid
+  organization   Organization       @relation(fields: [organizationId], references: [id])
+  name           String
+  type           FinancialEntryType
+  color          String             @default("#3b82f6")
+  active         Boolean            @default(true)
+  entries        FinancialEntry[]
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
   @@unique([organizationId, name, type])
 }
 
 model FinancialEntry {
-  id String @id @default(uuid()) @db.Uuid
-  organizationId String @db.Uuid
-  organization Organization @relation(fields: [organizationId], references: [id])
-  type FinancialEntryType
-  description String
-  amount Decimal @db.Decimal(14, 2)
-  dueDate DateTime
-  paidAt DateTime?
-  status FinancialEntryStatus @default(OPEN)
-  categoryId String? @db.Uuid
-  category FinancialCategory? @relation(fields: [categoryId], references: [id])
-  accountId String? @db.Uuid
-  account FinancialAccount? @relation(fields: [accountId], references: [id])
-  clientId String? @db.Uuid
-  client Client? @relation(fields: [clientId], references: [id])
-  supplier String?
-  costCenter String?
+  id             String               @id @default(uuid()) @db.Uuid
+  organizationId String               @db.Uuid
+  organization   Organization         @relation(fields: [organizationId], references: [id])
+  type           FinancialEntryType
+  description    String
+  amount         Decimal              @db.Decimal(14, 2)
+  dueDate        DateTime
+  paidAt         DateTime?
+  status         FinancialEntryStatus @default(OPEN)
+  categoryId     String?              @db.Uuid
+  category       FinancialCategory?   @relation(fields: [categoryId], references: [id])
+  accountId      String?              @db.Uuid
+  account        FinancialAccount?    @relation(fields: [accountId], references: [id])
+  clientId       String?              @db.Uuid
+  client         Client?              @relation(fields: [clientId], references: [id])
+  supplier       String?
+  costCenter     String?
   documentNumber String?
-  paymentMethod String?
-  recurrence String @default("NONE")
-  notes String?
-  createdById String @db.Uuid
-  createdBy User @relation("FinancialEntryCreator", fields: [createdById], references: [id])
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  paymentMethod  String?
+  recurrence     String               @default("NONE")
+  notes          String?
+  createdById    String               @db.Uuid
+  createdBy      User                 @relation("FinancialEntryCreator", fields: [createdById], references: [id])
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
   @@index([organizationId, dueDate, status])
   @@index([clientId])
   @@index([accountId])
@@ -520,153 +764,238 @@ model FinancialEntry {
 }
 
 model FinancialSupplier {
-  id String @id @default(uuid()) @db.Uuid
-  organizationId String @db.Uuid
-  organization Organization @relation(fields: [organizationId], references: [id])
-  name String
-  document String?
-  email String?
-  phone String?
-  notes String?
-  active Boolean @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  name           String
+  document       String?
+  email          String?
+  phone          String?
+  notes          String?
+  active         Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
   @@index([organizationId, active])
   @@index([organizationId, document])
 }
 
 model FinancialCostCenter {
-  id String @id @default(uuid()) @db.Uuid
-  organizationId String @db.Uuid
-  organization Organization @relation(fields: [organizationId], references: [id])
-  name String
-  code String?
-  description String?
-  active Boolean @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  name           String
+  code           String?
+  description    String?
+  active         Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
   @@unique([organizationId, name])
 }
 
 model FinancialAudit {
-  id String @id @default(uuid()) @db.Uuid
-  organizationId String @db.Uuid
-  organization Organization @relation(fields: [organizationId], references: [id])
-  entryId String?
-  action String
-  reason String?
-  actorUserId String? @db.Uuid
-  actorName String
-  metadata Json?
-  createdAt DateTime @default(now())
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  entryId        String?
+  action         String
+  reason         String?
+  actorUserId    String?      @db.Uuid
+  actorName      String
+  metadata       Json?
+  createdAt      DateTime     @default(now())
+
   @@index([organizationId, createdAt])
   @@index([entryId])
 }
 
 model AuditLog {
-  id String @id @default(uuid()) @db.Uuid
-  organizationId String @db.Uuid
-  actorUserId String? @db.Uuid
-  action String
-  targetType String
-  targetId String?
-  metadata Json?
-  createdAt DateTime @default(now())
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  actorUserId    String?  @db.Uuid
+  action         String
+  targetType     String
+  targetId       String?
+  metadata       Json?
+  createdAt      DateTime @default(now())
+
   @@index([organizationId, createdAt])
 }
 
 model IntegrationConnection {
-  id String @id @default(uuid()) @db.Uuid
-  organizationId String @db.Uuid
-  platform AdIntegrationPlatform
-  name String
-  externalId String?
-  status IntegrationStatus @default(DISCONNECTED)
-  lastSyncAt DateTime?
-  nextSyncAt DateTime?
-  lastSuccessAt DateTime?
-  lastErrorCode String?
-  createdBy String @db.Uuid
-  updatedBy String @db.Uuid
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  credentials IntegrationCredential?
-  accounts ExternalAdAccount[]
-  schedules IntegrationSyncSchedule[]
-  syncRuns IntegrationSyncRun[]
+  id             String                    @id @default(uuid()) @db.Uuid
+  organizationId String                    @db.Uuid
+  organization   Organization              @relation(fields: [organizationId], references: [id])
+  platform       AdIntegrationPlatform
+  name           String
+  externalId     String?
+  status         IntegrationStatus         @default(DISCONNECTED)
+  lastSyncAt     DateTime?
+  nextSyncAt     DateTime?
+  lastSuccessAt  DateTime?
+  lastErrorCode  String?
+  createdBy      String                    @db.Uuid
+  updatedBy      String                    @db.Uuid
+  createdAt      DateTime                  @default(now())
+  updatedAt      DateTime                  @updatedAt
+  credentials    IntegrationCredential?
+  accounts       ExternalAdAccount[]
+  schedules      IntegrationSyncSchedule[]
+  syncRuns       IntegrationSyncRun[]
+
   @@index([organizationId, platform, status])
 }
 
 model IntegrationCredential {
-  id String @id @default(uuid()) @db.Uuid
-  connectionId String @unique @db.Uuid
-  connection IntegrationConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
-  encryptedAccessToken Bytes
+  id                    String                @id @default(uuid()) @db.Uuid
+  connectionId          String                @unique @db.Uuid
+  connection            IntegrationConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  encryptedAccessToken  Bytes
   encryptedRefreshToken Bytes?
-  tokenExpiresAt DateTime?
-  encryptionKeyVersion String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  tokenExpiresAt        DateTime?
+  encryptionKeyVersion  String
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
 }
 
 model ExternalAdAccount {
-  id String @id @default(uuid()) @db.Uuid
-  organizationId String @db.Uuid
-  connectionId String @db.Uuid
-  connection IntegrationConnection @relation(fields: [connectionId], references: [id])
-  externalId String
-  name String
-  currency String
-  timezone String
-  status String
-  rawPayload Json?
-  campaigns ExternalCampaign[]
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id             String                @id @default(uuid()) @db.Uuid
+  organizationId String                @db.Uuid
+  connectionId   String                @db.Uuid
+  connection     IntegrationConnection @relation(fields: [connectionId], references: [id])
+  externalId     String
+  name           String
+  businessPortfolioId String?
+  businessPortfolioName String?
+  pageName        String?
+  profilePictureUrl String?
+  currency       String
+  timezone       String
+  status         String
+  rawPayload     Json?
+  clientId       String?               @db.Uuid
+  client         Client?               @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  responsibleId  String?               @db.Uuid
+  responsible    User?                 @relation("MediaAccountResponsible", fields: [responsibleId], references: [id], onDelete: SetNull)
+  identitySource String?
+  lastSyncedAt   DateTime?
+  campaigns      ExternalCampaign[]
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
   @@unique([connectionId, externalId])
   @@index([organizationId, connectionId])
+  @@index([organizationId, businessPortfolioId])
+  @@index([organizationId, clientId])
+  @@index([organizationId, responsibleId])
 }
 
 model ExternalCampaign {
-  id String @id @default(uuid()) @db.Uuid
-  organizationId String @db.Uuid
-  accountId String @db.Uuid
-  account ExternalAdAccount @relation(fields: [accountId], references: [id])
-  externalId String
-  name String
-  status String
-  objective String?
-  syncEnabled Boolean @default(true)
-  rawPayload Json?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id             String            @id @default(uuid()) @db.Uuid
+  organizationId String            @db.Uuid
+  accountId      String            @db.Uuid
+  account        ExternalAdAccount @relation(fields: [accountId], references: [id])
+  externalId     String
+  name           String
+  status         String
+  objective      String?
+  currency       String                @default("BRL")
+  dailyBudget    Decimal               @default(0) @db.Decimal(18, 2)
+  lifetimeBudget Decimal               @default(0) @db.Decimal(18, 2)
+  spend          Decimal               @default(0) @db.Decimal(18, 2)
+  reach          Int                   @default(0)
+  impressions    Int                   @default(0)
+  clicks         Int                   @default(0)
+  leads          Int                   @default(0)
+  conversations  Int                   @default(0)
+  cpl            Decimal?              @db.Decimal(18, 2)
+  frequency      Decimal               @default(0) @db.Decimal(12, 4)
+  lastSyncedAt   DateTime?
+  syncEnabled    Boolean           @default(true)
+  rawPayload     Json?
+  snapshots      CampaignMetricSnapshot[]
+  alerts         MediaAlert[]
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
   @@unique([accountId, externalId])
   @@index([organizationId, accountId, status])
 }
 
+model CampaignMetricSnapshot {
+  id            String           @id @default(uuid()) @db.Uuid
+  organizationId String          @db.Uuid
+  campaignId    String           @db.Uuid
+  campaign      ExternalCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  since         DateTime         @db.Date
+  until         DateTime         @db.Date
+  spend         Decimal          @default(0) @db.Decimal(18, 2)
+  reach         Int              @default(0)
+  impressions   Int              @default(0)
+  clicks        Int              @default(0)
+  leads         Int              @default(0)
+  conversations Int              @default(0)
+  cpl           Decimal?         @db.Decimal(18, 2)
+  frequency     Decimal          @default(0) @db.Decimal(12, 4)
+  source        String           @default("META_API")
+  capturedAt    DateTime         @default(now())
+
+  @@unique([campaignId, since, until])
+  @@index([organizationId, until])
+}
+
+model MediaAlert {
+  id             String            @id @default(uuid()) @db.Uuid
+  organizationId String            @db.Uuid
+  organization   Organization      @relation(fields: [organizationId], references: [id])
+  externalKey    String
+  type           String
+  severity       String
+  title          String
+  message        String
+  accountId      String?           @db.Uuid
+  campaignId     String?           @db.Uuid
+  campaign       ExternalCampaign? @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  clientId       String?           @db.Uuid
+  client         Client?           @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  responsibleId  String?           @db.Uuid
+  responsible    User?             @relation("MediaAlertResponsible", fields: [responsibleId], references: [id], onDelete: SetNull)
+  active         Boolean           @default(true)
+  firstSeenAt    DateTime          @default(now())
+  lastSeenAt     DateTime          @default(now())
+  resolvedAt     DateTime?
+  metadata       Json?
+
+  @@unique([organizationId, externalKey])
+  @@index([organizationId, responsibleId, active])
+  @@index([organizationId, severity, active])
+}
+
 model IntegrationSyncSchedule {
-  id String @id @default(uuid()) @db.Uuid
-  connectionId String @db.Uuid
-  connection IntegrationConnection @relation(fields: [connectionId], references: [id])
-  frequency String
-  enabled Boolean @default(true)
-  nextRunAt DateTime?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id           String                @id @default(uuid()) @db.Uuid
+  connectionId String                @db.Uuid
+  connection   IntegrationConnection @relation(fields: [connectionId], references: [id])
+  frequency    String
+  enabled      Boolean               @default(true)
+  nextRunAt    DateTime?
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
 }
 
 model IntegrationSyncRun {
-  id String @id @default(uuid()) @db.Uuid
-  connectionId String @db.Uuid
-  connection IntegrationConnection @relation(fields: [connectionId], references: [id])
-  startedAt DateTime
-  finishedAt DateTime?
-  accountsProcessed Int @default(0)
-  recordsReceived Int @default(0)
-  recordsUpdated Int @default(0)
-  result String
-  friendlyMessage String?
+  id                 String                @id @default(uuid()) @db.Uuid
+  connectionId       String                @db.Uuid
+  connection         IntegrationConnection @relation(fields: [connectionId], references: [id])
+  startedAt          DateTime
+  finishedAt         DateTime?
+  accountsProcessed  Int                   @default(0)
+  recordsReceived    Int                   @default(0)
+  recordsUpdated     Int                   @default(0)
+  result             String
+  friendlyMessage    String?
   technicalReference String?
-  createdAt DateTime @default(now())
+  createdAt          DateTime              @default(now())
+
   @@index([connectionId, startedAt])
 }

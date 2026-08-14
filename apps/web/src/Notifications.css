@@ -1,0 +1,17 @@
+.notification-popover>header>span{display:flex;align-items:center;gap:6px}
+.notification-read-all{width:auto!important;padding:0 7px!important;color:var(--accent)!important;font-size:6.5px!important;font-weight:700;white-space:nowrap}
+.notification-list{max-height:430px;overflow:auto}
+.notification-list>button{position:relative;width:100%;display:grid;grid-template-columns:auto 1fr;gap:10px;padding:12px 15px;border:0;border-bottom:1px solid var(--divider);background:var(--surface);color:var(--text);text-align:left}
+.notification-list>button:hover{background:var(--surface-soft)}
+.notification-list>button.unread{background:color-mix(in srgb,var(--accent) 3%,var(--surface))}
+.notification-list>button>i{width:29px;height:29px;display:grid;place-items:center;border-radius:8px;background:#eef4fa;color:var(--accent);font-style:normal}
+.notification-list>button>i svg{width:14px}
+.notification-list>button.critical>i{background:#ffeded;color:var(--red)}
+.notification-list>button.warning>i{background:#fff5df;color:#a36b05}
+.notification-list>button>span{display:flex;min-width:0;flex-direction:column}
+.notification-list small{overflow:hidden;color:var(--subtle);font-size:6.5px;text-overflow:ellipsis;white-space:nowrap}
+.notification-list b{margin-top:2px;color:var(--heading);font-size:8.5px}
+.notification-list p{margin:3px 0;color:var(--subtle);font-size:7px;line-height:1.45}
+.notification-list em{color:var(--subtle);font-size:6px;font-style:normal}
+.notification-list>button>u{position:absolute;right:11px;top:13px;width:6px;height:6px;border-radius:50%;background:var(--accent);text-decoration:none}
+.notification-list>button.read{opacity:.66}

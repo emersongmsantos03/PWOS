@@ -11,10 +11,11 @@ const actionNames: Record<string,string> = {
   view:"Visualizar", create:"Criar", edit:"Editar", delete:"Excluir", assign:"Atribuir responsável",
   sync:"Sincronizar", share:"Compartilhar", download:"Baixar", block:"Bloquear usuário",
   authorize:"Autorizar", manage_accounts:"Gerenciar contas", manage_campaigns:"Gerenciar campanhas",
-  manage_client_access:"Gerenciar portal do cliente", view_logs:"Ver logs", revoke:"Revogar acesso"
+  manage_client_access:"Gerenciar portal do cliente", view_logs:"Ver logs", revoke:"Revogar acesso",
+  review:"Revisar e aprovar demandas", view_all:"Visualizar todas", edit_all:"Editar todas"
 };
 
-export function AccessManagement() {
+export function AccessManagement({permissions,profile}:{permissions:string[];profile:string}) {
   const [tab,setTab]=useState<"users"|"roles">("users");
   const [users,setUsers]=useState<User[]>([]);
   const [roles,setRoles]=useState<Role[]>([]);
@@ -25,10 +26,11 @@ export function AccessManagement() {
   const [editingUser,setEditingUser]=useState<User|null>(null);
   const [editingRole,setEditingRole]=useState<Role|null>(null);
   const [error,setError]=useState("");
-  const load=async()=>{const [usersResponse,rolesResponse,catalogResponse,departmentsResponse]=await Promise.all([fetch("/api/users"),fetch("/api/roles"),fetch("/api/permissions/catalog"),fetch("/api/departments")]);setUsers((await usersResponse.json()).users||[]);setRoles((await rolesResponse.json()).roles||[]);setCatalog((await catalogResponse.json()).modules||[]);setDepartments((await departmentsResponse.json()).departments||[])};
+  const can=(permission:string)=>profile==="MASTER"||permissions.includes(permission);
+  const load=async()=>{const [usersResponse,rolesResponse,catalogResponse,departmentsResponse]=await Promise.all([fetch("/api/users"),fetch("/api/roles"),fetch("/api/permissions/catalog"),fetch("/api/departments")]);setUsers(usersResponse.ok?(await usersResponse.json()).users||[]:[]);setRoles(rolesResponse.ok?(await rolesResponse.json()).roles||[]:[]);setCatalog(catalogResponse.ok?(await catalogResponse.json()).modules||[]:[]);setDepartments(departmentsResponse.ok?(await departmentsResponse.json()).departments||[]:[])};
   useEffect(()=>{void load()},[]);
   return <div className="page access-page">
-    <div className="page-head"><div><span className="eyebrow">ADMINISTRAÇÃO</span><h1>Equipe e acessos</h1><p>Defina cargos padrão e personalize o que cada pessoa pode fazer.</p></div><button className="primary" onClick={()=>tab==="users"?setNewUser(true):setNewRole(true)}><Plus/> {tab==="users"?"Criar usuário":"Criar cargo"}</button></div>
+    <div className="page-head"><div><span className="eyebrow">ADMINISTRAÇÃO</span><h1>Equipe e acessos</h1><p>Defina cargos padrão e personalize o que cada pessoa pode fazer.</p></div>{can(tab==="users"?"users.create":"roles.create")&&<button className="primary" onClick={()=>tab==="users"?setNewUser(true):setNewRole(true)}><Plus/> {tab==="users"?"Criar usuário":"Criar cargo"}</button>}</div>
     <div className="access-tabs"><button className={tab==="users"?"active":""} onClick={()=>setTab("users")}><Users/> Usuários <span>{users.length}</span></button><button className={tab==="roles"?"active":""} onClick={()=>setTab("roles")}><ShieldCheck/> Cargos e permissões <span>{roles.length}</span></button></div>
     {tab==="users"?<UsersPanel users={users} roles={roles} onEdit={setEditingUser}/>:<RolesPanel roles={roles} catalog={catalog} onEdit={setEditingRole} onCreate={()=>setNewRole(true)}/>}
     {newUser&&<NewUserModal roles={roles} departments={departments} error={error} onClose={()=>{setNewUser(false);setError("")}} onSave={async event=>{event.preventDefault();setError("");const formInput=Object.fromEntries(new FormData(event.currentTarget));const input={...formInput,departmentManager:formInput.departmentManager==="on"};const response=await fetch("/api/users",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(input)});const data=await response.json();if(!response.ok)return setError(data.message);setNewUser(false);void load()}}/>}
