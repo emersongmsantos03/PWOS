@@ -4060,13 +4060,17 @@ function localApi(
             pipelines: [...pipelines.values()].filter((item) =>
               canAccessPipeline(currentUser, item),
             ),
-            canManage: hasPermission(currentUser, "crm.manage_pipelines"),
+            canManage:
+              hasPermission(currentUser, "crm.create") ||
+              hasPermission(currentUser, "crm.edit") ||
+              hasPermission(currentUser, "crm.delete") ||
+              hasPermission(currentUser, "crm.manage_pipelines"),
           });
         }
         if (url === "/crm/pipelines" && request.method === "POST") {
-          if (!hasPermission(currentUser, "crm.manage_pipelines"))
+          if (!hasPermission(currentUser, "crm.create"))
             return json(response, 403, {
-              message: "Você não possui permissão para administrar pipelines.",
+              message: "Você não possui permissão para criar CRM.",
             });
           const input = await body(request),
             name = String(input.name || "").trim(),
@@ -4121,9 +4125,9 @@ function localApi(
         }
         const pipelineMatch = url.match(/^\/crm\/pipelines\/([^/]+)$/);
         if (pipelineMatch && request.method === "PATCH") {
-          if (!hasPermission(currentUser, "crm.manage_pipelines"))
+          if (!hasPermission(currentUser, "crm.edit"))
             return json(response, 403, {
-              message: "Você não possui permissão para administrar pipelines.",
+              message: "Você não possui permissão para editar CRM.",
             });
           const pipeline = pipelines.get(pipelineMatch[1]);
           if (!pipeline)
@@ -4154,9 +4158,9 @@ function localApi(
           return json(response, 200, { pipeline });
         }
         if (pipelineMatch && request.method === "DELETE") {
-          if (!hasPermission(currentUser, "crm.manage_pipelines"))
+          if (!hasPermission(currentUser, "crm.delete"))
             return json(response, 403, {
-              message: "Você não possui permissão para administrar pipelines.",
+              message: "Você não possui permissão para excluir CRM.",
             });
           const pipeline = pipelines.get(pipelineMatch[1]);
           if (!pipeline)
