@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { AlertTriangle, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, BriefcaseBusiness, Building2, CalendarClock, Check, CheckCircle2, CircleDollarSign, Clock3, Contact, Flame, GripVertical, History, KanbanSquare, ListTodo, Mail, MessageSquareText, Pencil, Phone, Plus, Search, Settings2, ShieldAlert, Thermometer, Trash2, UserRound, Users, X } from "lucide-react";
 import { isValidDocument, maskDocument, maskPhone } from "./inputMasks";
+import "./OpportunityWorkspaceRefinements.css";
 
 type Stage={id:string;name:string;color:string;probability:number;requiredFields?:string[];terminal?:"WON"|"LOST"};
 type Pipeline={id:string;name:string;departmentIds:string[];stages:Stage[]};
