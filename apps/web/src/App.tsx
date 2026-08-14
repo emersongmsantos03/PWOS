@@ -549,8 +549,8 @@ function Shell({
           <Route path="/" element={can("dashboard.view")?<DashboardBoards user={user}/>:<Navigate to={firstAccessiblePath} replace/>} />
           <Route path="/clientes" element={<ClientsManagement permissions={user.permissions || []} profile={user.profile} />} />
           <Route path="/crm" element={<CrmManagement permissions={user.permissions || []} profile={user.profile} />} />
-          <Route path="/tarefas" element={can("creative_ops.view")?<TasksManagement />:<Navigate to={firstAccessiblePath} replace/>} />
-          <Route path="/agenda" element={<CalendarManagement />} />
+          <Route path="/tarefas" element={can("creative_ops.view")?<TasksManagement permissions={user.permissions || []} profile={user.profile}/>:<Navigate to={firstAccessiblePath} replace/>} />
+          <Route path="/agenda" element={can("calendar.view")?<CalendarManagement />:<Navigate to={firstAccessiblePath} replace/>} />
           <Route path="/financeiro" element={<FinancialManagement />} />
           <Route path="/midia" element={<MediaDashboard />} />
           <Route path="/midia/:id" element={<MediaDashboard />} />
