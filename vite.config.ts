@@ -3073,10 +3073,10 @@ function localApi(
           if (!task || !canSeeTask(task))
             return json(response, 404, { message: "Tarefa não encontrada." });
           if (
-            !hasPermission(currentUser, "tasks.edit") ||
-            (task.responsibleId !== currentUser.id &&
-              task.createdBy !== currentUser.id &&
-              !hasPermission(currentUser, "tasks.edit_team"))
+            task.createdBy !== currentUser.id &&
+            (!hasPermission(currentUser, "tasks.edit") ||
+              (task.responsibleId !== currentUser.id &&
+                !hasPermission(currentUser, "tasks.edit_team")))
           )
             return json(response, 403, {
               message: "Você só pode editar suas próprias tarefas.",

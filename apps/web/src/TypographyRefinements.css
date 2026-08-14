@@ -33,6 +33,8 @@ td small{font-size:9px!important}
 .sidebar a,.sidebar-bottom button{font-size:13px!important}
 .user-card b{font-size:11px!important}.user-card small{font-size:9px!important}
 .topbar .search input,.creative-toolbar .search input{font-size:12px!important}
+.creative-tabs .delegated-tab>span{display:grid;min-width:18px;height:18px;padding:0 5px;place-items:center;border-radius:999px;background:#e8f3ff;color:#147dde;font-size:9px;font-weight:750}
+.creative-tabs .delegated-tab.active>span{background:#147dde;color:#fff}
 
 /* Repeated interface primitives. */
 :is(.status,.tag,[class*="badge"],[class*="pill"]){font-size:9px!important;line-height:1.25}
