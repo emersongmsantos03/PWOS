@@ -1606,8 +1606,8 @@ function localApi(
             "welcome",
           ];
           const strong = currentUser.profile === "CLIENT"
-            ? password.length >= 6 && !/\s/.test(password)
-            : password.length >= 12 && /[a-z]/.test(password) && /[A-Z]/.test(password) && /\d/.test(password) && /[^A-Za-z0-9]/.test(password) && !/\s/.test(password);
+            ? password.length >= 8 && !/\s/.test(password)
+            : password.length >= 8 && /[a-z]/.test(password) && /[A-Z]/.test(password) && /\d/.test(password) && /[^A-Za-z0-9]/.test(password) && !/\s/.test(password);
           if (password !== confirmation)
             return json(response, 400, {
               message: "A confirmação não corresponde à nova senha.",
@@ -2297,11 +2297,20 @@ function localApi(
             )
           )
             return json(response, 409, { message: "Este setor já existe." });
+          const manager = input.managerUserId
+            ? users.get(String(input.managerUserId))
+            : undefined;
+          if (input.managerUserId && (!manager || manager.profile === "CLIENT"))
+            return json(response, 400, {
+              message: "Selecione um responsável válido.",
+            });
           const department: Department = {
             id: randomUUID(),
             name,
             description: String(input.description || "").trim(),
             active: true,
+            managerUserId: manager?.id,
+            managerName: manager?.name,
             createdAt: new Date().toISOString(),
           };
           departments.set(department.id, department);
@@ -2316,11 +2325,26 @@ function localApi(
           if (!department)
             return json(response, 404, { message: "Setor não encontrado." });
           const input = await body(request);
+          const managerSpecified = Object.prototype.hasOwnProperty.call(
+            input,
+            "managerUserId",
+          );
+          const manager = input.managerUserId
+            ? users.get(String(input.managerUserId))
+            : undefined;
+          if (input.managerUserId && (!manager || manager.profile === "CLIENT"))
+            return json(response, 400, {
+              message: "Selecione um responsável válido.",
+            });
           department.name = String(input.name || department.name).trim();
           department.description = String(
             input.description ?? department.description,
           ).trim();
           department.active = input.active !== false;
+          if (managerSpecified) {
+            department.managerUserId = manager?.id;
+            department.managerName = manager?.name;
+          }
           departments.set(department.id, department);
           persistDepartments();
           return json(response, 200, { department });
@@ -6334,13 +6358,18 @@ function localApi(
         if (url === "/roles" && request.method === "GET") {
           if (!hasPermission(currentUser, "roles.view"))
             return json(response, 403, { message: "Permissão insuficiente." });
+          const canSeeDeveloperRole =
+            currentUser.roleId === developerRole.id ||
+            currentUser.roleId === ceoRole.id;
           return json(response, 200, {
-            roles: [...roles.values()].map((role) => ({
+            roles: [...roles.values()]
+              .filter((role) => role.id !== developerRole.id || canSeeDeveloperRole)
+              .map((role) => ({
               ...role,
               userCount: [...users.values()].filter(
                 (user) => user.roleId === role.id,
               ).length,
-            })),
+              })),
           });
         }
         if (url === "/roles" && request.method === "POST") {
@@ -6557,12 +6586,32 @@ function localApi(
         }
         const userMatch = url.match(/^\/users\/([^/]+)$/);
         if (userMatch && request.method === "DELETE") {
-          if (!hasPermission(currentUser, "users.edit"))
-            return json(response, 403, { message: "Permissão insuficiente." });
+          const canDeleteUsers =
+            currentUser.roleId === developerRole.id ||
+            currentUser.roleId === ceoRole.id;
+          if (!canDeleteUsers)
+            return json(response, 403, {
+              message: "Somente CEO e Desenvolvedor podem excluir usuários.",
+            });
           const user = users.get(userMatch[1]);
           if (!user || user.profile === "MASTER")
             return json(response, 403, {
               message: "A conta do dono não pode ser excluída.",
+            });
+          if (user.id === currentUser.id)
+            return json(response, 400, {
+              message: "Você não pode excluir a própria conta.",
+            });
+          const input = await body(request);
+          if (
+            !input.password ||
+            !safeEqual(
+              currentUser.passwordHash,
+              hash(String(input.password), currentUser.salt),
+            )
+          )
+            return json(response, 401, {
+              message: "Senha incorreta. A exclusão não foi realizada.",
             });
           if (user.departmentId) {
             const department = departments.get(user.departmentId);

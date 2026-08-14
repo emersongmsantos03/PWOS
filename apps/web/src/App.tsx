@@ -5,6 +5,7 @@ import {
   Routes,
   Route,
   NavLink,
+  Navigate,
 } from "react-router-dom";
 import {
   Activity,
@@ -118,6 +119,7 @@ type SessionUser = {
   avatarDataUrl?: string;
   profile: string;
   role: string;
+  roleId?: string;
   mustChangePassword: boolean;
   clientId?: string;
   permissions: string[];
@@ -271,6 +273,7 @@ function Shell({
     };
     return !permissionByPath[item.to] || can(permissionByPath[item.to]);
   });
+  const firstAccessiblePath=visibleNav[0]?.to||"/ajuda";
 
   return (
     <div className="app-shell">
@@ -542,8 +545,8 @@ function Shell({
           </div>
         </header>
         <Routes>
-          <Route path="/" element={<DashboardBoards user={user} />} />
-          <Route path="/clientes" element={<ClientsManagement />} />
+          <Route path="/" element={can("dashboard.view")?<DashboardBoards user={user}/>:<Navigate to={firstAccessiblePath} replace/>} />
+          <Route path="/clientes" element={<ClientsManagement permissions={user.permissions || []} profile={user.profile} />} />
           <Route path="/crm" element={<CrmManagement />} />
           <Route path="/tarefas" element={<TasksManagement />} />
           <Route path="/agenda" element={<CalendarManagement />} />
@@ -552,7 +555,7 @@ function Shell({
           <Route path="/midia/:id" element={<MediaDashboard />} />
           <Route path="/relatorios" element={<OperationalReports />} />
           <Route path="/chamados" element={<TicketsManagement user={user} />} />
-          <Route path="/equipe" element={<AccessManagement permissions={user.permissions||[]} profile={user.profile} />} />
+          <Route path="/equipe" element={<AccessManagement permissions={user.permissions||[]} profile={user.profile} role={user.role} roleId={user.roleId} />} />
           <Route path="/configuracoes/integracoes" element={<Connections />} />
           <Route
             path="/configuracoes"
@@ -566,7 +569,7 @@ function Shell({
             }
           />
           <Route path="/ajuda" element={<HelpCenter />} />
-          <Route path="*" element={<DashboardBoards user={user} />} />
+          <Route path="*" element={can("dashboard.view")?<DashboardBoards user={user}/>:<Navigate to={firstAccessiblePath} replace/>} />
         </Routes>
         <MobileNav />
         {profilePanel && (
@@ -1294,7 +1297,7 @@ function ProfilePanel({
     confirmation: false,
   });
   const passwordRules = [
-    { label: "12 ou mais caracteres", valid: newPassword.length >= 12 },
+    { label: "8 ou mais caracteres", valid: newPassword.length >= 8 },
     {
       label: "Letra maiúscula e minúscula",
       valid: /[A-Z]/.test(newPassword) && /[a-z]/.test(newPassword),
@@ -1588,7 +1591,7 @@ function ProfilePanel({
                           setMessage("");
                         }}
                         type={passwordVisibility.new ? "text" : "password"}
-                        minLength={12}
+                        minLength={8}
                         required
                         autoComplete="new-password"
                       />
@@ -1659,7 +1662,7 @@ function ProfilePanel({
                         type={
                           passwordVisibility.confirmation ? "text" : "password"
                         }
-                        minLength={12}
+                        minLength={8}
                         required
                         autoComplete="new-password"
                       />
@@ -1960,7 +1963,7 @@ function PasswordSetup({
     .split(/\s+/)
     .filter((part) => part.length >= 4);
   const internalRules = [
-    { label: "Pelo menos 12 caracteres", valid: password.length >= 12 },
+    { label: "Pelo menos 8 caracteres", valid: password.length >= 8 },
     {
       label: "Uma letra maiúscula e uma minúscula",
       valid: /[A-Z]/.test(password) && /[a-z]/.test(password),
@@ -1978,7 +1981,7 @@ function PasswordSetup({
   ];
   const rules = clientPortal
     ? [
-        { label: "Pelo menos 6 caracteres", valid: password.length >= 6 },
+        { label: "Pelo menos 8 caracteres", valid: password.length >= 8 },
         { label: "Sem espaços", valid: password.length > 0 && !/\s/.test(password) },
       ]
     : internalRules;
@@ -1999,17 +2002,19 @@ function PasswordSetup({
     setLoading(false);
   };
   return (
-    <main className="password-setup-page">
-      <section className="password-setup-card">
-        <div className="password-security-icon">
-          <ShieldCheck />
+    <div className="password-setup-page" role="presentation">
+      <section className="password-setup-card" role="dialog" aria-modal="true" aria-labelledby="first-access-title">
+        <div className="password-setup-header">
+          <div className="password-security-icon">
+            <ShieldCheck />
+          </div>
+          <div>
+            <span className="eyebrow">PRIMEIRO ACESSO</span>
+            <h1 id="first-access-title">Proteja sua conta</h1>
+            <p>Crie uma senha definitiva para continuar {clientPortal?"no Portal do Cliente":"no PW OS"}.</p>
+          </div>
         </div>
-        <span className="eyebrow">PRIMEIRO ACESSO</span>
-        <h1>Crie sua senha definitiva</h1>
-        <p>
-          Olá, {user.name.split(" ")[0]}. Por segurança, substitua a senha
-          temporária antes de acessar {clientPortal ? "o Portal do Cliente" : "o PW OS"}.
-        </p>
+        <div className="password-welcome"><b>Olá, {user.name.split(" ")[0]}!</b><span>Substitua sua senha temporária antes de acessar {clientPortal ? "o Portal do Cliente" : "o sistema"}.</span></div>
         <form onSubmit={submit}>
           <label>
             Nova senha
@@ -2018,6 +2023,7 @@ function PasswordSetup({
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
                 type={show ? "text" : "password"}
+                minLength={8}
                 autoComplete="new-password"
                 autoFocus
               />
@@ -2096,7 +2102,7 @@ function PasswordSetup({
           Sair e usar outra conta
         </button>
       </section>
-    </main>
+    </div>
   );
 }
 
@@ -2130,7 +2136,12 @@ export function App() {
     );
   if (!user) return <Login onLogin={setUser} clientPortal={clientPortal} />;
   if (user.mustChangePassword)
-    return <PasswordSetup user={user} onComplete={setUser} onLogout={logout} clientPortal={clientPortal} />;
+    return <>
+      <div className="password-locked-content" inert aria-hidden="true">
+        {clientPortal&&user.profile==="CLIENT"?<ClientPortal user={user} onLogout={logout}/>:<Shell user={user} onLogout={logout} onUserUpdate={setUser}/>}
+      </div>
+      <PasswordSetup user={user} onComplete={setUser} onLogout={logout} clientPortal={clientPortal}/>
+    </>;
   if (clientPortal && user.profile === "CLIENT") return <ClientPortal user={user} onLogout={logout} />;
   return <Shell user={user} onLogout={logout} onUserUpdate={setUser} />;
 }

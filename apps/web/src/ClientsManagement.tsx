@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { isValidDocument, maskDocument, maskPhone } from "./inputMasks";
 import "./ClientConnections.css";
+import "./ClientRefinements.css";
 
 type ClientStatus = "ACTIVE" | "ATTENTION" | "RISK" | "INACTIVE";
 type Client = {
@@ -112,7 +113,12 @@ function ClientStatusBadge({ status }: { status: ClientStatus }) {
   );
 }
 
-export function ClientsManagement() {
+export function ClientsManagement({ permissions = [], profile = "" }: { permissions?: string[]; profile?: string }) {
+  const hasPermission = (permission: string) =>
+    profile === "MASTER" || permissions.includes(permission);
+  const canCreate = hasPermission("clients.create");
+  const canEdit = hasPermission("clients.edit");
+  const canDelete = hasPermission("clients.delete");
   const [clients, setClients] = useState<Client[]>([]);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState<"ALL" | ClientStatus>("ALL");
@@ -188,7 +194,7 @@ export function ClientsManagement() {
           <h1>Clientes</h1>
           <p>Cadastre, organize e acompanhe toda a carteira da PW Media.</p>
         </div>
-        <button
+        {canCreate && <button
           className="primary"
           onClick={() => {
             setCreating(true);
@@ -196,7 +202,7 @@ export function ClientsManagement() {
           }}
         >
           <Plus /> Novo cliente
-        </button>
+        </button>}
       </div>
       <section className="client-summary-cards">
         <article>
@@ -280,7 +286,7 @@ export function ClientsManagement() {
                 ? "Tente ajustar a busca ou o filtro de status."
                 : "Cadastre o primeiro cliente para começar a organizar contas, campanhas e contatos."}
             </p>
-            {!clients.length && (
+            {!clients.length && canCreate && (
               <button className="primary" onClick={() => setCreating(true)}>
                 <Plus /> Cadastrar primeiro cliente
               </button>
@@ -326,7 +332,7 @@ export function ClientsManagement() {
           </div>
         )}
       </section>
-      {(creating || editing) && (
+      {((creating && canCreate) || (editing && canEdit)) && (
         <ClientForm
           client={editing}
           error={error}
@@ -341,6 +347,8 @@ export function ClientsManagement() {
       {viewing && (
         <ClientDetails
           client={viewing}
+          canEdit={canEdit}
+          canDelete={canDelete}
           onClose={() => setViewing(null)}
           onEdit={() => {
             setEditing(viewing);
@@ -538,11 +546,15 @@ function ClientForm({
 
 function ClientDetails({
   client,
+  canEdit,
+  canDelete,
   onClose,
   onEdit,
   onDelete,
 }: {
   client: Client;
+  canEdit: boolean;
+  canDelete: boolean;
   onClose: () => void;
   onEdit: () => void;
   onDelete: () => void;
@@ -649,14 +661,14 @@ function ClientDetails({
             <p>{client.legalName || "Cliente PW Media"}</p>
           </div>
         </header>
-        <div className="client-detail-actions">
-          <button className="primary" onClick={onEdit}>
+        {canEdit || canDelete ? <div className="client-detail-actions">
+          {canEdit && <button className="primary" onClick={onEdit}>
             <Edit3 /> Editar cliente
-          </button>
-          <button className="secondary" onClick={onDelete}>
+          </button>}
+          {canDelete && <button className="secondary" onClick={onDelete}>
             <Trash2 /> Excluir
-          </button>
-        </div>
+          </button>}
+        </div> : <div className="client-readonly-banner"><ShieldCheck /><span><b>Modo de visualização</b><small>Você pode consultar os dados deste cliente.</small></span></div>}
         <nav className="client-detail-tabs">
           {[
             ["OVERVIEW", "Visão geral"],
@@ -676,7 +688,7 @@ function ClientDetails({
           ))}
         </nav>
         <main>
-          {tab === "ACCESS" && <section className="client-access-section"><div className="client-access-heading"><div><h3><Users/> Portal do Cliente</h3><p>Até 2 usuários, com visualização somente das campanhas vinculadas.</p><small>Link de acesso: <b>/portal-cliente</b></small></div><button className="primary" disabled={portalUsers.length >= 2} onClick={() => setAddingAccess(true)}><Plus/> Criar acesso</button></div><div className="client-access-list">{portalUsers.map(user => <article key={user.id}><span className="client-company-avatar">{user.name.slice(0,2).toUpperCase()}</span><div><b>{user.name}</b><small>{user.email}</small></div><em>{user.mustChangePassword ? "Troca de senha pendente" : "Acesso ativo"}</em></article>)}{Array.from({ length: 2 - portalUsers.length }).map((_, index) => <article className="empty" key={index}><span><UserRound/></span><div><b>Acesso disponível</b><small>Cadastre outro usuário deste cliente</small></div></article>)}</div>{error && <div className="form-error">{error}</div>}</section>}
+          {tab === "ACCESS" && <section className="client-access-section"><div className="client-access-heading"><div><h3><Users/> Portal do Cliente</h3><p>Até 2 usuários, com visualização somente das campanhas vinculadas.</p><small>Link de acesso: <b>/portal-cliente</b></small></div>{canEdit && <button className="primary" disabled={portalUsers.length >= 2} onClick={() => setAddingAccess(true)}><Plus/> Criar acesso</button>}</div><div className="client-access-list">{portalUsers.map(user => <article key={user.id}><span className="client-company-avatar">{user.name.slice(0,2).toUpperCase()}</span><div><b>{user.name}</b><small>{user.email}</small></div><em>{user.mustChangePassword ? "Troca de senha pendente" : "Acesso ativo"}</em></article>)}{Array.from({ length: 2 - portalUsers.length }).map((_, index) => <article className="empty" key={index}><span><UserRound/></span><div><b>Acesso disponível</b><small>Cadastre outro usuário deste cliente</small></div></article>)}</div>{error && <div className="form-error">{error}</div>}</section>}
           {tab === "OVERVIEW" && (
             <>
               <section className="client-operational-summary">
@@ -817,7 +829,7 @@ function ClientDetails({
                     <h3>Contas e campanhas</h3>
                     <p>Contas vinculadas a este cadastro na Mídia Paga.</p>
                   </div>
-                  <a href="/midia">Gerenciar vínculos</a>
+                  {canEdit && <a href="/midia">Gerenciar vínculos</a>}
                 </div>
                 {connections.mediaAccounts.length ? (
                   <div className="client-media-accounts">
@@ -842,7 +854,7 @@ function ClientDetails({
                   <div className="client-module-empty">
                     <Globe2 />
                     <p>Nenhuma conta de anúncios vinculada.</p>
-                    <a href="/midia">Vincular na Mídia Paga</a>
+                    {canEdit && <a href="/midia">Vincular na Mídia Paga</a>}
                   </div>
                 )}
               </section>
@@ -857,6 +869,7 @@ function ClientDetails({
           {tab === "CONTACTS" && (
             <ClientContacts
               contacts={contacts}
+              canEdit={canEdit}
               onAdd={() => setAdding("CONTACT")}
               onRemove={removeContact}
             />
@@ -864,18 +877,20 @@ function ClientDetails({
           {tab === "SERVICES" && (
             <ClientServices
               services={services}
+              canEdit={canEdit}
               onAdd={() => setAdding("SERVICE")}
             />
           )}{" "}
           {tab === "PROJECTS" && (
             <ClientProjects
               projects={projects}
+              canEdit={canEdit}
               onAdd={() => setAdding("PROJECT")}
             />
           )}{" "}
           {tab === "HISTORY" && <ClientTimeline timeline={timeline} />}
         </main>
-        {adding && (
+        {adding && canEdit && (
           <ClientSubForm
             kind={adding}
             error={error}
@@ -891,10 +906,12 @@ function ClientDetails({
 
 function ClientContacts({
   contacts,
+  canEdit,
   onAdd,
   onRemove,
 }: {
   contacts: Contact[];
+  canEdit: boolean;
   onAdd: () => void;
   onRemove: (id: string) => void;
 }) {
@@ -905,9 +922,9 @@ function ClientContacts({
           <h3>Contatos do cliente</h3>
           <p>Decisores, financeiro e demais pontos de contato.</p>
         </div>
-        <button className="primary" onClick={onAdd}>
+        {canEdit && <button className="primary" onClick={onAdd}>
           <Plus /> Adicionar contato
-        </button>
+        </button>}
       </div>
       <div className="client-record-list">
         {contacts.map((item) => (
@@ -925,9 +942,9 @@ function ClientContacts({
                 {item.email} {item.phone && `· ${item.phone}`}
               </span>
             </div>
-            <button onClick={() => onRemove(item.id)}>
+            {canEdit && <button onClick={() => onRemove(item.id)}>
               <Trash2 />
-            </button>
+            </button>}
           </article>
         ))}
       </div>
@@ -936,9 +953,11 @@ function ClientContacts({
 }
 function ClientServices({
   services,
+  canEdit,
   onAdd,
 }: {
   services: Service[];
+  canEdit: boolean;
   onAdd: () => void;
 }) {
   return (
@@ -948,9 +967,9 @@ function ClientServices({
           <h3>Serviços e contratos</h3>
           <p>Escopo contratado, cobrança e valor negociado.</p>
         </div>
-        <button className="primary" onClick={onAdd}>
+        {canEdit && <button className="primary" onClick={onAdd}>
           <Plus /> Adicionar serviço
-        </button>
+        </button>}
       </div>
       <div className="client-record-list">
         {services.map((item) => (
@@ -984,9 +1003,11 @@ function ClientServices({
 }
 function ClientProjects({
   projects,
+  canEdit,
   onAdd,
 }: {
   projects: Project[];
+  canEdit: boolean;
   onAdd: () => void;
 }) {
   return (
@@ -996,9 +1017,9 @@ function ClientProjects({
           <h3>Projetos</h3>
           <p>Entregas, objetivos e progresso deste cliente.</p>
         </div>
-        <button className="primary" onClick={onAdd}>
+        {canEdit && <button className="primary" onClick={onAdd}>
           <Plus /> Novo projeto
-        </button>
+        </button>}
       </div>
       <div className="client-record-list">
         {projects.map((item) => (
