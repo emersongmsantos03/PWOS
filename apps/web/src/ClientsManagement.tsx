@@ -669,6 +669,12 @@ function ClientDetails({
             <Trash2 /> Excluir
           </button>}
         </div> : <div className="client-readonly-banner"><ShieldCheck /><span><b>Modo de visualização</b><small>Você pode consultar os dados deste cliente.</small></span></div>}
+        <section className="client-detail-kpis">
+          <article><span className="client-kpi-icon revenue"><CircleDollarSign /></span><div><small>Receita mensal</small><b>{monthly.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}</b><em>Contratos recorrentes</em></div></article>
+          <article><span className="client-kpi-icon projects"><FolderKanban /></span><div><small>Projetos ativos</small><b>{projects.filter((item) => ["PLANNED", "ACTIVE"].includes(item.status)).length}</b><em>Em andamento</em></div></article>
+          <article><span className="client-kpi-icon contacts"><Users /></span><div><small>Contatos</small><b>{contacts.length}</b><em>Total cadastrado</em></div></article>
+          <article><span className="client-kpi-icon demands"><History /></span><div><small>Demandas e eventos</small><b>{connections.taskCount + connections.eventCount}</b><em>Visão consolidada</em></div></article>
+        </section>
         <nav className="client-detail-tabs">
           {[
             ["OVERVIEW", "Visão geral"],
@@ -691,7 +697,7 @@ function ClientDetails({
           {tab === "ACCESS" && <section className="client-access-section"><div className="client-access-heading"><div><h3><Users/> Portal do Cliente</h3><p>Até 2 usuários, com visualização somente das campanhas vinculadas.</p><small>Link de acesso: <b>/portal-cliente</b></small></div>{canEdit && <button className="primary" disabled={portalUsers.length >= 2} onClick={() => setAddingAccess(true)}><Plus/> Criar acesso</button>}</div><div className="client-access-list">{portalUsers.map(user => <article key={user.id}><span className="client-company-avatar">{user.name.slice(0,2).toUpperCase()}</span><div><b>{user.name}</b><small>{user.email}</small></div><em>{user.mustChangePassword ? "Troca de senha pendente" : "Acesso ativo"}</em></article>)}{Array.from({ length: 2 - portalUsers.length }).map((_, index) => <article className="empty" key={index}><span><UserRound/></span><div><b>Acesso disponível</b><small>Cadastre outro usuário deste cliente</small></div></article>)}</div>{error && <div className="form-error">{error}</div>}</section>}
           {tab === "OVERVIEW" && (
             <>
-              <section className="client-operational-summary">
+              <section className="client-operational-summary client-summary-legacy">
                 <article>
                   <Users />
                   <span>
