@@ -2534,7 +2534,7 @@ function localApi(
         }
         const canSeeTask = (task: WorkTask) =>
           hasPermission(currentUser, "tasks.view_all") ||
-          (hasPermission(currentUser, "tasks.review") &&
+          (hasPermission(currentUser, "creative_ops.review") &&
             task.approvalStatus !== "NOT_REQUIRED") ||
           task.createdBy === currentUser.id ||
           task.responsibleId === currentUser.id ||
@@ -2552,7 +2552,7 @@ function localApi(
               ),
             canViewAll: hasPermission(currentUser, "tasks.view_all"),
             canEditAll: hasPermission(currentUser, "tasks.edit_all"),
-            canReview: hasPermission(currentUser, "tasks.review"),
+            canReview: hasPermission(currentUser, "creative_ops.review"),
           });
         }
         if (url === "/tasks" && request.method === "POST") {
@@ -2670,7 +2670,7 @@ function localApi(
           return json(response, 201, { task });
         }
         if (url === "/tasks/reviews" && request.method === "GET") {
-          if (!hasPermission(currentUser, "tasks.review"))
+          if (!hasPermission(currentUser, "creative_ops.review"))
             return json(response, 403, {
               message: "Você não possui permissão para revisar demandas.",
             });
@@ -2732,7 +2732,7 @@ function localApi(
           /^\/tasks\/([^/]+)\/review\/decision$/,
         );
         if (taskReviewDecisionMatch && request.method === "POST") {
-          if (!hasPermission(currentUser, "tasks.review"))
+          if (!hasPermission(currentUser, "creative_ops.review"))
             return json(response, 403, {
               message: "Você não possui permissão para revisar demandas.",
             });
@@ -5517,7 +5517,7 @@ function localApi(
             const shouldNotifyReviewer =
               isSubmission &&
               latest.actorId !== currentUser.id &&
-              hasPermission(currentUser, "tasks.review");
+              hasPermission(currentUser, "creative_ops.review");
             const shouldNotifyCreator =
               isDecision &&
               latest.actorId !== currentUser.id &&
