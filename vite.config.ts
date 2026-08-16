@@ -2572,6 +2572,8 @@ function localApi(
               .map((task) => ({
                 ...task,
                 responsibleAvatarDataUrl: users.get(task.responsibleId)?.avatarDataUrl || "",
+                creatorName: users.get(task.createdBy)?.name || "Usuário",
+                creatorAvatarDataUrl: users.get(task.createdBy)?.avatarDataUrl || "",
               })),
             canViewAll: canViewTaskTeam,
             canEditAll: hasPermission(currentUser, "tasks.edit_team"),
