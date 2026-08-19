@@ -3,6 +3,7 @@ export const permissionCatalog = [
   { module: "Clientes", key: "clients", actions: ["view", "create", "edit", "delete", "assign", "create_access"] },
   { module: "CRM", key: "crm", actions: ["view", "create", "edit", "delete", "manage_pipelines"] },
   { module: "Oportunidades", key: "opportunities", actions: ["view", "create", "edit", "delete", "assign", "move_stage", "convert", "reverse_conversion", "view_values", "export"] },
+  { module: "Propostas", key: "proposals", actions: ["view", "create", "edit", "delete", "export"] },
   { module: "Tarefas", key: "tasks", actions: ["view", "create", "edit", "delete", "assign", "view_team", "edit_team"] },
   { module: "Creative Ops", key: "creative_ops", actions: ["view", "review", "view_team_demands"] },
   { module: "Agenda", key: "calendar", actions: ["view", "create", "edit", "delete", "view_team", "edit_all"] },

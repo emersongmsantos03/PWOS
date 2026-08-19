@@ -22,6 +22,7 @@ import {
   CircleDollarSign,
   Download,
   FileText,
+  FileSignature,
   Gauge,
   Eye,
   EyeOff,
@@ -70,6 +71,7 @@ import { TasksManagement } from "./TasksManagement";
 import { CalendarManagement } from "./CalendarManagement";
 import { OperationalReports } from "./OperationalReports";
 import { PublicProposal } from "./PublicProposal";
+import { ProposalManagement } from "./ProposalManagement";
 import { FinancialManagement } from "./FinancialManagement";
 import { SettingsManagement } from "./SettingsManagement";
 import { HelpCenter } from "./HelpCenter";
@@ -86,6 +88,7 @@ const nav = [
   { to: "/", icon: LayoutDashboard, label: "Visão geral" },
   { to: "/clientes", icon: BriefcaseBusiness, label: "Clientes" },
   { to: "/crm", icon: KanbanSquare, label: "CRM's" },
+  { to: "/propostas", icon: FileSignature, label: "Propostas" },
   { to: "/tarefas", icon: ListTodo, label: "Creative Ops" },
   { to: "/agenda", icon: CalendarDays, label: "Agenda" },
   { to: "/financeiro", icon: CircleDollarSign, label: "Financeiro" },
@@ -265,6 +268,7 @@ function Shell({
       "/": "dashboard.view",
       "/clientes": "clients.view",
       "/crm": "crm.view",
+      "/propostas": "proposals.view",
       "/tarefas": "creative_ops.view",
       "/agenda": "calendar.view",
       "/financeiro": "finance.view",
@@ -576,6 +580,19 @@ function Shell({
                 permissions={user.permissions || []}
                 profile={user.profile}
               />
+            }
+          />
+          <Route
+            path="/propostas"
+            element={
+              can("proposals.view") ? (
+                <ProposalManagement
+                  permissions={user.permissions || []}
+                  profile={user.profile}
+                />
+              ) : (
+                <Navigate to={firstAccessiblePath} replace />
+              )
             }
           />
           <Route

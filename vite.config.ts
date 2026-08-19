@@ -4826,6 +4826,32 @@ function localApi(
               .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
           });
         }
+        if (url === "/proposals" && request.method === "GET") {
+          if (!hasPermission(currentUser, "proposals.view"))
+            return json(response, 403, {
+              message: "Você não possui permissão para visualizar propostas.",
+            });
+          const proposals = [...opportunities.values()]
+            .filter((opportunity) => {
+              const pipeline = pipelines.get(opportunity.pipelineId);
+              return !!pipeline && canAccessPipeline(currentUser, pipeline);
+            })
+            .flatMap((opportunity) => {
+              const pipeline = pipelines.get(opportunity.pipelineId),
+                stage = pipeline?.stages.find((item) => item.id === opportunity.stageId);
+              return opportunity.proposals.map((proposal) => ({
+                ...proposal,
+                opportunityId: opportunity.id,
+                opportunityName: opportunity.name,
+                companyName: opportunity.company,
+                responsibleName: opportunity.responsibleName,
+                pipelineName: pipeline?.name || "CRM",
+                stageName: stage?.name || "Sem etapa",
+              }));
+            })
+            .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+          return json(response, 200, { proposals });
+        }
         if (url === "/crm/opportunities" && request.method === "POST") {
           if (!hasPermission(currentUser, "opportunities.create"))
             return json(response, 403, {
@@ -5356,7 +5382,10 @@ function localApi(
           /^\/crm\/opportunities\/([^/]+)\/proposals\/([^/]+)$/,
         );
         if (opportunityProposalItemMatch && request.method === "DELETE") {
-          if (!hasPermission(currentUser, "opportunities.edit"))
+          if (
+            !hasPermission(currentUser, "proposals.delete") &&
+            !hasPermission(currentUser, "opportunities.edit")
+          )
             return json(response, 403, {
               message: "Você não possui permissão para excluir propostas.",
             });
@@ -5398,7 +5427,10 @@ function localApi(
           /^\/crm\/opportunities\/([^/]+)\/proposals$/,
         );
         if (opportunityProposalMatch && request.method === "POST") {
-          if (!hasPermission(currentUser, "opportunities.edit"))
+          if (
+            !hasPermission(currentUser, "proposals.create") &&
+            !hasPermission(currentUser, "opportunities.edit")
+          )
             return json(response, 403, {
               message: "Você não possui permissão para adicionar propostas.",
             });
