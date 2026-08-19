@@ -47,13 +47,14 @@ const privatePhone = (value: string) => {
 export function PublicProposal() {
   const token = window.location.pathname.split("/").filter(Boolean).at(-1) || "";
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const signatureHintRef = useRef<HTMLSpanElement>(null);
   const drawing = useRef(false);
+  const hasSignatureRef = useRef(false);
   const signatureDataRef = useRef("");
   const [proposal, setProposal] = useState<PublicProposalData | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [signed, setSigned] = useState(false);
-  const [hasSignature, setHasSignature] = useState(false);
   const [document, setDocument] = useState("");
   const [phone, setPhone] = useState("");
   const [error, setError] = useState("");
@@ -105,6 +106,8 @@ export function PublicProposal() {
     context.lineJoin = "round";
     context.lineTo(position.x, position.y);
     context.stroke();
+    hasSignatureRef.current = true;
+    if (signatureHintRef.current) signatureHintRef.current.hidden = true;
   };
   const stopDrawing = (event?: PointerEvent<HTMLCanvasElement>) => {
     if (!drawing.current) return;
@@ -114,18 +117,19 @@ export function PublicProposal() {
       event.currentTarget.releasePointerCapture(event.pointerId);
     if (event?.currentTarget)
       signatureDataRef.current = event.currentTarget.toDataURL("image/png");
-    setHasSignature(true);
   };
   const clearSignature = () => {
     const canvas = canvasRef.current;
     canvas?.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+    hasSignatureRef.current = false;
     signatureDataRef.current = "";
-    setHasSignature(false);
+    if (signatureHintRef.current) signatureHintRef.current.hidden = false;
   };
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!isValidDocument(document)) return setError("Informe um CPF ou CNPJ válido.");
-    if (!hasSignature) return setError("Faça sua assinatura no campo indicado.");
+    if (!hasSignatureRef.current)
+      return setError("Faça sua assinatura no campo indicado.");
     setSaving(true);
     setError("");
     const raw = Object.fromEntries(new FormData(event.currentTarget)),
@@ -261,7 +265,9 @@ export function PublicProposal() {
               onPointerUp={stopDrawing}
               onPointerCancel={stopDrawing}
             />
-            {!hasSignature && <span className="public-signature-hint">Desenhe sua assinatura aqui</span>}
+            <span ref={signatureHintRef} className="public-signature-hint">
+              Desenhe sua assinatura aqui
+            </span>
             <button type="button" onClick={clearSignature}>Limpar assinatura</button>
           </label>
           <label className="public-proposal-consent"><input type="checkbox" required /> Confirmo que li e aceito os serviços, valores e condições desta proposta.</label>
