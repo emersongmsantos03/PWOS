@@ -24,6 +24,7 @@ type PublicProposalData = {
     billingType: "RECURRING" | "ONE_TIME";
   }>;
 };
+type SignaturePoint = { x: number; y: number };
 
 const money = (value: number) =>
   value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -46,15 +47,16 @@ const privatePhone = (value: string) => {
 
 export function PublicProposal() {
   const token = window.location.pathname.split("/").filter(Boolean).at(-1) || "";
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const signatureHintRef = useRef<HTMLSpanElement>(null);
   const drawing = useRef(false);
-  const hasSignatureRef = useRef(false);
+  const activePathRef = useRef<SignaturePoint[]>([]);
+  const signaturePathsRef = useRef<SignaturePoint[][]>([]);
   const signatureDataRef = useRef("");
   const [proposal, setProposal] = useState<PublicProposalData | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [signed, setSigned] = useState(false);
+  const [signaturePaths, setSignaturePaths] = useState<SignaturePoint[][]>([]);
+  const [activeSignaturePath, setActiveSignaturePath] = useState<SignaturePoint[]>([]);
   const [document, setDocument] = useState("");
   const [phone, setPhone] = useState("");
   const [error, setError] = useState("");
@@ -69,66 +71,74 @@ export function PublicProposal() {
       .catch((reason) => setError(reason.message || "Não foi possível abrir a proposta."))
       .finally(() => setLoading(false));
   }, [token]);
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    canvas.width = 900;
-    canvas.height = 220;
-  }, [proposal?.reference]);
-
-  const point = (event: PointerEvent<HTMLCanvasElement>) => {
-    const canvas = event.currentTarget,
-      rect = canvas.getBoundingClientRect();
+  const point = (event: PointerEvent<SVGSVGElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
     return {
-      x: ((event.clientX - rect.left) / rect.width) * canvas.width,
-      y: ((event.clientY - rect.top) / rect.height) * canvas.height,
+      x: ((event.clientX - rect.left) / rect.width) * 900,
+      y: ((event.clientY - rect.top) / rect.height) * 220,
     };
   };
-  const startDrawing = (event: PointerEvent<HTMLCanvasElement>) => {
-    const canvas = event.currentTarget,
-      context = canvas.getContext("2d"),
-      position = point(event);
-    if (!context) return;
-    canvas.setPointerCapture(event.pointerId);
-    drawing.current = true;
-    context.beginPath();
-    context.moveTo(position.x, position.y);
-  };
-  const draw = (event: PointerEvent<HTMLCanvasElement>) => {
-    if (!drawing.current) return;
-    event.preventDefault();
-    const context = event.currentTarget.getContext("2d"),
-      position = point(event);
-    if (!context) return;
+  const signatureImage = (paths: SignaturePoint[][]) => {
+    const canvas = window.document.createElement("canvas"),
+      context = canvas.getContext("2d");
+    canvas.width = 900;
+    canvas.height = 220;
+    if (!context) return "";
     context.strokeStyle = "#17263a";
     context.lineWidth = 3;
     context.lineCap = "round";
     context.lineJoin = "round";
-    context.lineTo(position.x, position.y);
-    context.stroke();
-    hasSignatureRef.current = true;
-    if (signatureHintRef.current) signatureHintRef.current.hidden = true;
+    paths.forEach((path) => {
+      if (!path.length) return;
+      context.beginPath();
+      context.moveTo(path[0].x, path[0].y);
+      path.slice(1).forEach((position) => context.lineTo(position.x, position.y));
+      context.stroke();
+    });
+    return canvas.toDataURL("image/png");
   };
-  const stopDrawing = (event?: PointerEvent<HTMLCanvasElement>) => {
+  const pathData = (path: SignaturePoint[]) =>
+    path.map((position, index) => `${index ? "L" : "M"}${position.x} ${position.y}`).join(" ");
+  const startDrawing = (event: PointerEvent<SVGSVGElement>) => {
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    drawing.current = true;
+    activePathRef.current = [point(event)];
+    setActiveSignaturePath(activePathRef.current);
+  };
+  const draw = (event: PointerEvent<SVGSVGElement>) => {
+    if (!drawing.current) return;
+    event.preventDefault();
+    activePathRef.current = [...activePathRef.current, point(event)];
+    setActiveSignaturePath(activePathRef.current);
+  };
+  const stopDrawing = (event?: PointerEvent<SVGSVGElement>) => {
     if (!drawing.current) return;
     drawing.current = false;
-    event?.currentTarget.getContext("2d")?.closePath();
     if (event?.currentTarget.hasPointerCapture(event.pointerId))
       event.currentTarget.releasePointerCapture(event.pointerId);
-    if (event?.currentTarget)
-      signatureDataRef.current = event.currentTarget.toDataURL("image/png");
+    if (activePathRef.current.length > 1) {
+      signaturePathsRef.current = [
+        ...signaturePathsRef.current,
+        activePathRef.current,
+      ];
+      setSignaturePaths(signaturePathsRef.current);
+      signatureDataRef.current = signatureImage(signaturePathsRef.current);
+    }
+    activePathRef.current = [];
+    setActiveSignaturePath([]);
   };
   const clearSignature = () => {
-    const canvas = canvasRef.current;
-    canvas?.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
-    hasSignatureRef.current = false;
+    activePathRef.current = [];
+    signaturePathsRef.current = [];
     signatureDataRef.current = "";
-    if (signatureHintRef.current) signatureHintRef.current.hidden = false;
+    setActiveSignaturePath([]);
+    setSignaturePaths([]);
   };
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!isValidDocument(document)) return setError("Informe um CPF ou CNPJ válido.");
-    if (!hasSignatureRef.current)
+    if (!signaturePathsRef.current.length)
       return setError("Faça sua assinatura no campo indicado.");
     setSaving(true);
     setError("");
@@ -141,14 +151,14 @@ export function PublicProposal() {
           document,
           phone,
           signatureDataUrl:
-            signatureDataRef.current || canvasRef.current?.toDataURL("image/png"),
+            signatureDataRef.current || signatureImage(signaturePathsRef.current),
         }),
       }),
       data = await response.json();
     setSaving(false);
     if (!response.ok) return setError(data.message);
     const signatureDataUrl =
-      signatureDataRef.current || canvasRef.current?.toDataURL("image/png") || "";
+      signatureDataRef.current || signatureImage(signaturePathsRef.current);
     setProposal((current) => current ? {
       ...current,
       status: "ACCEPTED",
@@ -258,16 +268,23 @@ export function PublicProposal() {
           </div>
           <label className="public-signature-label">
             Assinatura *
-            <canvas
-              ref={canvasRef}
+            <svg
+              className="public-signature-pad"
+              viewBox="0 0 900 220"
+              preserveAspectRatio="none"
               onPointerDown={startDrawing}
               onPointerMove={draw}
               onPointerUp={stopDrawing}
               onPointerCancel={stopDrawing}
-            />
-            <span ref={signatureHintRef} className="public-signature-hint">
-              Desenhe sua assinatura aqui
-            </span>
+            >
+              {signaturePaths.map((path, index) => (
+                <path d={pathData(path)} key={index} />
+              ))}
+              {activeSignaturePath.length > 0 && <path d={pathData(activeSignaturePath)} />}
+            </svg>
+            {!signaturePaths.length && !activeSignaturePath.length && (
+              <span className="public-signature-hint">Desenhe sua assinatura aqui</span>
+            )}
             <button type="button" onClick={clearSignature}>Limpar assinatura</button>
           </label>
           <label className="public-proposal-consent"><input type="checkbox" required /> Confirmo que li e aceito os serviços, valores e condições desta proposta.</label>
