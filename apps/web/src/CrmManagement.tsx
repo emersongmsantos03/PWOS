@@ -899,6 +899,8 @@ function OpportunityWorkspace({
     [tasks, setTasks] = useState<WorkTask[]>([]),
     [taskOpen, setTaskOpen] = useState(false),
     [taskSaving, setTaskSaving] = useState(false),
+    [proposalOpen, setProposalOpen] = useState(false),
+    [proposalSaving, setProposalSaving] = useState(false),
     [temperatureSaving, setTemperatureSaving] = useState(false),
     [draftTemperature, setDraftTemperature] = useState<Opportunity["temperature"]>(item.temperature),
     [taskKind, setTaskKind] = useState("TASK"),
@@ -1012,8 +1014,33 @@ function OpportunityWorkspace({
     await loadTasks();
   };
   const openTask = (kind = "TASK") => {
+    setProposalOpen(false);
     setTaskKind(kind);
     setTaskOpen(true);
+  };
+  const createProposal = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setProposalSaving(true);
+    setError("");
+    const response = await fetch(
+        `/api/crm/opportunities/${item.id}/proposals`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(
+            Object.fromEntries(new FormData(event.currentTarget)),
+          ),
+        },
+      ),
+      data = await response.json();
+    setProposalSaving(false);
+    if (!response.ok) return setError(data.message);
+    setProposalOpen(false);
+    onChange(data.opportunity);
+  };
+  const openProposal = () => {
+    setTaskOpen(false);
+    setProposalOpen(true);
   };
   const action = (value: string) => {
     if (value === "NOTE") {
@@ -1056,6 +1083,9 @@ function OpportunityWorkspace({
               title={hasPendingChanges ? "Salvar alterações pendentes" : "Nenhuma alteração pendente"}
             >
               <Save /> {temperatureSaving ? "Salvando…" : "Salvar alterações"}
+            </button>
+            <button className="secondary crm-generate-proposal" onClick={openProposal}>
+              <CircleDollarSign /> Gerar proposta
             </button>
             <button className="primary" onClick={() => openTask()}>
               <ListTodo /> Criar tarefa
@@ -1443,6 +1473,91 @@ function OpportunityWorkspace({
             </AssociationSection>
           </aside>
         </div>
+        {proposalOpen && (
+          <div
+            className="crm-task-drawer-backdrop"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget) setProposalOpen(false);
+            }}
+          >
+            <form className="crm-task-drawer" onSubmit={createProposal}>
+              <header>
+                <div>
+                  <span>
+                    <CircleDollarSign />
+                  </span>
+                  <div>
+                    <h2>Gerar proposta</h2>
+                    <p>Vinculada à oportunidade “{item.name}”.</p>
+                  </div>
+                </div>
+                <button type="button" onClick={() => setProposalOpen(false)}>
+                  <X />
+                </button>
+              </header>
+              <div className="crm-task-form">
+                <label className="full">
+                  Título da proposta *
+                  <input
+                    name="title"
+                    required
+                    minLength={2}
+                    autoFocus
+                    placeholder="Ex.: Proposta comercial"
+                  />
+                </label>
+                <label>
+                  Valor *
+                  <input
+                    name="value"
+                    required
+                    inputMode="decimal"
+                    defaultValue={item.potentialValue || ""}
+                    placeholder="0,00"
+                  />
+                </label>
+                <label>
+                  Status
+                  <select name="status" defaultValue="DRAFT">
+                    <option value="DRAFT">Rascunho</option>
+                    <option value="SENT">Enviada</option>
+                    <option value="ACCEPTED">Aceita</option>
+                    <option value="REJECTED">Recusada</option>
+                  </select>
+                </label>
+                <label className="full">
+                  Validade
+                  <input name="validUntil" type="date" />
+                </label>
+                <label className="full">
+                  Observações
+                  <textarea
+                    name="notes"
+                    placeholder="Condições, escopo e informações importantes..."
+                  />
+                </label>
+                {error && (
+                  <div className="form-error full">
+                    <AlertTriangle />
+                    {error}
+                  </div>
+                )}
+              </div>
+              <footer>
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => setProposalOpen(false)}
+                >
+                  Cancelar
+                </button>
+                <button className="primary" disabled={proposalSaving}>
+                  {proposalSaving ? "Gerando…" : "Gerar proposta"}
+                </button>
+              </footer>
+            </form>
+          </div>
+        )}
         {taskOpen && (
           <div
             className="crm-task-drawer-backdrop"
