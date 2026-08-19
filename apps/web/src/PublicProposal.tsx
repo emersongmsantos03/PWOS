@@ -48,6 +48,7 @@ export function PublicProposal() {
   const token = window.location.pathname.split("/").filter(Boolean).at(-1) || "";
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const drawing = useRef(false);
+  const signatureDataRef = useRef("");
   const [proposal, setProposal] = useState<PublicProposalData | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -67,6 +68,12 @@ export function PublicProposal() {
       .catch((reason) => setError(reason.message || "Não foi possível abrir a proposta."))
       .finally(() => setLoading(false));
   }, [token]);
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    canvas.width = 900;
+    canvas.height = 220;
+  }, [proposal?.reference]);
 
   const point = (event: PointerEvent<HTMLCanvasElement>) => {
     const canvas = event.currentTarget,
@@ -105,11 +112,14 @@ export function PublicProposal() {
     event?.currentTarget.getContext("2d")?.closePath();
     if (event?.currentTarget.hasPointerCapture(event.pointerId))
       event.currentTarget.releasePointerCapture(event.pointerId);
+    if (event?.currentTarget)
+      signatureDataRef.current = event.currentTarget.toDataURL("image/png");
     setHasSignature(true);
   };
   const clearSignature = () => {
     const canvas = canvasRef.current;
     canvas?.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+    signatureDataRef.current = "";
     setHasSignature(false);
   };
   const submit = async (event: FormEvent<HTMLFormElement>) => {
@@ -126,13 +136,15 @@ export function PublicProposal() {
           ...raw,
           document,
           phone,
-          signatureDataUrl: canvasRef.current?.toDataURL("image/png"),
+          signatureDataUrl:
+            signatureDataRef.current || canvasRef.current?.toDataURL("image/png"),
         }),
       }),
       data = await response.json();
     setSaving(false);
     if (!response.ok) return setError(data.message);
-    const signatureDataUrl = canvasRef.current?.toDataURL("image/png") || "";
+    const signatureDataUrl =
+      signatureDataRef.current || canvasRef.current?.toDataURL("image/png") || "";
     setProposal((current) => current ? {
       ...current,
       status: "ACCEPTED",
@@ -244,8 +256,6 @@ export function PublicProposal() {
             Assinatura *
             <canvas
               ref={canvasRef}
-              width="900"
-              height="220"
               onPointerDown={startDrawing}
               onPointerMove={draw}
               onPointerUp={stopDrawing}
