@@ -1631,22 +1631,43 @@ function localApi(
             );
           if (!opportunity || !proposal)
             return json(response, 404, { message: "Proposta não encontrada." });
-          if (request.method === "GET")
+          if (request.method === "GET") {
+            const publicCustomer = proposal.customer
+              ? (() => {
+                  const documentDigits = proposal.customer.document.replace(/\D/g, ""),
+                    phoneDigits = proposal.customer.phone.replace(/\D/g, ""),
+                    [emailName, emailDomain = ""] = proposal.customer.email.split("@");
+                  return {
+                    name: proposal.customer.name,
+                    document:
+                      documentDigits.length === 14
+                        ? `${documentDigits.slice(0, 2)}.***.***/****-${documentDigits.slice(-2)}`
+                        : `${documentDigits.slice(0, 3)}.***.***-${documentDigits.slice(-2)}`,
+                    email: `${emailName.slice(0, 2)}***@${emailDomain}`,
+                    phone:
+                      phoneDigits.length >= 10
+                        ? `(${phoneDigits.slice(0, 2)}) *****-${phoneDigits.slice(-4)}`
+                        : `*****${phoneDigits.slice(-2)}`,
+                  };
+                })()
+              : undefined;
             return json(response, 200, {
               proposal: {
+                reference: `PWM-${proposal.id.slice(0, 8).toUpperCase()}`,
                 title: proposal.title,
                 value: proposal.value,
                 status: proposal.status,
                 validUntil: proposal.validUntil,
                 notes: proposal.notes,
                 services: proposal.services || [],
-                customer: proposal.customer,
+                customer: publicCustomer,
                 signatureDataUrl: proposal.signatureDataUrl,
                 signedAt: proposal.signedAt,
                 opportunityName: opportunity.name,
                 companyName: opportunity.company,
               },
             });
+          }
           if (request.method === "POST") {
             if (proposal.signedAt)
               return json(response, 409, { message: "Esta proposta já foi assinada." });
@@ -1686,7 +1707,11 @@ function localApi(
             });
             opportunities.set(opportunity.id, opportunity);
             persistOpportunities();
-            return json(response, 200, { ok: true, signedAt: now });
+            return json(response, 200, {
+              ok: true,
+              signedAt: now,
+              reference: `PWM-${proposal.id.slice(0, 8).toUpperCase()}`,
+            });
           }
         }
         if (!currentUser)

@@ -4,6 +4,7 @@ import { isValidDocument, maskDocument, maskPhone } from "./inputMasks";
 import "./PublicProposal.css";
 
 type PublicProposalData = {
+  reference: string;
   title: string;
   value: number;
   status: string;
@@ -26,6 +27,22 @@ type PublicProposalData = {
 
 const money = (value: number) =>
   value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+const privateDocument = (value: string) => {
+  const raw = value.replace(/\D/g, "");
+  return raw.length === 14
+    ? `${raw.slice(0, 2)}.***.***/****-${raw.slice(-2)}`
+    : `${raw.slice(0, 3)}.***.***-${raw.slice(-2)}`;
+};
+const privateEmail = (value: string) => {
+  const [name, domain = ""] = value.split("@");
+  return `${name.slice(0, 2)}***@${domain}`;
+};
+const privatePhone = (value: string) => {
+  const raw = value.replace(/\D/g, "");
+  return raw.length >= 10
+    ? `(${raw.slice(0, 2)}) *****-${raw.slice(-4)}`
+    : `*****${raw.slice(-2)}`;
+};
 
 export function PublicProposal() {
   const token = window.location.pathname.split("/").filter(Boolean).at(-1) || "";
@@ -123,10 +140,11 @@ export function PublicProposal() {
       signatureDataUrl,
       customer: {
         name: String(raw.name),
-        email: String(raw.email),
-        phone,
-        document,
+        email: privateEmail(String(raw.email)),
+        phone: privatePhone(phone),
+        document: privateDocument(document),
       },
+      reference: data.reference,
     } : current);
     setSigned(true);
   };
@@ -150,7 +168,7 @@ export function PublicProposal() {
         <div className="public-proposal-heading">
           <small>PROPOSTA COMERCIAL</small>
           <h1>{proposal.title}</h1>
-          <p>{proposal.companyName || proposal.opportunityName}</p>
+          <p>{proposal.companyName || proposal.opportunityName} · Ref. {proposal.reference}</p>
           {proposal.validUntil && (
             <span>Válida até {new Date(`${proposal.validUntil}T12:00:00`).toLocaleDateString("pt-BR")}</span>
           )}
@@ -241,7 +259,7 @@ export function PublicProposal() {
           <button className="public-proposal-submit" disabled={saving}>{saving ? "Enviando assinatura…" : "Assinar e aceitar proposta"}</button>
         </form> : (
           <section className="public-proposal-receipt">
-            <div><CheckCircle2 /><span><small>ACEITE ELETRÔNICO</small><b>{proposal.customer?.name}</b><p>{proposal.customer?.document} · {proposal.customer?.email} · {proposal.customer?.phone}</p><time>Assinado em {proposal.signedAt ? new Date(proposal.signedAt).toLocaleString("pt-BR") : "agora"}</time></span></div>
+            <div><CheckCircle2 /><span><small>ACEITE ELETRÔNICO · {proposal.reference}</small><b>{proposal.customer?.name}</b><p>{proposal.customer?.document} · {proposal.customer?.email} · {proposal.customer?.phone}</p><time>Assinado em {proposal.signedAt ? new Date(proposal.signedAt).toLocaleString("pt-BR") : "agora"}</time><em>Dados pessoais parcialmente ocultos neste link público.</em></span></div>
             {proposal.signatureDataUrl && <img src={proposal.signatureDataUrl} alt={`Assinatura de ${proposal.customer?.name || "cliente"}`} />}
           </section>
         )}
