@@ -1685,7 +1685,7 @@ function OpportunityWorkspace({
               if (event.target === event.currentTarget) setProposalOpen(false);
             }}
           >
-            <form className="crm-task-drawer" onSubmit={createProposal}>
+            <form className="crm-task-drawer crm-proposal-drawer" onSubmit={createProposal}>
               <header>
                 <div>
                   <span>
