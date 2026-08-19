@@ -5326,6 +5326,48 @@ function localApi(
             services: [...names].filter(Boolean).sort((a, b) => a.localeCompare(b, "pt-BR")),
           });
         }
+        const opportunityProposalItemMatch = url.match(
+          /^\/crm\/opportunities\/([^/]+)\/proposals\/([^/]+)$/,
+        );
+        if (opportunityProposalItemMatch && request.method === "DELETE") {
+          if (!hasPermission(currentUser, "opportunities.edit"))
+            return json(response, 403, {
+              message: "Você não possui permissão para excluir propostas.",
+            });
+          const opportunity = opportunities.get(opportunityProposalItemMatch[1]),
+            pipeline = opportunity && pipelines.get(opportunity.pipelineId);
+          if (!opportunity || !pipeline || !canAccessPipeline(currentUser, pipeline))
+            return json(response, 404, { message: "Oportunidade não encontrada." });
+          const proposal = opportunity.proposals.find(
+            (item) => item.id === opportunityProposalItemMatch[2],
+          );
+          if (!proposal)
+            return json(response, 404, { message: "Proposta não encontrada." });
+          const input = await body(request),
+            password = String(input.password || "");
+          if (
+            !password ||
+            !safeEqual(currentUser.passwordHash, hash(password, currentUser.salt))
+          )
+            return json(response, 401, { message: "Senha incorreta." });
+          const now = new Date().toISOString();
+          opportunity.proposals = opportunity.proposals.filter(
+            (item) => item.id !== proposal.id,
+          );
+          opportunity.activities.push({
+            id: randomUUID(),
+            type: "PROPOSAL",
+            description: `Proposta excluída: ${proposal.title} — R$ ${proposal.value.toFixed(2)}`,
+            actorId: currentUser.id,
+            actorName: currentUser.name,
+            createdAt: now,
+            metadata: { proposalId: proposal.id, action: "DELETED" },
+          });
+          opportunity.updatedAt = now;
+          opportunities.set(opportunity.id, opportunity);
+          persistOpportunities();
+          return json(response, 200, { ok: true, opportunity });
+        }
         const opportunityProposalMatch = url.match(
           /^\/crm\/opportunities\/([^/]+)\/proposals$/,
         );

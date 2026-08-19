@@ -915,6 +915,9 @@ function OpportunityWorkspace({
     [proposalOpen, setProposalOpen] = useState(false),
     [proposalSaving, setProposalSaving] = useState(false),
     [generatedProposalLink, setGeneratedProposalLink] = useState(""),
+    [proposalToDelete, setProposalToDelete] = useState<Proposal | null>(null),
+    [proposalDeletePassword, setProposalDeletePassword] = useState(""),
+    [proposalDeleting, setProposalDeleting] = useState(false),
     [serviceCatalog, setServiceCatalog] = useState<string[]>([]),
     [proposalServices, setProposalServices] = useState<ProposalService[]>([]),
     [temperatureSaving, setTemperatureSaving] = useState(false),
@@ -1116,6 +1119,26 @@ function OpportunityWorkspace({
     await navigator.clipboard.writeText(
       `${window.location.origin}/proposta/${token}`,
     );
+  };
+  const deleteProposal = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!proposalToDelete) return;
+    setProposalDeleting(true);
+    setError("");
+    const response = await fetch(
+        `/api/crm/opportunities/${item.id}/proposals/${proposalToDelete.id}`,
+        {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ password: proposalDeletePassword }),
+        },
+      ),
+      data = await response.json();
+    setProposalDeleting(false);
+    if (!response.ok) return setError(data.message);
+    setProposalToDelete(null);
+    setProposalDeletePassword("");
+    onChange(data.opportunity);
   };
   const action = (value: string) => {
     if (value === "NOTE") {
@@ -1564,6 +1587,17 @@ function OpportunityWorkspace({
                       Copiar link
                     </button>
                   )}
+                  <button
+                    type="button"
+                    className="crm-proposal-delete"
+                    onClick={() => {
+                      setError("");
+                      setProposalDeletePassword("");
+                      setProposalToDelete(value);
+                    }}
+                  >
+                    <Trash2 /> Excluir proposta
+                  </button>
                 </article>
               ))}
               {!item.proposals.length && <p>Nenhuma proposta registrada.</p>}
@@ -1589,6 +1623,59 @@ function OpportunityWorkspace({
                 Concluir
               </button>
             </section>
+          </div>
+        )}
+        {proposalToDelete && (
+          <div
+            className="crm-proposal-link-backdrop"
+            onMouseDown={(event) => {
+              if (event.target === event.currentTarget && !proposalDeleting)
+                setProposalToDelete(null);
+            }}
+          >
+            <form className="crm-proposal-delete-modal" onSubmit={deleteProposal}>
+              <span><Trash2 /></span>
+              <h2>Excluir proposta?</h2>
+              <p>
+                A proposta <b>“{proposalToDelete.title}”</b> e seu link público serão
+                removidos permanentemente. O registro da exclusão continuará na
+                linha do tempo.
+              </p>
+              {proposalToDelete.signedAt && (
+                <div className="crm-proposal-delete-warning">
+                  Esta proposta já foi assinada pelo cliente.
+                </div>
+              )}
+              <label>
+                Digite sua senha para confirmar
+                <input
+                  type="password"
+                  required
+                  autoFocus
+                  autoComplete="current-password"
+                  value={proposalDeletePassword}
+                  onChange={(event) => setProposalDeletePassword(event.target.value)}
+                  placeholder="Sua senha atual"
+                />
+              </label>
+              {error && <div className="form-error"><AlertTriangle />{error}</div>}
+              <footer>
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={proposalDeleting}
+                  onClick={() => setProposalToDelete(null)}
+                >
+                  Cancelar
+                </button>
+                <button
+                  className="danger-confirm"
+                  disabled={!proposalDeletePassword || proposalDeleting}
+                >
+                  {proposalDeleting ? "Excluindo…" : "Confirmar exclusão"}
+                </button>
+              </footer>
+            </form>
           </div>
         )}
         {proposalOpen && (
