@@ -69,6 +69,7 @@ import { CrmManagement } from "./CrmManagement";
 import { TasksManagement } from "./TasksManagement";
 import { CalendarManagement } from "./CalendarManagement";
 import { OperationalReports } from "./OperationalReports";
+import { PublicProposal } from "./PublicProposal";
 import { FinancialManagement } from "./FinancialManagement";
 import { SettingsManagement } from "./SettingsManagement";
 import { HelpCenter } from "./HelpCenter";
@@ -2610,16 +2611,21 @@ function PasswordSetup({
 
 export function App() {
   const clientPortal = window.location.pathname.startsWith("/portal-cliente");
+  const publicProposal = window.location.pathname.startsWith("/proposta/");
   const [user, setUser] = useState<SessionUser | null>(null);
   const [checking, setChecking] = useState(true);
   useEffect(() => {
+    if (publicProposal) {
+      setChecking(false);
+      return;
+    }
     fetch(clientPortal ? "/api/client-auth/session" : "/api/auth/session")
       .then(
         async (response) =>
           response.ok && setUser((await response.json()).user),
       )
       .finally(() => setChecking(false));
-  }, []);
+  }, [publicProposal]);
   useEffect(() => {
     if (
       user &&
@@ -2638,6 +2644,7 @@ export function App() {
     });
     setUser(null);
   };
+  if (publicProposal) return <PublicProposal />;
   if (checking)
     return (
       <div className="app-loading">

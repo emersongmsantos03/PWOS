@@ -386,6 +386,11 @@ model Proposal {
   status        String
   validUntil    DateTime?
   notes         String?
+  publicToken   String?     @unique
+  services      Json?
+  customerData  Json?
+  signatureData String?     @db.Text
+  signedAt      DateTime?
   createdById   String      @db.Uuid
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt

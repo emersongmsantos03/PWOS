@@ -211,6 +211,23 @@ type CrmProposal = {
   status: "DRAFT" | "SENT" | "ACCEPTED" | "REJECTED";
   validUntil: string;
   notes: string;
+  publicToken?: string;
+  services?: Array<{
+    id: string;
+    name: string;
+    description: string;
+    quantity: number;
+    unitValue: number;
+    billingType: "RECURRING" | "ONE_TIME";
+  }>;
+  customer?: {
+    name: string;
+    email: string;
+    phone: string;
+    document: string;
+  };
+  signatureDataUrl?: string;
+  signedAt?: string;
   createdBy: string;
   createdAt: string;
 };
@@ -1601,6 +1618,75 @@ function localApi(
             `${portal ? "pw_client_session" : "pw_os_session"}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`,
           );
           return json(response, 200, { ok: true });
+        }
+        const publicProposalMatch = url.match(/^\/public\/proposals\/([a-f0-9]{32,})$/);
+        if (publicProposalMatch) {
+          const opportunity = [...opportunities.values()].find((item) =>
+              item.proposals.some(
+                (proposal) => proposal.publicToken === publicProposalMatch[1],
+              ),
+            ),
+            proposal = opportunity?.proposals.find(
+              (item) => item.publicToken === publicProposalMatch[1],
+            );
+          if (!opportunity || !proposal)
+            return json(response, 404, { message: "Proposta não encontrada." });
+          if (request.method === "GET")
+            return json(response, 200, {
+              proposal: {
+                title: proposal.title,
+                value: proposal.value,
+                status: proposal.status,
+                validUntil: proposal.validUntil,
+                notes: proposal.notes,
+                services: proposal.services || [],
+                customer: proposal.customer,
+                signedAt: proposal.signedAt,
+                opportunityName: opportunity.name,
+                companyName: opportunity.company,
+              },
+            });
+          if (request.method === "POST") {
+            if (proposal.signedAt)
+              return json(response, 409, { message: "Esta proposta já foi assinada." });
+            const input = await body(request),
+              customer = {
+                name: String(input.name || "").trim(),
+                email: String(input.email || "").trim().toLowerCase(),
+                phone: String(input.phone || "").trim(),
+                document: String(input.document || "").trim(),
+              },
+              signatureDataUrl = String(input.signatureDataUrl || ""),
+              documentDigits = customer.document.replace(/\D/g, "");
+            if (
+              customer.name.length < 3 ||
+              !customer.email.includes("@") ||
+              ![11, 14].includes(documentDigits.length) ||
+              !signatureDataUrl.startsWith("data:image/png;base64,") ||
+              signatureDataUrl.length > 1_000_000
+            )
+              return json(response, 400, {
+                message: "Preencha os dados corretamente e faça sua assinatura.",
+              });
+            const now = new Date().toISOString();
+            proposal.customer = customer;
+            proposal.signatureDataUrl = signatureDataUrl;
+            proposal.signedAt = now;
+            proposal.status = "ACCEPTED";
+            opportunity.updatedAt = now;
+            opportunity.activities.push({
+              id: randomUUID(),
+              type: "PROPOSAL",
+              description: `Proposta assinada por ${customer.name} — R$ ${proposal.value.toFixed(2)}`,
+              actorId: "public",
+              actorName: customer.name,
+              createdAt: now,
+              metadata: { proposalId: proposal.id, status: "ACCEPTED" },
+            });
+            opportunities.set(opportunity.id, opportunity);
+            persistOpportunities();
+            return json(response, 200, { ok: true, signedAt: now });
+          }
         }
         if (!currentUser)
           return json(response, 401, { message: "Sessão necessária." });
@@ -5224,6 +5310,22 @@ function localApi(
           persistOpportunities();
           return json(response, 201, { activity, opportunity });
         }
+        if (url === "/crm/service-catalog" && request.method === "GET") {
+          const names = new Set<string>();
+          clientServices.forEach((service) => names.add(service.name.trim()));
+          opportunities.forEach((opportunity) => {
+            if (opportunity.serviceInterest.trim())
+              names.add(opportunity.serviceInterest.trim());
+            opportunity.proposals.forEach((proposal) =>
+              (proposal.services || []).forEach((service) =>
+                names.add(service.name.trim()),
+              ),
+            );
+          });
+          return json(response, 200, {
+            services: [...names].filter(Boolean).sort((a, b) => a.localeCompare(b, "pt-BR")),
+          });
+        }
         const opportunityProposalMatch = url.match(
           /^\/crm\/opportunities\/([^/]+)\/proposals$/,
         );
@@ -5244,14 +5346,42 @@ function localApi(
             });
           const input = await body(request),
             title = String(input.title || "").trim(),
-            value = Number(
-              String(input.value || "0")
-                .replace(/\./g, "")
-                .replace(",", "."),
-            );
-          if (title.length < 2 || !Number.isFinite(value) || value < 0)
+            services = (Array.isArray(input.services) ? input.services : [])
+              .map((item: Record<string, unknown>) => ({
+                id: randomUUID(),
+                name: String(item.name || "").trim(),
+                description: String(item.description || "").trim(),
+                quantity: Math.max(1, Number(item.quantity || 1)),
+                unitValue: Number(item.unitValue || 0),
+                billingType:
+                  item.billingType === "ONE_TIME" ? "ONE_TIME" as const : "RECURRING" as const,
+              }))
+              .filter((item: { name: string; unitValue: number }) =>
+                item.name.length >= 2 && Number.isFinite(item.unitValue) && item.unitValue >= 0,
+              ),
+            value = services.length
+              ? services.reduce(
+                  (total: number, item: { quantity: number; unitValue: number }) =>
+                    total + item.quantity * item.unitValue,
+                  0,
+                )
+              : Number(
+                  String(input.value || "0")
+                    .replace(/\./g, "")
+                    .replace(",", "."),
+                );
+          if (!services.length && title.length >= 2 && Number.isFinite(value) && value >= 0)
+            services.push({
+              id: randomUUID(),
+              name: title,
+              description: String(input.notes || "").trim(),
+              quantity: 1,
+              unitValue: value,
+              billingType: "ONE_TIME",
+            });
+          if (title.length < 2 || !services.length || !Number.isFinite(value) || value < 0)
             return json(response, 400, {
-              message: "Informe título e valor válidos para a proposta.",
+              message: "Informe o título e pelo menos um serviço válido.",
             });
           const now = new Date().toISOString(),
             proposal: CrmProposal = {
@@ -5265,6 +5395,8 @@ function localApi(
                 : "DRAFT",
               validUntil: String(input.validUntil || ""),
               notes: String(input.notes || "").trim(),
+              publicToken: randomBytes(24).toString("hex"),
+              services,
               createdBy: currentUser.id,
               createdAt: now,
             };

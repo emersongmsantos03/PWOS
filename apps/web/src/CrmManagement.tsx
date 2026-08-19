@@ -68,7 +68,20 @@ type Proposal = {
   status: "DRAFT" | "SENT" | "ACCEPTED" | "REJECTED";
   validUntil: string;
   notes: string;
+  publicToken?: string;
+  services?: ProposalService[];
+  customer?: { name: string; email: string; phone: string; document: string };
+  signatureDataUrl?: string;
+  signedAt?: string;
   createdAt: string;
+};
+type ProposalService = {
+  id?: string;
+  name: string;
+  description: string;
+  quantity: number;
+  unitValue: number;
+  billingType: "RECURRING" | "ONE_TIME";
 };
 type Opportunity = {
   id: string;
@@ -901,6 +914,9 @@ function OpportunityWorkspace({
     [taskSaving, setTaskSaving] = useState(false),
     [proposalOpen, setProposalOpen] = useState(false),
     [proposalSaving, setProposalSaving] = useState(false),
+    [generatedProposalLink, setGeneratedProposalLink] = useState(""),
+    [serviceCatalog, setServiceCatalog] = useState<string[]>([]),
+    [proposalServices, setProposalServices] = useState<ProposalService[]>([]),
     [temperatureSaving, setTemperatureSaving] = useState(false),
     [draftTemperature, setDraftTemperature] = useState<Opportunity["temperature"]>(item.temperature),
     [taskKind, setTaskKind] = useState("TASK"),
@@ -928,6 +944,23 @@ function OpportunityWorkspace({
   useEffect(() => {
     void loadTasks();
   }, [item.id]);
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void fetch("/api/crm/opportunities").then(async (response) => {
+        if (!response.ok) return;
+        const data = await response.json(),
+          fresh = (data.opportunities || []).find(
+            (opportunity: Opportunity) => opportunity.id === item.id,
+          );
+        if (
+          fresh &&
+          JSON.stringify(fresh.proposals) !== JSON.stringify(item.proposals)
+        )
+          onChange(fresh);
+      });
+    }, 10_000);
+    return () => window.clearInterval(timer);
+  }, [item.id, item.proposals, onChange]);
   useEffect(() => setDraftTemperature(item.temperature), [item.id, item.temperature]);
   const hasPendingChanges = draftTemperature !== item.temperature;
   const saveWorkspaceChanges = async () => {
@@ -1022,25 +1055,67 @@ function OpportunityWorkspace({
     event.preventDefault();
     setProposalSaving(true);
     setError("");
+    const raw = Object.fromEntries(new FormData(event.currentTarget));
     const response = await fetch(
         `/api/crm/opportunities/${item.id}/proposals`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(
-            Object.fromEntries(new FormData(event.currentTarget)),
-          ),
+          body: JSON.stringify({
+            title: raw.title,
+            validUntil: raw.validUntil,
+            notes: raw.notes,
+            status: "SENT",
+            services: proposalServices,
+          }),
         },
       ),
       data = await response.json();
     setProposalSaving(false);
     if (!response.ok) return setError(data.message);
+    const link = `${window.location.origin}/proposta/${data.proposal.publicToken}`;
+    setGeneratedProposalLink(link);
+    void navigator.clipboard.writeText(link).catch(() => undefined);
     setProposalOpen(false);
     onChange(data.opportunity);
   };
   const openProposal = () => {
     setTaskOpen(false);
+    setError("");
+    setProposalServices([
+      {
+        name: item.serviceInterest || "",
+        description: "",
+        quantity: 1,
+        unitValue: item.potentialValue || 0,
+        billingType: "ONE_TIME",
+      },
+    ]);
+    void fetch("/api/crm/service-catalog")
+      .then(async (response) => {
+        const data = await response.json();
+        if (response.ok) setServiceCatalog(data.services || []);
+      })
+      .catch(() => setServiceCatalog([]));
     setProposalOpen(true);
+  };
+  const updateProposalService = (
+    index: number,
+    patch: Partial<ProposalService>,
+  ) =>
+    setProposalServices((current) =>
+      current.map((service, serviceIndex) =>
+        serviceIndex === index ? { ...service, ...patch } : service,
+      ),
+    );
+  const proposalTotal = proposalServices.reduce(
+    (total, service) => total + service.quantity * service.unitValue,
+    0,
+  );
+  const copyProposalLink = async (token: string) => {
+    await navigator.clipboard.writeText(
+      `${window.location.origin}/proposta/${token}`,
+    );
   };
   const action = (value: string) => {
     if (value === "NOTE") {
@@ -1466,13 +1541,56 @@ function OpportunityWorkspace({
                 <article key={value.id}>
                   <b>{value.title}</b>
                   <span>{money(value.value)}</span>
-                  <small>{value.status}</small>
+                  <small>
+                    {value.signedAt
+                      ? `Assinada por ${value.customer?.name || "cliente"} em ${new Date(value.signedAt).toLocaleString("pt-BR")}`
+                      : value.status === "SENT"
+                        ? "Aguardando assinatura"
+                        : value.status}
+                  </small>
+                  {value.signatureDataUrl && (
+                    <img
+                      className="crm-proposal-signature"
+                      src={value.signatureDataUrl}
+                      alt={`Assinatura de ${value.customer?.name || "cliente"}`}
+                    />
+                  )}
+                  {value.publicToken && (
+                    <button
+                      type="button"
+                      className="crm-proposal-copy"
+                      onClick={() => void copyProposalLink(value.publicToken!)}
+                    >
+                      Copiar link
+                    </button>
+                  )}
                 </article>
               ))}
               {!item.proposals.length && <p>Nenhuma proposta registrada.</p>}
             </AssociationSection>
           </aside>
         </div>
+        {generatedProposalLink && (
+          <div className="crm-proposal-link-backdrop">
+            <section className="crm-proposal-link-modal">
+              <CheckCircle2 />
+              <h2>Link da proposta gerado</h2>
+              <p>Envie este endereço ao cliente para ele preencher os dados e assinar.</p>
+              <div>
+                <input value={generatedProposalLink} readOnly />
+                <button
+                  className="primary"
+                  onClick={() => void navigator.clipboard.writeText(generatedProposalLink)}
+                >
+                  Copiar link
+                </button>
+              </div>
+              <button className="secondary" onClick={() => setGeneratedProposalLink("")}>
+                Concluir
+              </button>
+            </section>
+          </div>
+        )}
         {proposalOpen && (
           <div
             className="crm-task-drawer-backdrop"
@@ -1506,29 +1624,121 @@ function OpportunityWorkspace({
                     placeholder="Ex.: Proposta comercial"
                   />
                 </label>
-                <label>
-                  Valor *
-                  <input
-                    name="value"
-                    required
-                    inputMode="decimal"
-                    defaultValue={item.potentialValue || ""}
-                    placeholder="0,00"
-                  />
-                </label>
-                <label>
-                  Status
-                  <select name="status" defaultValue="DRAFT">
-                    <option value="DRAFT">Rascunho</option>
-                    <option value="SENT">Enviada</option>
-                    <option value="ACCEPTED">Aceita</option>
-                    <option value="REJECTED">Recusada</option>
-                  </select>
-                </label>
                 <label className="full">
                   Validade
                   <input name="validUntil" type="date" />
                 </label>
+                <fieldset className="crm-proposal-services full">
+                  <legend>Serviços da proposta *</legend>
+                  <datalist id="crm-proposal-service-catalog">
+                    {serviceCatalog.map((service) => (
+                      <option value={service} key={service} />
+                    ))}
+                  </datalist>
+                  {proposalServices.map((service, index) => (
+                    <div className="crm-proposal-service-row" key={index}>
+                      <label>
+                        Serviço
+                        <input
+                          required
+                          list="crm-proposal-service-catalog"
+                          value={service.name}
+                          onChange={(event) =>
+                            updateProposalService(index, { name: event.target.value })
+                          }
+                          placeholder="Selecione ou digite um serviço"
+                        />
+                      </label>
+                      <label>
+                        Quantidade
+                        <input
+                          type="number"
+                          min="1"
+                          value={service.quantity}
+                          onChange={(event) =>
+                            updateProposalService(index, {
+                              quantity: Math.max(1, Number(event.target.value)),
+                            })
+                          }
+                        />
+                      </label>
+                      <label>
+                        Valor unitário
+                        <input
+                          required
+                          inputMode="decimal"
+                          value={maskCurrency(service.unitValue)}
+                          onChange={(event) =>
+                            updateProposalService(index, {
+                              unitValue:
+                                Number(event.target.value.replace(/\D/g, "")) / 100,
+                            })
+                          }
+                        />
+                      </label>
+                      <label>
+                        Cobrança
+                        <select
+                          value={service.billingType}
+                          onChange={(event) =>
+                            updateProposalService(index, {
+                              billingType: event.target.value as ProposalService["billingType"],
+                            })
+                          }
+                        >
+                          <option value="ONE_TIME">Única</option>
+                          <option value="RECURRING">Recorrente</option>
+                        </select>
+                      </label>
+                      <label className="full">
+                        Descrição do serviço
+                        <textarea
+                          value={service.description}
+                          onChange={(event) =>
+                            updateProposalService(index, {
+                              description: event.target.value,
+                            })
+                          }
+                          placeholder="Escopo, entregáveis e condições..."
+                        />
+                      </label>
+                      {proposalServices.length > 1 && (
+                        <button
+                          type="button"
+                          className="danger-text"
+                          onClick={() =>
+                            setProposalServices((current) =>
+                              current.filter((_, serviceIndex) => serviceIndex !== index),
+                            )
+                          }
+                        >
+                          Remover serviço
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    className="secondary crm-add-proposal-service"
+                    onClick={() =>
+                      setProposalServices((current) => [
+                        ...current,
+                        {
+                          name: "",
+                          description: "",
+                          quantity: 1,
+                          unitValue: 0,
+                          billingType: "ONE_TIME",
+                        },
+                      ])
+                    }
+                  >
+                    <Plus /> Adicionar serviço
+                  </button>
+                  <strong className="crm-proposal-total">
+                    Total da proposta <span>{money(proposalTotal)}</span>
+                  </strong>
+                </fieldset>
                 <label className="full">
                   Observações
                   <textarea
@@ -1552,7 +1762,7 @@ function OpportunityWorkspace({
                   Cancelar
                 </button>
                 <button className="primary" disabled={proposalSaving}>
-                  {proposalSaving ? "Gerando…" : "Gerar proposta"}
+                  {proposalSaving ? "Gerando…" : "Gerar link da proposta"}
                 </button>
               </footer>
             </form>
