@@ -1641,6 +1641,7 @@ function localApi(
                 notes: proposal.notes,
                 services: proposal.services || [],
                 customer: proposal.customer,
+                signatureDataUrl: proposal.signatureDataUrl,
                 signedAt: proposal.signedAt,
                 opportunityName: opportunity.name,
                 companyName: opportunity.company,

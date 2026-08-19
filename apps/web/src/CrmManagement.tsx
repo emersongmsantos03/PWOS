@@ -13,6 +13,7 @@ import {
   CircleDollarSign,
   Clock3,
   Contact,
+  Download,
   Flame,
   GripVertical,
   History,
@@ -1579,13 +1580,22 @@ function OpportunityWorkspace({
                     />
                   )}
                   {value.publicToken && (
-                    <button
-                      type="button"
-                      className="crm-proposal-copy"
-                      onClick={() => void copyProposalLink(value.publicToken!)}
-                    >
-                      Copiar link
-                    </button>
+                    <div className="crm-proposal-actions">
+                      <button
+                        type="button"
+                        className="crm-proposal-copy"
+                        onClick={() => void copyProposalLink(value.publicToken!)}
+                      >
+                        Copiar link
+                      </button>
+                      <button
+                        type="button"
+                        className="crm-proposal-copy"
+                        onClick={() => window.open(`/proposta/${value.publicToken}`, "_blank")}
+                      >
+                        <Download /> Abrir / PDF
+                      </button>
+                    </div>
                   )}
                   <button
                     type="button"

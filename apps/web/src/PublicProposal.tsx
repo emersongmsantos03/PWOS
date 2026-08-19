@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type PointerEvent } from "react";
-import { CheckCircle2, FileSignature, ShieldCheck } from "lucide-react";
+import { Building2, CheckCircle2, Download, FileSignature, ShieldCheck } from "lucide-react";
 import { isValidDocument, maskDocument, maskPhone } from "./inputMasks";
 import "./PublicProposal.css";
 
@@ -13,6 +13,7 @@ type PublicProposalData = {
   companyName: string;
   signedAt?: string;
   customer?: { name: string; email: string; phone: string; document: string };
+  signatureDataUrl?: string;
   services: Array<{
     id: string;
     name: string;
@@ -70,6 +71,7 @@ export function PublicProposal() {
   };
   const draw = (event: PointerEvent<HTMLCanvasElement>) => {
     if (!drawing.current) return;
+    event.preventDefault();
     const context = event.currentTarget.getContext("2d"),
       position = point(event);
     if (!context) return;
@@ -79,10 +81,14 @@ export function PublicProposal() {
     context.lineJoin = "round";
     context.lineTo(position.x, position.y);
     context.stroke();
-    setHasSignature(true);
   };
-  const stopDrawing = () => {
+  const stopDrawing = (event?: PointerEvent<HTMLCanvasElement>) => {
+    if (!drawing.current) return;
     drawing.current = false;
+    event?.currentTarget.getContext("2d")?.closePath();
+    if (event?.currentTarget.hasPointerCapture(event.pointerId))
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    setHasSignature(true);
   };
   const clearSignature = () => {
     const canvas = canvasRef.current;
@@ -109,28 +115,38 @@ export function PublicProposal() {
       data = await response.json();
     setSaving(false);
     if (!response.ok) return setError(data.message);
+    const signatureDataUrl = canvasRef.current?.toDataURL("image/png") || "";
+    setProposal((current) => current ? {
+      ...current,
+      status: "ACCEPTED",
+      signedAt: data.signedAt,
+      signatureDataUrl,
+      customer: {
+        name: String(raw.name),
+        email: String(raw.email),
+        phone,
+        document,
+      },
+    } : current);
     setSigned(true);
   };
 
   if (loading) return <main className="public-proposal-state">Carregando proposta…</main>;
   if (!proposal)
     return <main className="public-proposal-state"><b>Proposta indisponível</b><p>{error}</p></main>;
-  if (signed || proposal.signedAt)
-    return (
-      <main className="public-proposal-state success">
-        <CheckCircle2 />
-        <h1>Proposta assinada com sucesso</h1>
-        <p>A equipe responsável já recebeu sua confirmação.</p>
-      </main>
-    );
+  const accepted = signed || Boolean(proposal.signedAt);
 
   return (
     <main className="public-proposal-page">
       <header>
-        <img src="/logo-pw-os.png" alt="PW OS" />
-        <span><ShieldCheck /> Documento seguro</span>
+        <img src="/logo-pw-os.png" alt="PW Mídia" />
+        <div>
+          <span><ShieldCheck /> Documento seguro</span>
+          <button onClick={() => window.print()}><Download /> Baixar em PDF</button>
+        </div>
       </header>
       <section className="public-proposal-document">
+        {accepted && <div className="public-proposal-accepted"><CheckCircle2 /><span><b>Proposta aceita e assinada</b><small>A PW Mídia já recebeu a confirmação.</small></span></div>}
         <div className="public-proposal-heading">
           <small>PROPOSTA COMERCIAL</small>
           <h1>{proposal.title}</h1>
@@ -139,6 +155,30 @@ export function PublicProposal() {
             <span>Válida até {new Date(`${proposal.validUntil}T12:00:00`).toLocaleDateString("pt-BR")}</span>
           )}
         </div>
+        <div className="public-proposal-parties">
+          <article>
+            <Building2 />
+            <div><small>PROPONENTE</small><b>PW Mídia</b><span>CNPJ 44.692.354/0001-10</span></div>
+          </article>
+          <article>
+            <Building2 />
+            <div><small>CLIENTE</small><b>{proposal.customer?.name || proposal.companyName || "A identificar"}</b><span>{proposal.customer?.document || proposal.opportunityName}</span></div>
+          </article>
+        </div>
+        <section className="public-proposal-introduction">
+          <h2>Uma parceria orientada a resultados</h2>
+          <p>
+            A PW Mídia apresenta esta proposta com o objetivo de estruturar uma parceria
+            transparente, estratégica e focada no crescimento sustentável da sua empresa.
+            Nosso trabalho combina planejamento, execução, acompanhamento contínuo e
+            decisões apoiadas por dados.
+          </p>
+          <p>
+            O escopo abaixo consolida os serviços, investimentos e condições comerciais
+            acordados. Durante a execução, nossa equipe manterá comunicação ativa sobre
+            prioridades, entregas e oportunidades de melhoria.
+          </p>
+        </section>
         <div className="public-proposal-services">
           <header><b>Serviços</b><span>Investimento</span></header>
           {proposal.services.map((service) => (
@@ -155,8 +195,23 @@ export function PublicProposal() {
           ))}
           <footer><span>Total da proposta</span><strong>{money(proposal.value)}</strong></footer>
         </div>
+        <div className="public-proposal-commercial-summary">
+          <article><small>INVESTIMENTO TOTAL</small><b>{money(proposal.value)}</b></article>
+          <article><small>MODELO DE COBRANÇA</small><b>{proposal.services.some((service) => service.billingType === "RECURRING") ? "Recorrente / conforme escopo" : "Pagamento único"}</b></article>
+          <article><small>VALIDADE</small><b>{proposal.validUntil ? new Date(`${proposal.validUntil}T12:00:00`).toLocaleDateString("pt-BR") : "A combinar"}</b></article>
+        </div>
         {proposal.notes && <div className="public-proposal-notes"><b>Observações e condições</b><p>{proposal.notes}</p></div>}
-        <form className="public-proposal-sign" onSubmit={submit}>
+        <section className="public-proposal-terms">
+          <h2>Condições gerais</h2>
+          <ol>
+            <li>Os serviços serão executados conforme o escopo descrito nesta proposta e as prioridades alinhadas entre as partes.</li>
+            <li>Prazos de início e entrega dependem do envio, pelo cliente, dos acessos, materiais e aprovações necessários.</li>
+            <li>Demandas adicionais ou alterações relevantes de escopo poderão ser avaliadas e orçadas separadamente.</li>
+            <li>Nos serviços recorrentes, o acompanhamento e os ajustes acontecem durante a vigência da contratação.</li>
+            <li>O aceite eletrônico abaixo registra data, identificação do cliente e assinatura vinculada a este documento.</li>
+          </ol>
+        </section>
+        {!accepted ? <form className="public-proposal-sign no-print" onSubmit={submit}>
           <div className="public-proposal-sign-title">
             <FileSignature />
             <div><h2>Aceite e assinatura</h2><p>Preencha seus dados e assine abaixo para aceitar esta proposta.</p></div>
@@ -177,14 +232,22 @@ export function PublicProposal() {
               onPointerMove={draw}
               onPointerUp={stopDrawing}
               onPointerCancel={stopDrawing}
-              onPointerLeave={stopDrawing}
             />
+            {!hasSignature && <span className="public-signature-hint">Desenhe sua assinatura aqui</span>}
             <button type="button" onClick={clearSignature}>Limpar assinatura</button>
           </label>
           <label className="public-proposal-consent"><input type="checkbox" required /> Confirmo que li e aceito os serviços, valores e condições desta proposta.</label>
           {error && <div className="public-proposal-error">{error}</div>}
           <button className="public-proposal-submit" disabled={saving}>{saving ? "Enviando assinatura…" : "Assinar e aceitar proposta"}</button>
-        </form>
+        </form> : (
+          <section className="public-proposal-receipt">
+            <div><CheckCircle2 /><span><small>ACEITE ELETRÔNICO</small><b>{proposal.customer?.name}</b><p>{proposal.customer?.document} · {proposal.customer?.email} · {proposal.customer?.phone}</p><time>Assinado em {proposal.signedAt ? new Date(proposal.signedAt).toLocaleString("pt-BR") : "agora"}</time></span></div>
+            {proposal.signatureDataUrl && <img src={proposal.signatureDataUrl} alt={`Assinatura de ${proposal.customer?.name || "cliente"}`} />}
+          </section>
+        )}
+        <footer className="public-proposal-legal">
+          <b>PW Mídia</b><span>CNPJ 44.692.354/0001-10</span><p>Proposta comercial emitida eletronicamente. O aceite registrado neste documento confirma a concordância com o escopo, os valores e as condições apresentados.</p>
+        </footer>
       </section>
     </main>
   );
