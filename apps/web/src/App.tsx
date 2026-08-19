@@ -215,7 +215,10 @@ function Shell({
   };
   useEffect(() => {
     void loadNotifications();
-    const timer = window.setInterval(() => void loadNotifications(), 5 * 60_000);
+    const timer = window.setInterval(
+      () => void loadNotifications(),
+      5 * 60_000,
+    );
     return () => window.clearInterval(timer);
   }, [user.id]);
   const openNotification = async (item: MediaNotification) => {
@@ -274,7 +277,7 @@ function Shell({
     if (item.to === "/crm") return can("crm.view") || can("opportunities.view");
     return !permissionByPath[item.to] || can(permissionByPath[item.to]);
   });
-  const firstAccessiblePath=visibleNav[0]?.to||"/ajuda";
+  const firstAccessiblePath = visibleNav[0]?.to || "/ajuda";
 
   return (
     <div className="app-shell">
@@ -546,17 +549,73 @@ function Shell({
           </div>
         </header>
         <Routes>
-          <Route path="/" element={can("dashboard.view")?<DashboardBoards user={user}/>:<Navigate to={firstAccessiblePath} replace/>} />
-          <Route path="/clientes" element={<ClientsManagement permissions={user.permissions || []} profile={user.profile} />} />
-          <Route path="/crm" element={<CrmManagement permissions={user.permissions || []} profile={user.profile} />} />
-          <Route path="/tarefas" element={can("creative_ops.view")?<TasksManagement permissions={user.permissions || []} profile={user.profile}/>:<Navigate to={firstAccessiblePath} replace/>} />
-          <Route path="/agenda" element={can("calendar.view")?<CalendarManagement />:<Navigate to={firstAccessiblePath} replace/>} />
+          <Route
+            path="/"
+            element={
+              can("dashboard.view") ? (
+                <DashboardBoards user={user} />
+              ) : (
+                <Navigate to={firstAccessiblePath} replace />
+              )
+            }
+          />
+          <Route
+            path="/clientes"
+            element={
+              <ClientsManagement
+                permissions={user.permissions || []}
+                profile={user.profile}
+              />
+            }
+          />
+          <Route
+            path="/crm"
+            element={
+              <CrmManagement
+                permissions={user.permissions || []}
+                profile={user.profile}
+              />
+            }
+          />
+          <Route
+            path="/tarefas"
+            element={
+              can("creative_ops.view") ? (
+                <TasksManagement
+                  permissions={user.permissions || []}
+                  profile={user.profile}
+                />
+              ) : (
+                <Navigate to={firstAccessiblePath} replace />
+              )
+            }
+          />
+          <Route
+            path="/agenda"
+            element={
+              can("calendar.view") ? (
+                <CalendarManagement />
+              ) : (
+                <Navigate to={firstAccessiblePath} replace />
+              )
+            }
+          />
           <Route path="/financeiro" element={<FinancialManagement />} />
           <Route path="/midia" element={<MediaDashboard />} />
           <Route path="/midia/:id" element={<MediaDashboard />} />
           <Route path="/relatorios" element={<OperationalReports />} />
           <Route path="/chamados" element={<TicketsManagement user={user} />} />
-          <Route path="/equipe" element={<AccessManagement permissions={user.permissions||[]} profile={user.profile} role={user.role} roleId={user.roleId} />} />
+          <Route
+            path="/equipe"
+            element={
+              <AccessManagement
+                permissions={user.permissions || []}
+                profile={user.profile}
+                role={user.role}
+                roleId={user.roleId}
+              />
+            }
+          />
           <Route path="/configuracoes/integracoes" element={<Connections />} />
           <Route
             path="/configuracoes"
@@ -569,8 +628,17 @@ function Shell({
               />
             }
           />
-          <Route path="/ajuda" element={<HelpCenter />} />
-          <Route path="*" element={can("dashboard.view")?<DashboardBoards user={user}/>:<Navigate to={firstAccessiblePath} replace/>} />
+          <Route path="/ajuda" element={<HelpCenter user={user} />} />
+          <Route
+            path="*"
+            element={
+              can("dashboard.view") ? (
+                <DashboardBoards user={user} />
+              ) : (
+                <Navigate to={firstAccessiblePath} replace />
+              )
+            }
+          />
         </Routes>
         <MobileNav />
         {profilePanel && (
@@ -1741,7 +1809,13 @@ function MobileNav() {
   );
 }
 
-function Login({ onLogin, clientPortal = false }: { onLogin: (user: SessionUser) => void; clientPortal?: boolean }) {
+function Login({
+  onLogin,
+  clientPortal = false,
+}: {
+  onLogin: (user: SessionUser) => void;
+  clientPortal?: boolean;
+}) {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -1749,7 +1823,9 @@ function Login({ onLogin, clientPortal = false }: { onLogin: (user: SessionUser)
   const [theme, setTheme] = useState<"light" | "dark">(() =>
     document.documentElement.dataset.theme === "dark" ? "dark" : "light",
   );
-  const rememberedEmailKey = clientPortal ? "pw-client-remembered-email" : "pw-os-remembered-email";
+  const rememberedEmailKey = clientPortal
+    ? "pw-client-remembered-email"
+    : "pw-os-remembered-email";
   const rememberedEmail = localStorage.getItem(rememberedEmailKey) || "";
   const toggleTheme = () =>
     setTheme((current) => {
@@ -1763,21 +1839,24 @@ function Login({ onLogin, clientPortal = false }: { onLogin: (user: SessionUser)
     event.preventDefault();
     setLoading(true);
     setError("");
-    const payload: Record<string, FormDataEntryValue | string> = { ...Object.fromEntries(new FormData(event.currentTarget)), ...(clientPortal ? { portal: "client" } : {}) };
+    const payload: Record<string, FormDataEntryValue | string> = {
+      ...Object.fromEntries(new FormData(event.currentTarget)),
+      ...(clientPortal ? { portal: "client" } : {}),
+    };
     try {
-      const response = await fetch(clientPortal ? "/api/client-auth/login" : "/api/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+      const response = await fetch(
+        clientPortal ? "/api/client-auth/login" : "/api/auth/login",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        },
+      );
       const data = await response.json();
       if (!response.ok) setError(data.message);
       else {
         if (payload.remember)
-          localStorage.setItem(
-            rememberedEmailKey,
-            String(payload.email || ""),
-          );
+          localStorage.setItem(rememberedEmailKey, String(payload.email || ""));
         else localStorage.removeItem(rememberedEmailKey);
         onLogin(data.user);
       }
@@ -1788,55 +1867,118 @@ function Login({ onLogin, clientPortal = false }: { onLogin: (user: SessionUser)
     }
   };
   const features = [
-    [BarChart3, "Gestão", "Inteligente"],
-    [Gauge, "Performance", "Real"],
-    [Activity, "Decisões", "Baseadas em dados"],
-    [Sparkles, "IA", "Integrada"],
-    [ShieldCheck, "Segurança", "Avançada"],
+    [BarChart3, "Operação", "Tudo em um só lugar"],
+    [Gauge, "Clareza", "Indicadores essenciais"],
+    [ShieldCheck, "Confiança", "Acesso protegido"],
   ] as const;
   return (
-    <main className={`login-page login-premium ${clientPortal ? "client-login-page" : ""}`}>
-      {!clientPortal && <button
-        className="login-theme-toggle"
-        onClick={toggleTheme}
-        aria-label={`Ativar tema ${theme === "light" ? "escuro" : "claro"}`}
-        title={`Ativar tema ${theme === "light" ? "escuro" : "claro"}`}
-      >
-        {theme === "light" ? <Moon /> : <Sun />}
-        <span>{theme === "light" ? "Tema escuro" : "Tema claro"}</span>
-      </button>}
+    <main
+      className={`login-page login-premium ${clientPortal ? "client-login-page" : ""}`}
+    >
+      {!clientPortal && (
+        <button
+          className="login-theme-toggle"
+          onClick={toggleTheme}
+          aria-label={`Ativar tema ${theme === "light" ? "escuro" : "claro"}`}
+          title={`Ativar tema ${theme === "light" ? "escuro" : "claro"}`}
+        >
+          {theme === "light" ? <Moon /> : <Sun />}
+          <span>{theme === "light" ? "Tema escuro" : "Tema claro"}</span>
+        </button>
+      )}
       <section className="login-brand">
         <Brand />
         <div className="login-pitch">
-          <h1>{clientPortal ? <>Seus resultados,<br/><strong>sempre à vista.</strong></> : <>O Sistema Operacional<br/>exclusivo do <strong>Grupo PW.</strong></>}</h1>
-          <p>{clientPortal ? <>Acompanhe suas campanhas Meta e Google em um ambiente claro, seguro e preparado para você.</> : <>Inteligência para gerir. Tecnologia para crescer.<br/>Tudo conectado para transformar decisões em resultados.</>}</p>
-          {!clientPortal && <div className="login-feature-grid">
-            {features.map(([Icon, title, caption]) => (
-              <article key={title}>
-                <span>
-                  <Icon />
-                </span>
-                <b>{clientPortal ? ({Gestão:"Campanhas",Performance:"Indicadores",Decisões:"Resultados",IA:"Transparência",Segurança:"Proteção"} as Record<string,string>)[title] : title}</b>
-                <small>{clientPortal ? ({Gestão:"Meta e Google",Performance:"Atualizados",Decisões:"Em um só lugar",IA:"Nos dados",Segurança:"Dos acessos"} as Record<string,string>)[title] : caption}</small>
-              </article>
-            ))}
-          </div>}
+          <h1>
+            {clientPortal ? (
+              <>
+                Seus resultados,
+                <br />
+                <strong>sempre à vista.</strong>
+              </>
+            ) : (
+              <>
+                O Sistema Operacional
+                <br />
+                exclusivo do <strong>Grupo PW.</strong>
+              </>
+            )}
+          </h1>
+          <p>
+            {clientPortal ? (
+              <>
+                Acompanhe suas campanhas Meta e Google em um ambiente claro,
+                seguro e preparado para você.
+              </>
+            ) : (
+              <>
+                Gestão clara para decisões melhores.
+                <br />
+                Pessoas, dados e resultados no mesmo lugar.
+              </>
+            )}
+          </p>
+          {!clientPortal && (
+            <div className="login-feature-grid">
+              {features.map(([Icon, title, caption]) => (
+                <article key={title}>
+                  <span>
+                    <Icon />
+                  </span>
+                  <b>
+                    {clientPortal
+                      ? (
+                          {
+                            Gestão: "Campanhas",
+                            Performance: "Indicadores",
+                            Decisões: "Resultados",
+                            IA: "Transparência",
+                            Segurança: "Proteção",
+                          } as Record<string, string>
+                        )[title]
+                      : title}
+                  </b>
+                  <small>
+                    {clientPortal
+                      ? (
+                          {
+                            Gestão: "Meta e Google",
+                            Performance: "Atualizados",
+                            Decisões: "Em um só lugar",
+                            IA: "Nos dados",
+                            Segurança: "Dos acessos",
+                          } as Record<string, string>
+                        )[title]
+                      : caption}
+                  </small>
+                </article>
+              ))}
+            </div>
+          )}
         </div>
-        {!clientPortal && <footer>
-          <span>
-            <ShieldCheck /> Segurança de nível empresarial <i /> Dados
-            protegidos <i /> Conformidade LGPD
-          </span>
-          <small>Todos os direitos reservados — Grupo PW</small>
-        </footer>}
+        {!clientPortal && (
+          <footer>
+            <span>
+              <ShieldCheck /> Segurança de nível empresarial <i /> Dados
+              protegidos <i /> Conformidade LGPD
+            </span>
+            <small>Todos os direitos reservados — Grupo PW</small>
+          </footer>
+        )}
       </section>
       <section className="login-area">
         <div className="login-card">
-          {!clientPortal && <span className="login-badge">
-            <ShieldCheck /> Acesso seguro
-          </span>}
-          <h2>{clientPortal ? "Portal do Cliente" : "Bem-vindo!"}</h2>
-          <p>{clientPortal ? "Consulte os resultados das suas campanhas com segurança." : "Entre com sua conta para acessar o PW OS."}</p>
+          {!clientPortal && (
+            <span className="login-badge">
+              <ShieldCheck /> Acesso seguro
+            </span>
+          )}
+          <h2>{clientPortal ? "Portal do Cliente" : "Bem-vindo de volta"}</h2>
+          <p>
+            {clientPortal
+              ? "Consulte os resultados das suas campanhas com segurança."
+              : "Entre com sua conta para acessar o PW OS."}
+          </p>
           <form onSubmit={submit}>
             <label>
               E-mail
@@ -1901,45 +2043,378 @@ function Login({ onLogin, clientPortal = false }: { onLogin: (user: SessionUser)
               </div>
             )}
             <button className="primary login-submit" disabled={loading}>
-              {loading ? "Entrando..." : clientPortal ? "Acessar minhas campanhas" : "Entrar no PW OS"}
+              {loading
+                ? "Entrando..."
+                : clientPortal
+                  ? "Acessar minhas campanhas"
+                  : "Entrar no PW OS"}
               <ArrowRight />
             </button>
           </form>
-          {!clientPortal && <small>
-            <LockKeyhole /> Suas credenciais são validadas somente no ambiente
-            local.
-          </small>}
+          {!clientPortal && (
+            <small>
+              <LockKeyhole /> Suas credenciais são validadas somente no ambiente
+              local.
+            </small>
+          )}
         </div>
       </section>
     </main>
   );
 }
 
-type PortalCampaign = { id: string; accountId: string; name: string; status: string; spend: number; impressions: number; clicks: number; leads: number; conversations: number; cpl: number | null; currency?: string };
-function ClientPortal({ user, onLogout }: { user: SessionUser; onLogout: () => void }) {
-  const [data, setData] = useState<any>(null), [error, setError] = useState("");
-  const [portalPlatform, setPortalPlatform] = useState<"ALL" | "META_ADS" | "GOOGLE_ADS">("ALL");
-  const [portalStatus, setPortalStatus] = useState<"ACTIVE" | "PAUSED" | "ALL">("ACTIVE");
+type PortalCampaign = {
+  id: string;
+  accountId: string;
+  name: string;
+  status: string;
+  spend: number;
+  impressions: number;
+  clicks: number;
+  leads: number;
+  conversations: number;
+  cpl: number | null;
+  currency?: string;
+};
+function ClientPortal({
+  user,
+  onLogout,
+}: {
+  user: SessionUser;
+  onLogout: () => void;
+}) {
+  const [data, setData] = useState<any>(null),
+    [error, setError] = useState("");
+  const [portalPlatform, setPortalPlatform] = useState<
+    "ALL" | "META_ADS" | "GOOGLE_ADS"
+  >("ALL");
+  const [portalStatus, setPortalStatus] = useState<"ACTIVE" | "PAUSED" | "ALL">(
+    "ACTIVE",
+  );
   const [portalSearch, setPortalSearch] = useState("");
-  useEffect(() => { fetch("/api/client-portal/data").then(async response => { const payload = await response.json(); if (response.ok) setData(payload); else setError(payload.message); }).catch(() => setError("Não foi possível carregar os dados.")); }, []);
-  const meta = ((data?.meta?.campaigns || []) as PortalCampaign[]).map(item => ({
-    ...item,
-    // Messaging results are now normalized into leads by the Meta adapter.
-    // Avoid counting the legacy conversations field a second time.
-    conversations: item.leads > 0 ? 0 : item.conversations,
-  }));
+  useEffect(() => {
+    fetch("/api/client-portal/data")
+      .then(async (response) => {
+        const payload = await response.json();
+        if (response.ok) setData(payload);
+        else setError(payload.message);
+      })
+      .catch(() => setError("Não foi possível carregar os dados."));
+  }, []);
+  const meta = ((data?.meta?.campaigns || []) as PortalCampaign[]).map(
+    (item) => ({
+      ...item,
+      // Messaging results are now normalized into leads by the Meta adapter.
+      // Avoid counting the legacy conversations field a second time.
+      conversations: item.leads > 0 ? 0 : item.conversations,
+    }),
+  );
   const google = (data?.google?.campaigns || []) as PortalCampaign[];
   const all = [...meta, ...google];
-  const statusMatches = (item: PortalCampaign) => portalStatus === "ALL" || (portalStatus === "ACTIVE" ? ["ACTIVE", "ENABLED"].includes(item.status) : !["ACTIVE", "ENABLED"].includes(item.status));
-  const searchMatches = (item: PortalCampaign) => !portalSearch.trim() || item.name.toLowerCase().includes(portalSearch.trim().toLowerCase());
-  const visibleMeta = portalPlatform !== "GOOGLE_ADS" ? meta.filter(item => statusMatches(item) && searchMatches(item)) : [];
-  const visibleGoogle = portalPlatform !== "META_ADS" ? google.filter(item => statusMatches(item) && searchMatches(item)) : [];
+  const statusMatches = (item: PortalCampaign) =>
+    portalStatus === "ALL" ||
+    (portalStatus === "ACTIVE"
+      ? ["ACTIVE", "ENABLED"].includes(item.status)
+      : !["ACTIVE", "ENABLED"].includes(item.status));
+  const searchMatches = (item: PortalCampaign) =>
+    !portalSearch.trim() ||
+    item.name.toLowerCase().includes(portalSearch.trim().toLowerCase());
+  const visibleMeta =
+    portalPlatform !== "GOOGLE_ADS"
+      ? meta.filter((item) => statusMatches(item) && searchMatches(item))
+      : [];
+  const visibleGoogle =
+    portalPlatform !== "META_ADS"
+      ? google.filter((item) => statusMatches(item) && searchMatches(item))
+      : [];
   const visibleCampaigns = [...visibleMeta, ...visibleGoogle];
-  const total = (key: "spend" | "impressions" | "clicks" | "leads") => visibleCampaigns.reduce((sum, item) => sum + Number(item[key] || 0), 0);
+  const total = (key: "spend" | "impressions" | "clicks" | "leads") =>
+    visibleCampaigns.reduce((sum, item) => sum + Number(item[key] || 0), 0);
   const clientName = data?.client?.name || user.name;
-  return <main className="client-portal-page"><header className="client-portal-header"><div className="client-portal-brand"><Brand compact/><i/><span>Portal do cliente</span></div><div className="client-portal-account"><span className="client-portal-avatar">{clientName.slice(0,2).toUpperCase()}</span><div><b>{clientName}</b><small>{user.email}</small></div><button onClick={onLogout} title="Sair"><LogOut/><span>Sair</span></button></div></header><section className="client-portal-content"><div className="client-portal-welcome"><div><span className="eyebrow">VISÃO GERAL</span><h1>Olá, {user.name.split(" ")[0]}.</h1><p>Acompanhe a performance das campanhas de {clientName}.</p></div><span className="client-readonly"><ShieldCheck/> Ambiente seguro</span></div>
-    {error ? <div className="client-portal-state error"><AlertTriangle/><h2>Não conseguimos carregar seus dados</h2><p>{error}</p><button onClick={() => window.location.reload()}>Tentar novamente</button></div> : !data ? <div className="client-portal-loading"><span/><p>Preparando seus resultados...</p></div> : !all.length ? <div className="client-portal-state empty"><span className="client-state-icon"><BarChart3/></span><small>TUDO PRONTO POR AQUI</small><h2>Suas campanhas aparecerão neste espaço</h2><p>Ainda não existem portfólios vinculados a este acesso. Quando a PW Mídia concluir a configuração, seus indicadores e campanhas serão exibidos automaticamente.</p><div className="client-empty-steps"><span><b>1</b>Vínculo do portfólio</span><i/><span><b>2</b>Sincronização dos dados</span><i/><span><b>3</b>Resultados disponíveis</span></div><a href="mailto:suporte@pwmedia.com.br"><MessagesSquare/> Falar com a PW Mídia</a></div> : <><section className="client-portal-filterbar"><div className="client-platform-tabs"><button className={portalPlatform === "ALL" ? "active" : ""} onClick={() => setPortalPlatform("ALL")}><BarChart3/> Todas</button><button className={portalPlatform === "META_ADS" ? "active" : ""} onClick={() => setPortalPlatform("META_ADS")}><i className="meta"/> Meta Ads</button><button className={portalPlatform === "GOOGLE_ADS" ? "active" : ""} onClick={() => setPortalPlatform("GOOGLE_ADS")}><i className="google"/> Google Ads</button></div><div className="client-filter-controls"><label className="client-campaign-search"><Search/><input value={portalSearch} onChange={event => setPortalSearch(event.target.value)} placeholder="Buscar campanha..."/></label><label className="client-status-select"><span>Status</span><select value={portalStatus} onChange={event => setPortalStatus(event.target.value as typeof portalStatus)}><option value="ACTIVE">Campanhas ativas</option><option value="PAUSED">Pausadas e inativas</option><option value="ALL">Todos os status</option></select><ChevronDown/></label></div></section><section className="client-portal-filter-summary"><span><i/>{visibleCampaigns.length} campanha(s) {portalStatus === "ACTIVE" ? "ativa(s)" : "encontrada(s)"}</span><small>Indicadores atualizados conforme os filtros</small></section><section className="client-portal-kpis">{[[CircleDollarSign,"Investimento",money(total("spend")),"Total filtrado"],[Eye,"Impressões",total("impressions").toLocaleString("pt-BR"),"Visualizações dos anúncios"],[Activity,"Cliques",total("clicks").toLocaleString("pt-BR"),"Acessos gerados"],[TrendingUp,"Resultados",total("leads").toLocaleString("pt-BR"),"Conversões registradas"]].map(([Icon,label,value,detail]) => <article key={label as string}><span><Icon/></span><div><small>{label as string}</small><b>{value as string}</b><em>{detail as string}</em></div></article>)}</section><section className="client-campaigns"><header><div><span className="eyebrow">CAMPANHAS</span><h2>Performance por campanha</h2><p>Visão detalhada no mesmo formato operacional do PW OS</p></div><span className="client-readonly"><Eye/> Somente leitura</span></header>{visibleCampaigns.length ? [["Meta Ads",visibleMeta],["Google Ads",visibleGoogle]].map(([label,items]) => (items as PortalCampaign[]).length ? <div className="client-platform-group" key={label as string}><h3><i className={(label as string).startsWith("Meta") ? "meta" : "google"}/>{label as string}<span>{(items as PortalCampaign[]).length}</span></h3><div className="client-campaign-table-head"><span>Campanha</span><span>Status</span><span>Investimento</span><span>Impressões</span><span>Cliques</span><span>Resultados</span></div>{(items as PortalCampaign[]).map(item => <article key={`${label}-${item.id}`}><div><b>{item.name}</b><small>ID {item.id}</small></div><span><small className={`client-campaign-status ${["ACTIVE","ENABLED"].includes(item.status) ? "active" : "paused"}`}>{["ACTIVE","ENABLED"].includes(item.status) ? "Ativa" : "Pausada"}</small></span><span><small>Investimento</small><b>{money(item.spend || 0)}</b></span><span><small>Impressões</small><b>{Number(item.impressions || 0).toLocaleString("pt-BR")}</b></span><span><small>Cliques</small><b>{Number(item.clicks || 0).toLocaleString("pt-BR")}</b></span><span><small>Resultados</small><b>{Number(item.leads || 0)+Number(item.conversations || 0)}</b></span></article>)}</div> : null) : <div className="client-filter-empty"><Search/><h3>Nenhuma campanha encontrada</h3><p>Ajuste a plataforma, o status ou o termo de busca.</p><button onClick={() => { setPortalPlatform("ALL"); setPortalStatus("ACTIVE"); setPortalSearch(""); }}>Limpar filtros</button></div>}</section></>}
-  </section><footer className="client-portal-footer"><span>PW Mídia · Performance com transparência</span><span><ShieldCheck/> Seus dados estão protegidos</span></footer></main>;
+  return (
+    <main className="client-portal-page">
+      <header className="client-portal-header">
+        <div className="client-portal-brand">
+          <Brand compact />
+          <i />
+          <span>Portal do cliente</span>
+        </div>
+        <div className="client-portal-account">
+          <span className="client-portal-avatar">
+            {clientName.slice(0, 2).toUpperCase()}
+          </span>
+          <div>
+            <b>{clientName}</b>
+            <small>{user.email}</small>
+          </div>
+          <button onClick={onLogout} title="Sair">
+            <LogOut />
+            <span>Sair</span>
+          </button>
+        </div>
+      </header>
+      <section className="client-portal-content">
+        <div className="client-portal-welcome">
+          <div>
+            <span className="eyebrow">VISÃO GERAL</span>
+            <h1>Olá, {user.name.split(" ")[0]}.</h1>
+            <p>Acompanhe a performance das campanhas de {clientName}.</p>
+          </div>
+          <span className="client-readonly">
+            <ShieldCheck /> Ambiente seguro
+          </span>
+        </div>
+        {error ? (
+          <div className="client-portal-state error">
+            <AlertTriangle />
+            <h2>Não conseguimos carregar seus dados</h2>
+            <p>{error}</p>
+            <button onClick={() => window.location.reload()}>
+              Tentar novamente
+            </button>
+          </div>
+        ) : !data ? (
+          <div className="client-portal-loading">
+            <span />
+            <p>Preparando seus resultados...</p>
+          </div>
+        ) : !all.length ? (
+          <div className="client-portal-state empty">
+            <span className="client-state-icon">
+              <BarChart3 />
+            </span>
+            <small>TUDO PRONTO POR AQUI</small>
+            <h2>Suas campanhas aparecerão neste espaço</h2>
+            <p>
+              Ainda não existem portfólios vinculados a este acesso. Quando a PW
+              Mídia concluir a configuração, seus indicadores e campanhas serão
+              exibidos automaticamente.
+            </p>
+            <div className="client-empty-steps">
+              <span>
+                <b>1</b>Vínculo do portfólio
+              </span>
+              <i />
+              <span>
+                <b>2</b>Sincronização dos dados
+              </span>
+              <i />
+              <span>
+                <b>3</b>Resultados disponíveis
+              </span>
+            </div>
+            <a href="mailto:suporte@pwmedia.com.br">
+              <MessagesSquare /> Falar com a PW Mídia
+            </a>
+          </div>
+        ) : (
+          <>
+            <section className="client-portal-filterbar">
+              <div className="client-platform-tabs">
+                <button
+                  className={portalPlatform === "ALL" ? "active" : ""}
+                  onClick={() => setPortalPlatform("ALL")}
+                >
+                  <BarChart3 /> Todas
+                </button>
+                <button
+                  className={portalPlatform === "META_ADS" ? "active" : ""}
+                  onClick={() => setPortalPlatform("META_ADS")}
+                >
+                  <i className="meta" /> Meta Ads
+                </button>
+                <button
+                  className={portalPlatform === "GOOGLE_ADS" ? "active" : ""}
+                  onClick={() => setPortalPlatform("GOOGLE_ADS")}
+                >
+                  <i className="google" /> Google Ads
+                </button>
+              </div>
+              <div className="client-filter-controls">
+                <label className="client-campaign-search">
+                  <Search />
+                  <input
+                    value={portalSearch}
+                    onChange={(event) => setPortalSearch(event.target.value)}
+                    placeholder="Buscar campanha..."
+                  />
+                </label>
+                <label className="client-status-select">
+                  <span>Status</span>
+                  <select
+                    value={portalStatus}
+                    onChange={(event) =>
+                      setPortalStatus(event.target.value as typeof portalStatus)
+                    }
+                  >
+                    <option value="ACTIVE">Campanhas ativas</option>
+                    <option value="PAUSED">Pausadas e inativas</option>
+                    <option value="ALL">Todos os status</option>
+                  </select>
+                  <ChevronDown />
+                </label>
+              </div>
+            </section>
+            <section className="client-portal-filter-summary">
+              <span>
+                <i />
+                {visibleCampaigns.length} campanha(s){" "}
+                {portalStatus === "ACTIVE" ? "ativa(s)" : "encontrada(s)"}
+              </span>
+              <small>Indicadores atualizados conforme os filtros</small>
+            </section>
+            <section className="client-portal-kpis">
+              {[
+                [
+                  CircleDollarSign,
+                  "Investimento",
+                  money(total("spend")),
+                  "Total filtrado",
+                ],
+                [
+                  Eye,
+                  "Impressões",
+                  total("impressions").toLocaleString("pt-BR"),
+                  "Visualizações dos anúncios",
+                ],
+                [
+                  Activity,
+                  "Cliques",
+                  total("clicks").toLocaleString("pt-BR"),
+                  "Acessos gerados",
+                ],
+                [
+                  TrendingUp,
+                  "Resultados",
+                  total("leads").toLocaleString("pt-BR"),
+                  "Conversões registradas",
+                ],
+              ].map(([Icon, label, value, detail]) => (
+                <article key={label as string}>
+                  <span>
+                    <Icon />
+                  </span>
+                  <div>
+                    <small>{label as string}</small>
+                    <b>{value as string}</b>
+                    <em>{detail as string}</em>
+                  </div>
+                </article>
+              ))}
+            </section>
+            <section className="client-campaigns">
+              <header>
+                <div>
+                  <span className="eyebrow">CAMPANHAS</span>
+                  <h2>Performance por campanha</h2>
+                  <p>Visão detalhada no mesmo formato operacional do PW OS</p>
+                </div>
+                <span className="client-readonly">
+                  <Eye /> Somente leitura
+                </span>
+              </header>
+              {visibleCampaigns.length ? (
+                [
+                  ["Meta Ads", visibleMeta],
+                  ["Google Ads", visibleGoogle],
+                ].map(([label, items]) =>
+                  (items as PortalCampaign[]).length ? (
+                    <div
+                      className="client-platform-group"
+                      key={label as string}
+                    >
+                      <h3>
+                        <i
+                          className={
+                            (label as string).startsWith("Meta")
+                              ? "meta"
+                              : "google"
+                          }
+                        />
+                        {label as string}
+                        <span>{(items as PortalCampaign[]).length}</span>
+                      </h3>
+                      <div className="client-campaign-table-head">
+                        <span>Campanha</span>
+                        <span>Status</span>
+                        <span>Investimento</span>
+                        <span>Impressões</span>
+                        <span>Cliques</span>
+                        <span>Resultados</span>
+                      </div>
+                      {(items as PortalCampaign[]).map((item) => (
+                        <article key={`${label}-${item.id}`}>
+                          <div>
+                            <b>{item.name}</b>
+                            <small>ID {item.id}</small>
+                          </div>
+                          <span>
+                            <small
+                              className={`client-campaign-status ${["ACTIVE", "ENABLED"].includes(item.status) ? "active" : "paused"}`}
+                            >
+                              {["ACTIVE", "ENABLED"].includes(item.status)
+                                ? "Ativa"
+                                : "Pausada"}
+                            </small>
+                          </span>
+                          <span>
+                            <small>Investimento</small>
+                            <b>{money(item.spend || 0)}</b>
+                          </span>
+                          <span>
+                            <small>Impressões</small>
+                            <b>
+                              {Number(item.impressions || 0).toLocaleString(
+                                "pt-BR",
+                              )}
+                            </b>
+                          </span>
+                          <span>
+                            <small>Cliques</small>
+                            <b>
+                              {Number(item.clicks || 0).toLocaleString("pt-BR")}
+                            </b>
+                          </span>
+                          <span>
+                            <small>Resultados</small>
+                            <b>
+                              {Number(item.leads || 0) +
+                                Number(item.conversations || 0)}
+                            </b>
+                          </span>
+                        </article>
+                      ))}
+                    </div>
+                  ) : null,
+                )
+              ) : (
+                <div className="client-filter-empty">
+                  <Search />
+                  <h3>Nenhuma campanha encontrada</h3>
+                  <p>Ajuste a plataforma, o status ou o termo de busca.</p>
+                  <button
+                    onClick={() => {
+                      setPortalPlatform("ALL");
+                      setPortalStatus("ACTIVE");
+                      setPortalSearch("");
+                    }}
+                  >
+                    Limpar filtros
+                  </button>
+                </div>
+              )}
+            </section>
+          </>
+        )}
+      </section>
+      <footer className="client-portal-footer">
+        <span>PW Mídia · Performance com transparência</span>
+        <span>
+          <ShieldCheck /> Seus dados estão protegidos
+        </span>
+      </footer>
+    </main>
+  );
 }
 
 function PasswordSetup({
@@ -1983,7 +2458,10 @@ function PasswordSetup({
   const rules = clientPortal
     ? [
         { label: "Pelo menos 8 caracteres", valid: password.length >= 8 },
-        { label: "Sem espaços", valid: password.length > 0 && !/\s/.test(password) },
+        {
+          label: "Sem espaços",
+          valid: password.length > 0 && !/\s/.test(password),
+        },
       ]
     : internalRules;
   const strong = rules.every((rule) => rule.valid) && password === confirmation;
@@ -1992,11 +2470,16 @@ function PasswordSetup({
     if (!strong) return;
     setLoading(true);
     setError("");
-    const response = await fetch(clientPortal ? "/api/client-auth/change-password" : "/api/auth/change-password", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ password, confirmation }),
-    });
+    const response = await fetch(
+      clientPortal
+        ? "/api/client-auth/change-password"
+        : "/api/auth/change-password",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password, confirmation }),
+      },
+    );
     const data = await response.json();
     if (!response.ok) setError(data.message);
     else onComplete(data.user);
@@ -2004,7 +2487,12 @@ function PasswordSetup({
   };
   return (
     <div className="password-setup-page" role="presentation">
-      <section className="password-setup-card" role="dialog" aria-modal="true" aria-labelledby="first-access-title">
+      <section
+        className="password-setup-card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="first-access-title"
+      >
         <div className="password-setup-header">
           <div className="password-security-icon">
             <ShieldCheck />
@@ -2012,10 +2500,19 @@ function PasswordSetup({
           <div>
             <span className="eyebrow">PRIMEIRO ACESSO</span>
             <h1 id="first-access-title">Proteja sua conta</h1>
-            <p>Crie uma senha definitiva para continuar {clientPortal?"no Portal do Cliente":"no PW OS"}.</p>
+            <p>
+              Crie uma senha definitiva para continuar{" "}
+              {clientPortal ? "no Portal do Cliente" : "no PW OS"}.
+            </p>
           </div>
         </div>
-        <div className="password-welcome"><b>Olá, {user.name.split(" ")[0]}!</b><span>Substitua sua senha temporária antes de acessar {clientPortal ? "o Portal do Cliente" : "o sistema"}.</span></div>
+        <div className="password-welcome">
+          <b>Olá, {user.name.split(" ")[0]}!</b>
+          <span>
+            Substitua sua senha temporária antes de acessar{" "}
+            {clientPortal ? "o Portal do Cliente" : "o sistema"}.
+          </span>
+        </div>
         <form onSubmit={submit}>
           <label>
             Nova senha
@@ -2037,19 +2534,23 @@ function PasswordSetup({
             <div>
               <i
                 className={
-                  rules.filter((rule) => rule.valid).length >= Math.ceil(rules.length / 3) ? "active" : ""
-                }
-              />
-              <i
-                className={
-                  rules.filter((rule) => rule.valid).length >= Math.ceil(rules.length * 2 / 3) ? "active" : ""
-                }
-              />
-              <i
-                className={
-                  rules.every((rule) => rule.valid)
-                    ? "active strong"
+                  rules.filter((rule) => rule.valid).length >=
+                  Math.ceil(rules.length / 3)
+                    ? "active"
                     : ""
+                }
+              />
+              <i
+                className={
+                  rules.filter((rule) => rule.valid).length >=
+                  Math.ceil((rules.length * 2) / 3)
+                    ? "active"
+                    : ""
+                }
+              />
+              <i
+                className={
+                  rules.every((rule) => rule.valid) ? "active strong" : ""
                 }
               />
             </div>
@@ -2120,12 +2621,21 @@ export function App() {
       .finally(() => setChecking(false));
   }, []);
   useEffect(() => {
-    if (user && ((clientPortal && user.profile !== "CLIENT") || (!clientPortal && user.profile === "CLIENT"))) {
-      void fetch(clientPortal ? "/api/client-auth/logout" : "/api/auth/logout", { method: "POST" }).finally(() => setUser(null));
+    if (
+      user &&
+      ((clientPortal && user.profile !== "CLIENT") ||
+        (!clientPortal && user.profile === "CLIENT"))
+    ) {
+      void fetch(
+        clientPortal ? "/api/client-auth/logout" : "/api/auth/logout",
+        { method: "POST" },
+      ).finally(() => setUser(null));
     }
   }, [clientPortal, user?.id]);
   const logout = async () => {
-    await fetch(clientPortal ? "/api/client-auth/logout" : "/api/auth/logout", { method: "POST" });
+    await fetch(clientPortal ? "/api/client-auth/logout" : "/api/auth/logout", {
+      method: "POST",
+    });
     setUser(null);
   };
   if (checking)
@@ -2137,12 +2647,24 @@ export function App() {
     );
   if (!user) return <Login onLogin={setUser} clientPortal={clientPortal} />;
   if (user.mustChangePassword)
-    return <>
-      <div className="password-locked-content" inert aria-hidden="true">
-        {clientPortal&&user.profile==="CLIENT"?<ClientPortal user={user} onLogout={logout}/>:<Shell user={user} onLogout={logout} onUserUpdate={setUser}/>}
-      </div>
-      <PasswordSetup user={user} onComplete={setUser} onLogout={logout} clientPortal={clientPortal}/>
-    </>;
-  if (clientPortal && user.profile === "CLIENT") return <ClientPortal user={user} onLogout={logout} />;
+    return (
+      <>
+        <div className="password-locked-content" inert aria-hidden="true">
+          {clientPortal && user.profile === "CLIENT" ? (
+            <ClientPortal user={user} onLogout={logout} />
+          ) : (
+            <Shell user={user} onLogout={logout} onUserUpdate={setUser} />
+          )}
+        </div>
+        <PasswordSetup
+          user={user}
+          onComplete={setUser}
+          onLogout={logout}
+          clientPortal={clientPortal}
+        />
+      </>
+    );
+  if (clientPortal && user.profile === "CLIENT")
+    return <ClientPortal user={user} onLogout={logout} />;
   return <Shell user={user} onLogout={logout} onUserUpdate={setUser} />;
 }

@@ -53,6 +53,7 @@ enum LeadTemperature {
   COLD
   WARM
   HOT
+  VERY_HOT
 }
 
 enum CommercialPriority {
@@ -91,6 +92,8 @@ enum CreativeTaskType {
   WEB
   PAID_MEDIA
   EMAIL
+  CALL
+  MEETING
   OTHER
 }
 
@@ -814,13 +817,19 @@ model AuditLog {
   id             String   @id @default(uuid()) @db.Uuid
   organizationId String   @db.Uuid
   actorUserId    String?  @db.Uuid
+  actorName      String   @default("Sistema")
   action         String
   targetType     String
   targetId       String?
+  path           String   @default("")
+  method         String   @default("")
+  status         Int      @default(200)
   metadata       Json?
   createdAt      DateTime @default(now())
 
   @@index([organizationId, createdAt])
+  @@index([organizationId, targetType, targetId])
+  @@index([organizationId, actorUserId, createdAt])
 }
 
 model IntegrationConnection {

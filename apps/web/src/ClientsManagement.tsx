@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { createPortal } from "react-dom";
 import {
   AlertTriangle,
@@ -18,6 +18,7 @@ import {
   Phone,
   Plus,
   Search,
+  Save,
   ShieldCheck,
   Trash2,
   UserRound,
@@ -25,6 +26,7 @@ import {
   X,
 } from "lucide-react";
 import { isValidDocument, maskDocument, maskPhone } from "./inputMasks";
+import { SearchableSelect } from "./SearchableSelect";
 import "./ClientConnections.css";
 import "./ClientRefinements.css";
 
@@ -54,7 +56,11 @@ type Contact = {
   whatsapp: string;
   primary: boolean;
   createdAt: string;
+  companyId?: string;
+  companyName?: string;
 };
+type CompanyOption = { id: string; name: string; document: string; clientId: string };
+type ContactOption = { id: string; name: string; role: string; email: string; phone: string; companyId: string; companyName: string; clientId: string };
 type Service = {
   id: string;
   name: string;
@@ -113,6 +119,39 @@ function ClientStatusBadge({ status }: { status: ClientStatus }) {
   );
 }
 
+function ContactMultiPicker({ options, value, onChange }: { options: ContactOption[]; value: string[]; onChange: (value: string[]) => void }) {
+  const [query, setQuery] = useState(""), [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const close = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node)) setOpen(false); };
+    document.addEventListener("pointerdown", close);
+    return () => document.removeEventListener("pointerdown", close);
+  }, []);
+  const filtered = options.filter((contact) =>
+    `${contact.name} ${contact.email} ${contact.role} ${contact.companyName}`.toLocaleLowerCase("pt-BR").includes(query.trim().toLocaleLowerCase("pt-BR")),
+  );
+  return <div className={`client-contact-multi ${open ? "open" : ""}`} ref={root}>
+    <button type="button" className="client-contact-multi-trigger" onClick={() => setOpen((current) => !current)}>
+      <span>{value.length ? <><b>{value.length} contato{value.length > 1 ? "s" : ""} selecionado{value.length > 1 ? "s" : ""}</b><small>Clique para revisar a seleção</small></> : <><b>Escolher contatos</b><small>Pesquise e marque um ou vários</small></>}</span>
+      <ChevronDown />
+    </button>
+    {open && <div className="client-contact-multi-popover">
+      <div className="client-contact-multi-search"><Search/><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Nome, e-mail ou empresa..."/></div>
+      <div className="client-contact-multi-options">
+        {filtered.length ? filtered.map((contact) => {
+          const selected = value.includes(contact.id);
+          return <label className={selected ? "selected" : ""} key={contact.id}>
+            <input type="checkbox" checked={selected} onChange={() => onChange(selected ? value.filter((id) => id !== contact.id) : [...value, contact.id])}/>
+            <span><b>{contact.name}</b><small>{[contact.companyName, contact.role, contact.email].filter(Boolean).join(" · ") || "Sem detalhes adicionais"}</small></span>
+            {selected && <Check />}
+          </label>;
+        }) : <p>Nenhum contato encontrado.</p>}
+      </div>
+      <footer><small>{value.length} selecionado{value.length === 1 ? "" : "s"}</small><button type="button" onClick={() => setOpen(false)}>Concluir</button></footer>
+    </div>}
+  </div>;
+}
+
 export function ClientsManagement({ permissions = [], profile = "" }: { permissions?: string[]; profile?: string }) {
   const hasPermission = (permission: string) =>
     profile === "MASTER" || permissions.includes(permission);
@@ -127,6 +166,7 @@ export function ClientsManagement({ permissions = [], profile = "" }: { permissi
   const [creating, setCreating] = useState(false);
   const [viewing, setViewing] = useState<Client | null>(null);
   const [deleting, setDeleting] = useState<Client | null>(null);
+  const [deleteError, setDeleteError] = useState("");
   const [error, setError] = useState("");
   const load = () =>
     fetch("/api/clients").then(async (response) => {
@@ -175,11 +215,12 @@ export function ClientsManagement({ permissions = [], profile = "" }: { permissi
     const response = await fetch(`/api/clients/${deleting.id}`, {
       method: "DELETE",
     });
+    const data = await response.json();
     if (response.ok) {
       setDeleting(null);
       setViewing(null);
       await load();
-    }
+    } else setDeleteError(data.message || "Não foi possível excluir este cliente.");
   };
   const counts = {
     active: clients.filter((c) => c.status === "ACTIVE").length,
@@ -357,7 +398,11 @@ export function ClientsManagement({ permissions = [], profile = "" }: { permissi
             setViewing(null);
             setError("");
           }}
-          onDelete={() => setDeleting(viewing)}
+          onDelete={() => {
+            setDeleting(viewing);
+            setViewing(null);
+            setDeleteError("");
+          }}
         />
       )}
       {deleting && (
@@ -365,6 +410,7 @@ export function ClientsManagement({ permissions = [], profile = "" }: { permissi
           client={deleting}
           onClose={() => setDeleting(null)}
           onConfirm={remove}
+          error={deleteError}
         />
       )}
     </div>
@@ -582,6 +628,11 @@ function ClientDetails({
       null,
     ),
     [error, setError] = useState("");
+  const [availableCompanies, setAvailableCompanies] = useState<CompanyOption[]>([]),
+    [availableContacts, setAvailableContacts] = useState<ContactOption[]>([]),
+    [linkedCompanies, setLinkedCompanies] = useState<CompanyOption[]>([]),
+    [companyChoice, setCompanyChoice] = useState(""),
+    [contactChoices, setContactChoices] = useState<string[]>([]);
   const [portalUsers, setPortalUsers] = useState<ClientPortalUser[]>([]), [addingAccess, setAddingAccess] = useState(false);
   const load = () =>
     Promise.all([fetch(`/api/clients/${client.id}`), fetch(`/api/clients/${client.id}/users`)]).then(async ([response, accessResponse]) => {
@@ -591,6 +642,9 @@ function ClientDetails({
         setServices(data.services || []);
         setProjects(data.projects || []);
         setTimeline(data.timeline || []);
+        setAvailableCompanies(data.availableCompanies || []);
+        setAvailableContacts(data.availableContacts || []);
+        setLinkedCompanies(data.linkedCompanies || []);
         setConnections(
           data.connections || {
             mediaAccounts: [],
@@ -633,11 +687,30 @@ function ClientDetails({
     await load();
   };
   const removeContact = async (id: string) => {
-    if (!confirm("Remover este contato?")) return;
+    if (!confirm("Desvincular este contato do cliente? O cadastro será preservado no CRM.")) return;
     const response = await fetch(`/api/clients/${client.id}/contacts/${id}`, {
       method: "DELETE",
     });
     if (response.ok) await load();
+  };
+  const linkContact = async () => {
+    if (!contactChoices.length) return;
+    const responses = await Promise.all(contactChoices.map((contactId) => fetch(`/api/clients/${client.id}/contact-links`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ contactId }),
+    })));
+    const failed = responses.find((response) => !response.ok);
+    if (failed) return setError((await failed.json()).message || "Não foi possível associar todos os contatos.");
+    setContactChoices([]); setError(""); await load();
+  };
+  const linkCompany = async () => {
+    if (!companyChoice) return;
+    const response = await fetch(`/api/clients/${client.id}/company-link`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ companyId: companyChoice }),
+    });
+    const data = await response.json();
+    if (!response.ok) return setError(data.message);
+    setCompanyChoice(""); setError(""); await load();
   };
   const monthly = services
     .filter((item) => item.billingType === "RECURRING")
@@ -666,11 +739,14 @@ function ClientDetails({
           </div>
         </header>
         {canEdit || canDelete ? <div className="client-detail-actions">
-          {canEdit && <button className="primary" onClick={onEdit}>
-            <Edit3 /> Editar cliente
+          {canEdit && <button className="secondary client-edit-trigger" onClick={onEdit}>
+            <Edit3 /> Editar dados
           </button>}
-          {canDelete && <button className="secondary" onClick={onDelete}>
-            <Trash2 /> Excluir
+          {canEdit && <button type="button" className="primary client-save-trigger" onClick={onClose}>
+            <Save /> Salvar e fechar
+          </button>}
+          {canDelete && <button type="button" className="client-delete-trigger" onClick={onDelete} title="Excluir cliente" aria-label={`Excluir ${client.name}`}>
+            <Trash2 />
           </button>}
         </div> : <div className="client-readonly-banner"><ShieldCheck /><span><b>Modo de visualização</b><small>Você pode consultar os dados deste cliente.</small></span></div>}
         <section className="client-detail-kpis">
@@ -879,6 +955,15 @@ function ClientDetails({
           {tab === "CONTACTS" && (
             <ClientContacts
               contacts={contacts}
+              companies={availableCompanies}
+              contactOptions={availableContacts}
+              linkedCompany={linkedCompanies[0]}
+              companyChoice={companyChoice}
+              contactChoices={contactChoices}
+              onCompanyChoice={setCompanyChoice}
+              onContactChoices={setContactChoices}
+              onLinkCompany={linkCompany}
+              onLinkContact={linkContact}
               canEdit={canEdit}
               onAdd={() => setAdding("CONTACT")}
               onRemove={removeContact}
@@ -900,14 +985,14 @@ function ClientDetails({
           )}{" "}
           {tab === "HISTORY" && <ClientTimeline timeline={timeline} />}
         </main>
-        {adding && canEdit && (
+        {adding && canEdit && createPortal(
           <ClientSubForm
             kind={adding}
             error={error}
             onClose={() => setAdding(null)}
             onSave={add}
           />
-        )}
+        , document.body)}
         {addingAccess && createPortal(<div className="modal-backdrop client-access-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) setAddingAccess(false); }}><section className="client-access-modal" role="dialog" aria-modal="true" aria-labelledby="client-access-title"><header><span><Users/></span><div><small>NOVO USUÁRIO</small><h2 id="client-access-title">Criar acesso do cliente</h2><p>Este acesso será exclusivo para consulta de campanhas.</p></div><button type="button" onClick={() => setAddingAccess(false)} aria-label="Fechar"><X/></button></header><form onSubmit={createAccess}><div className="client-access-notice"><ShieldCheck/><div><b>Acesso protegido e somente leitura</b><p>O usuário poderá visualizar apenas os portfólios Meta e Google vinculados a {client.name}. Nenhuma edição será permitida.</p></div></div><div className="client-access-fields"><label>Nome completo <span>*</span><input name="name" required autoFocus placeholder="Ex.: João da Silva" autoComplete="name"/></label><label>E-mail de acesso <span>*</span><input name="email" type="email" required placeholder="joao@empresa.com.br" autoComplete="email"/></label><label className="client-password-field">Senha temporária <span>*</span><input name="password" type="password" minLength={6} required autoComplete="new-password" placeholder="Mínimo de 6 caracteres"/><small><LockKeyhole/> No primeiro login, o cliente será obrigado a criar uma nova senha.</small></label></div>{error && <div className="form-error"><AlertTriangle/>{error}</div>}<div className="client-portal-link"><ExternalLink/><span><small>LINK DE ACESSO</small><b>{window.location.origin}/portal-cliente</b></span></div><footer><button type="button" className="secondary" onClick={() => setAddingAccess(false)}>Cancelar</button><button className="primary"><UserRound/> Criar acesso</button></footer></form></section></div>, document.body)}
       </aside>
     </div>
@@ -916,11 +1001,29 @@ function ClientDetails({
 
 function ClientContacts({
   contacts,
+  companies,
+  contactOptions,
+  linkedCompany,
+  companyChoice,
+  contactChoices,
+  onCompanyChoice,
+  onContactChoices,
+  onLinkCompany,
+  onLinkContact,
   canEdit,
   onAdd,
   onRemove,
 }: {
   contacts: Contact[];
+  companies: CompanyOption[];
+  contactOptions: ContactOption[];
+  linkedCompany?: CompanyOption;
+  companyChoice: string;
+  contactChoices: string[];
+  onCompanyChoice: (value: string) => void;
+  onContactChoices: (value: string[]) => void;
+  onLinkCompany: () => void;
+  onLinkContact: () => void;
   canEdit: boolean;
   onAdd: () => void;
   onRemove: (id: string) => void;
@@ -933,9 +1036,52 @@ function ClientContacts({
           <p>Decisores, financeiro e demais pontos de contato.</p>
         </div>
         {canEdit && <button className="primary" onClick={onAdd}>
-          <Plus /> Adicionar contato
+          <Plus /> Criar novo contato
         </button>}
       </div>
+      {canEdit && (
+        <div className="client-association-panel">
+          <div className="client-association-heading">
+            <div>
+              <b>Conectar cadastros existentes</b>
+              <small>Escolha abaixo e confirme. O vínculo é salvo na hora.</small>
+            </div>
+            <span className="client-autosave-badge"><Check /> Salvamento automático</span>
+          </div>
+          <div className="client-association-grid">
+            <div className="client-association-card">
+              <header><i>1</i><span><b>Associar uma empresa</b><small>{linkedCompany ? `Empresa atual: ${linkedCompany.name}` : "Nenhuma empresa associada"}</small></span><Building2 /></header>
+              <div className="client-association-control">
+                <SearchableSelect
+                  value={companyChoice}
+                  onChange={onCompanyChoice}
+                  placeholder={linkedCompany?.name || "Buscar empresa..."}
+                  searchPlaceholder="Buscar por empresa ou documento..."
+                  options={companies.map((company) => ({
+                    value: company.id,
+                    label: company.name,
+                    description: company.document || (company.clientId ? "Já associada a um cliente" : "Empresa do CRM"),
+                  }))}
+                />
+                <button className="primary" type="button" disabled={!companyChoice} onClick={onLinkCompany}>{linkedCompany ? "Trocar empresa" : "Associar empresa"}</button>
+              </div>
+              <p>Selecione a empresa deste cliente. Você poderá trocar depois.</p>
+            </div>
+            <div className="client-association-card">
+              <header><i>2</i><span><b>Adicionar contato existente</b><small>Busque por nome, e-mail ou empresa</small></span><UserRound /></header>
+              <div className="client-association-control">
+                <ContactMultiPicker
+                  value={contactChoices}
+                  onChange={onContactChoices}
+                  options={contactOptions.filter((contact) => !contacts.some((item) => item.id === contact.id))}
+                />
+                <button className="primary" type="button" disabled={!contactChoices.length} onClick={onLinkContact}>Adicionar {contactChoices.length || ""} contato{contactChoices.length === 1 ? "" : "s"}</button>
+              </div>
+              <p>O contato continuará disponível no CRM e será ligado a este cliente.</p>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="client-record-list">
         {contacts.map((item) => (
           <article key={item.id}>
@@ -948,12 +1094,13 @@ function ClientContacts({
                 {item.primary && <small>Principal</small>}
               </b>
               <span>{item.role || "Cargo não informado"}</span>
+              {item.companyName && <span className="client-contact-company"><Building2 /> {item.companyName}</span>}
               <span>
                 {item.email} {item.phone && `· ${item.phone}`}
               </span>
             </div>
-            {canEdit && <button onClick={() => onRemove(item.id)}>
-              <Trash2 />
+            {canEdit && <button type="button" className="client-unlink-contact" onClick={() => onRemove(item.id)} title="Desvincular contato" aria-label={`Desvincular ${item.name}`}>
+              <X />
             </button>}
           </article>
         ))}
@@ -1106,7 +1253,8 @@ function ClientSubForm({
   onSave: (event: FormEvent<HTMLFormElement>) => void;
 }) {
   return (
-    <div className="client-subform">
+    <div className="modal-backdrop client-subform-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <section className="client-subform" role="dialog" aria-modal="true">
       <header>
         <div>
           <h3>
@@ -1118,7 +1266,7 @@ function ClientSubForm({
           </h3>
           <p>As informações ficarão vinculadas permanentemente ao cliente.</p>
         </div>
-        <button onClick={onClose}>
+        <button type="button" onClick={onClose}>
           <X />
         </button>
       </header>
@@ -1224,6 +1372,7 @@ function ClientSubForm({
           <button className="primary">Salvar</button>
         </footer>
       </form>
+    </section>
     </div>
   );
 }
@@ -1232,14 +1381,16 @@ function DeleteClient({
   client,
   onClose,
   onConfirm,
+  error,
 }: {
   client: Client;
   onClose: () => void;
   onConfirm: () => void;
+  error: string;
 }) {
   const [confirmed, setConfirmed] = useState(false);
   return (
-    <div className="modal-backdrop">
+    <div className="modal-backdrop client-delete-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
       <section className="delete-client-modal">
         <span>
           <Trash2 />
@@ -1258,6 +1409,7 @@ function DeleteClient({
           />{" "}
           Entendo que esta ação remove o cadastro local.
         </label>
+        {error && <div className="form-error"><AlertTriangle />{error}</div>}
         <div>
           <button className="secondary" onClick={onClose}>
             Cancelar

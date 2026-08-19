@@ -30,14 +30,18 @@
 .media-link-editor>header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:14px}
 .media-link-editor h3{margin:0;color:var(--heading);font-size:12px}
 .media-link-editor header p{margin:3px 0 0;color:var(--subtle);font-size:7px}
-.media-link-editor header>button{border:0;background:none;color:var(--subtle);font-size:20px;line-height:1}
+.media-link-editor header>button{display:grid;place-items:center;width:28px;height:28px;border:0;border-radius:7px;background:transparent;color:var(--subtle)}
+.media-link-editor header>button:hover{background:var(--surface-soft);color:var(--heading)}
+.media-link-editor header>button svg{width:15px}
 .media-link-fields{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .media-link-fields label{display:flex;min-width:0;flex-direction:column;gap:6px;color:var(--heading);font-size:8px}
 .media-link-fields label>span{display:flex;align-items:center;gap:5px}
 .media-link-fields label>span svg{width:13px;color:var(--accent)}
 .media-link-fields label>span .media-responsible-avatar{width:29px;height:29px;border-radius:8px}
-.media-link-fields select{width:100%;height:40px;padding:0 10px;border:1px solid var(--border);border-radius:8px;background:var(--field);color:var(--heading);font-size:8px;outline:0}
-.media-link-fields select:focus{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 10%,transparent)}
+.media-link-select{position:relative;display:flex;align-items:center;width:100%;height:40px;border:1px solid var(--border);border-radius:8px;background:var(--field)}
+.media-link-select:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 10%,transparent)}
+.media-link-select select{width:100%;height:100%;padding:0 34px 0 11px;border:0;outline:0;appearance:none;-webkit-appearance:none;background:transparent;color:var(--heading);font-size:8px;cursor:pointer}
+.media-link-select>svg{position:absolute;right:11px;width:14px;color:var(--subtle);pointer-events:none}
 .media-link-fields label>small{color:var(--red);font-size:6.5px}
 .media-link-editor>footer{display:flex;justify-content:flex-end;gap:8px;margin-top:14px;padding-top:12px;border-top:1px solid var(--divider)}
 .media-link-editor>footer>button{height:35px}

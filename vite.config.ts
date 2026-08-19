@@ -174,6 +174,7 @@ type Ticket = {
   status: "OPEN" | "IN_PROGRESS" | "WAITING" | "RESOLVED" | "CLOSED";
   dueAt: string;
   participantIds: string[];
+  participantResponses?: Record<string, "PENDING" | "ACCEPTED" | "DECLINED">;
   comments: TicketComment[];
   createdAt: string;
   updatedAt: string;
@@ -189,6 +190,7 @@ type CrmStage = {
 type CrmPipeline = {
   id: string;
   name: string;
+  isCommercial?: boolean;
   departmentIds: string[];
   stages: CrmStage[];
   createdAt: string;
@@ -223,7 +225,7 @@ type Opportunity = {
   whatsapp: string;
   serviceInterest: string;
   potentialValue: number;
-  temperature: "COLD" | "WARM" | "HOT";
+  temperature: "COLD" | "WARM" | "HOT" | "VERY_HOT";
   priority: "LOW" | "MEDIUM" | "HIGH";
   responsibleId: string;
   responsibleName: string;
@@ -329,6 +331,8 @@ type WorkTask = {
     | "WEB"
     | "PAID_MEDIA"
     | "EMAIL"
+    | "CALL"
+    | "MEETING"
     | "OTHER";
   subtype: string;
   priority: "LOW" | "MEDIUM" | "HIGH" | "URGENT";
@@ -407,6 +411,7 @@ type CalendarEvent = {
   ownerId: string;
   ownerName: string;
   participantIds: string[];
+  participantResponses?: Record<string, "PENDING" | "ACCEPTED" | "DECLINED">;
   startAt: string;
   endAt: string;
   location: string;
@@ -486,6 +491,7 @@ type FinancialAudit = {
   userName: string;
   createdAt: string;
 };
+type SystemAudit={id:string;action:"CREATE"|"UPDATE"|"DELETE"|"COMMENT";resource:string;resourceId:string;path:string;method:string;userId:string;userName:string;status:number;createdAt:string};
 const sessions = new Map<string, string>();
 const clientSessions = new Map<string, string>();
 const users = new Map<string, User>();
@@ -512,6 +518,7 @@ const financialEntries = new Map<string, FinancialEntry>();
 const financialSuppliers = new Map<string, FinancialSupplier>();
 const financialCostCenters = new Map<string, FinancialCostCenter>();
 const financialAudits: FinancialAudit[] = [];
+const systemAudits:SystemAudit[]=[];
 const hash = (password: string, salt: string) =>
   scryptSync(password, salt, 64).toString("hex");
 const onlyDigits = (value: string) => value.replace(/\D/g, "");
@@ -679,6 +686,7 @@ function localApi(
   const localNotificationReadsPath = "data/notification-reads.local.json";
   const localMetaDashboardCachePath = "data/meta-dashboard-cache.local.json";
   const localGoogleDashboardCachePath = "data/google-dashboard-cache.local.json";
+  const mediaSyncIntervalMs = 30 * 60 * 1000;
   const localMasterProfilePath = "data/master-profile.local.json";
   const localMasterUserPath = "data/master-user.local.json";
   const localDepartmentsPath = "data/departments.local.json";
@@ -700,6 +708,7 @@ function localApi(
   const localFinancialCostCentersPath =
     "data/financial-cost-centers.local.json";
   const localFinancialAuditsPath = "data/financial-audits.local.json";
+  const localSystemAuditsPath = "data/system-audits.local.json";
   let databaseMirrorTimer: ReturnType<typeof setTimeout> | undefined;
   const scheduleDatabaseMirror = () => {
     clearTimeout(databaseMirrorTimer);
@@ -910,6 +919,7 @@ function localApi(
   const defaultPipeline: CrmPipeline = {
     id: "sales-default",
     name: "Pipeline comercial",
+    isCommercial: true,
     departmentIds: [],
     createdAt: new Date().toISOString(),
     stages: [
@@ -972,6 +982,7 @@ function localApi(
     ).forEach((item) =>
       pipelines.set(item.id, {
         ...item,
+        isCommercial: item.isCommercial ?? /comercial/i.test(item.name),
         departmentIds: item.departmentIds || [],
       }),
     );
@@ -1092,6 +1103,7 @@ function localApi(
         readFileSync(localFinancialAuditsPath, "utf8"),
       ) as FinancialAudit[]),
     );
+  if(existsSync(localSystemAuditsPath))systemAudits.push(...JSON.parse(readFileSync(localSystemAuditsPath,"utf8")) as SystemAudit[]);
   const persistPipelines = () => {
     mkdirSync("data", { recursive: true });
     writeFileSync(
@@ -1238,6 +1250,7 @@ function localApi(
       { mode: 0o600 },
     );
   };
+  const persistSystemAudits=()=>{mkdirSync("data",{recursive:true});writeFileSync(localSystemAuditsPath,JSON.stringify(systemAudits.slice(-10000),null,2),{mode:0o600})};
   let metaBackgroundSyncRunning = false;
   const refreshMetaDashboardCache = async () => {
     if (
@@ -1502,35 +1515,40 @@ function localApi(
       server.httpServer?.once("close", () =>
         clearInterval(attachmentCleanupTimer),
       );
-      const metaInternalSyncToken = randomBytes(24).toString("hex");
-      const runScheduledMetaSync = async () => {
-        if (!runtimeMetaAccessToken || !existsSync(localMetaDashboardCachePath))
-          return;
-        try {
-          const cached = JSON.parse(
-              readFileSync(localMetaDashboardCachePath, "utf8"),
-            ) as { since: string; until: string },
-            address = server.httpServer?.address();
-          if (!address || typeof address === "string") return;
-          await fetch(
-            `http://127.0.0.1:${address.port}/api/media/meta/campaigns?since=${encodeURIComponent(cached.since)}&until=${encodeURIComponent(cached.until)}&refresh=1`,
-            { headers: { "x-pw-meta-background": metaInternalSyncToken } },
-          );
-        } catch (cause) {
-          console.warn(
-            "[Meta Ads] Agendamento de sincronização falhou:",
-            cause instanceof Error ? cause.message : cause,
-          );
-        }
+      const mediaInternalSyncToken = randomBytes(24).toString("hex");
+      const runScheduledMediaSync = async () => {
+        const address = server.httpServer?.address();
+        if (!address || typeof address === "string") return;
+        await Promise.all(
+          [
+            ["meta", localMetaDashboardCachePath, !!runtimeMetaAccessToken],
+            ["google", localGoogleDashboardCachePath, !!runtimeGoogleRefreshToken && !!runtimeGoogleDeveloperToken],
+          ].map(async ([provider, cachePath, configured]) => {
+            if (!configured || !existsSync(String(cachePath))) return;
+            try {
+              const cached = JSON.parse(readFileSync(String(cachePath), "utf8")) as { since: string; until: string };
+              await fetch(
+                `http://127.0.0.1:${address.port}/api/media/${provider}/campaigns?since=${encodeURIComponent(cached.since)}&until=${encodeURIComponent(cached.until)}&refresh=1`,
+                { headers: { "x-pw-media-background": mediaInternalSyncToken } },
+              );
+            } catch (cause) {
+              console.warn(
+                `[${provider === "meta" ? "Meta" : "Google"} Ads] Agendamento de sincronização falhou:`,
+                cause instanceof Error ? cause.message : cause,
+              );
+            }
+          }),
+        );
       };
-      const scheduledMetaTimer = setInterval(
-        () => void runScheduledMetaSync(),
-        10 * 60 * 1000,
+      const scheduledMediaTimer = setInterval(
+        () => void runScheduledMediaSync(),
+        mediaSyncIntervalMs,
       );
-      scheduledMetaTimer.unref();
+      scheduledMediaTimer.unref();
       server.httpServer?.once("listening", () =>
-        setTimeout(() => void runScheduledMetaSync(), 2_000).unref(),
+        setTimeout(() => void runScheduledMediaSync(), 2_000).unref(),
       );
+      server.httpServer?.once("close", () => clearInterval(scheduledMediaTimer));
       server.middlewares.use("/api", async (request, response) => {
         const url = request.url || "/";
         const sessionId = cookies(request).pw_os_session;
@@ -1540,6 +1558,9 @@ function localApi(
           ? clientSessionId && clientSessions.get(clientSessionId)
           : sessionId && sessions.get(sessionId);
         const currentUser = userId && users.get(userId);
+        const mutationMethod=request.method||"GET",ignoredAudit=/^\/(auth|client-auth|notifications|media\/.*\/token)/.test(url)||/\/(test|sync)$/.test(url),shouldAudit=!!currentUser&&!ignoredAudit&&["POST","PATCH","PUT","DELETE"].includes(mutationMethod);
+        if(shouldAudit){const originalEnd=response.end.bind(response);response.end=((chunk?:any,...args:any[])=>{if(response.statusCode>=200&&response.statusCode<400){let payload:any={};try{payload=JSON.parse(typeof chunk==="string"?chunk:chunk?.toString?.()||"{}")}catch{}const entity=Object.values(payload||{}).find(value=>value&&typeof value==="object"&&!Array.isArray(value)&&(value as any).id) as any,pathParts=url.split("?")[0].split("/").filter(Boolean),commentLike=/\/(comments|activities)$/.test(url),action:SystemAudit["action"]=commentLike?"COMMENT":mutationMethod==="DELETE"?"DELETE":mutationMethod==="PATCH"||mutationMethod==="PUT"||/\/(read|read-all|response|reorder|move|convert|reverse|decision|submit)$/.test(url)?"UPDATE":"CREATE";systemAudits.push({id:randomUUID(),action,resource:pathParts[0]||"system",resourceId:String(entity?.id||payload?.id||pathParts.find(part=>/^[0-9a-f-]{20,}$/i.test(part))||""),path:url.split("?")[0],method:mutationMethod,userId:currentUser.id,userName:currentUser.name,status:response.statusCode,createdAt:new Date().toISOString()});persistSystemAudits()}return originalEnd(chunk,...args)}) as typeof response.end}
+        if(url==="/audit-logs"&&request.method==="GET"){if(!currentUser||(currentUser.profile!=="MASTER"&&!hasPermission(currentUser,"users.manage")))return json(response,403,{message:"Você não possui acesso aos logs."});return json(response,200,{logs:systemAudits.slice(-1000).reverse()})}
         if ((url === "/auth/login" || url === "/client-auth/login") && request.method === "POST") {
           const input = await body(request);
           const user = [...users.values()].find(
@@ -2390,10 +2411,30 @@ function localApi(
               .filter(canSeeTicket)
               .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
             canViewAll: hasPermission(currentUser, "tickets.view_all"),
+            canCreate: hasPermission(currentUser, "tickets.create"),
+            canEdit: hasPermission(currentUser, "tickets.edit"),
+            canDelete: hasPermission(currentUser, "tickets.delete"),
+            canComment: hasPermission(currentUser, "tickets.comment"),
+            canAssign: hasPermission(currentUser, "tickets.assign"),
             canManageDepartments: hasPermission(
               currentUser,
               "tickets.manage_departments",
             ),
+            departments: [...departments.values()].sort((a, b) =>
+              a.name.localeCompare(b.name, "pt-BR"),
+            ),
+            availableUsers:
+              hasPermission(currentUser, "tickets.assign") ||
+              hasPermission(currentUser, "tickets.comment")
+                ? [...users.values()]
+                    .filter((user) => user.profile !== "CLIENT")
+                    .map((user) => ({
+                      id: user.id,
+                      name: user.name,
+                      email: user.email,
+                      avatarDataUrl: user.avatarDataUrl,
+                    }))
+                : [],
           });
         }
         if (url === "/tickets" && request.method === "POST") {
@@ -2403,7 +2444,9 @@ function localApi(
             });
           const input = await body(request);
           const title = String(input.title || "").trim();
-          const assignee = users.get(String(input.assigneeId || ""));
+          const canAssign = hasPermission(currentUser, "tickets.assign"),
+            requestedAssignee = users.get(String(input.assigneeId || "")),
+            assignee = canAssign ? requestedAssignee : currentUser;
           if (
             title.length < 4 ||
             !departments.has(String(input.departmentId || ""))
@@ -2411,7 +2454,7 @@ function localApi(
             return json(response, 400, {
               message: "Informe título e setor válidos.",
             });
-          if (!assignee)
+          if (!assignee || assignee.profile === "CLIENT")
             return json(response, 400, {
               message: "Selecione um responsável válido.",
             });
@@ -2479,6 +2522,10 @@ function localApi(
         const ticketMatch = url.match(/^\/tickets\/([^/]+)$/);
         if (ticketMatch && request.method === "GET") {
           const ticket = tickets.get(ticketMatch[1]);
+          if (!hasPermission(currentUser, "tickets.view"))
+            return json(response, 403, {
+              message: "Você não possui acesso aos chamados.",
+            });
           return ticket && canSeeTicket(ticket)
             ? json(response, 200, { ticket })
             : json(response, 404, { message: "Chamado não encontrado." });
@@ -2492,8 +2539,23 @@ function localApi(
               message: "Você não possui permissão para editar chamados.",
             });
           const input = await body(request);
-          const assignee =
-            input.assigneeId && users.get(String(input.assigneeId));
+          const assigneeSpecified = Object.prototype.hasOwnProperty.call(
+              input,
+              "assigneeId",
+            ),
+            assignee =
+              assigneeSpecified && users.get(String(input.assigneeId));
+          if (
+            assigneeSpecified &&
+            !hasPermission(currentUser, "tickets.assign")
+          )
+            return json(response, 403, {
+              message: "Você não possui permissão para atribuir chamados.",
+            });
+          if (assigneeSpecified && (!assignee || assignee.profile === "CLIENT"))
+            return json(response, 400, {
+              message: "Selecione um responsável válido.",
+            });
           if (input.title) ticket.title = String(input.title).trim();
           if (input.description !== undefined)
             ticket.description = String(input.description).trim();
@@ -2614,6 +2676,8 @@ function localApi(
               "WEB",
               "PAID_MEDIA",
               "EMAIL",
+              "CALL",
+              "MEETING",
               "OTHER",
             ],
             taskStatuses = [
@@ -3143,6 +3207,16 @@ function localApi(
               ? input.priority
               : task.priority,
             dueAt: input.dueAt !== undefined ? String(input.dueAt) : task.dueAt,
+            estimateMinutes:
+              input.estimateMinutes !== undefined
+                ? Number(input.estimateMinutes || 0)
+                : task.estimateMinutes,
+            clientId:
+              input.clientId !== undefined ? String(input.clientId) : task.clientId,
+            opportunityId:
+              input.opportunityId !== undefined
+                ? String(input.opportunityId)
+                : task.opportunityId,
             trackedMinutes:
               input.trackedMinutes !== undefined
                 ? Number(input.trackedMinutes)
@@ -3235,6 +3309,7 @@ function localApi(
               participantIds: Array.isArray(input.participantIds)
                 ? input.participantIds.map(String).filter((id) => users.has(id))
                 : [],
+              participantResponses: Object.fromEntries((Array.isArray(input.participantIds)?input.participantIds:[]).map((id)=>[String(id),"PENDING"])),
               startAt,
               endAt,
               location: String(input.location || "").trim(),
@@ -3253,6 +3328,14 @@ function localApi(
           return json(response, 201, { event });
         }
         const calendarMatch = url.match(/^\/calendar\/events\/([^/]+)$/);
+        const calendarResponseMatch = url.match(/^\/calendar\/events\/([^/]+)\/response$/);
+        if (calendarResponseMatch && request.method === "POST") {
+          const event = calendarEvents.get(calendarResponseMatch[1]);
+          if (!event || !event.participantIds.includes(currentUser.id)) return json(response,404,{message:"Convite não encontrado."});
+          const input=await body(request),status=String(input.status);
+          if(!["ACCEPTED","DECLINED"].includes(status))return json(response,400,{message:"Resposta inválida."});
+          event.participantResponses={...(event.participantResponses||{}),[currentUser.id]:status as "ACCEPTED"|"DECLINED"};event.updatedAt=new Date().toISOString();calendarEvents.set(event.id,event);persistCalendarEvents();return json(response,200,{event});
+        }
         if (calendarMatch && request.method === "PATCH") {
           const event = calendarEvents.get(calendarMatch[1]);
           if (!event || !canSeeEvent(event))
@@ -3285,6 +3368,29 @@ function localApi(
               input.location !== undefined
                 ? String(input.location)
                 : event.location,
+            category:
+              input.category !== undefined
+                ? String(input.category)
+                : event.category,
+            clientId:
+              input.clientId !== undefined
+                ? String(input.clientId)
+                : event.clientId,
+            opportunityId:
+              input.opportunityId !== undefined
+                ? String(input.opportunityId)
+                : event.opportunityId,
+            recurrence:
+              input.recurrence !== undefined
+                ? String(input.recurrence)
+                : event.recurrence,
+            reminderMinutes:
+              input.reminderMinutes !== undefined
+                ? Number(input.reminderMinutes)
+                : event.reminderMinutes,
+            participantIds: Array.isArray(input.participantIds)
+              ? input.participantIds.map(String).filter((id) => users.has(id))
+              : event.participantIds,
             updatedAt: new Date().toISOString(),
           });
           calendarEvents.set(event.id, event);
@@ -3372,6 +3478,42 @@ function localApi(
             updatedAt: now,
           };
           clients.set(client.id, client);
+          const company =
+            [...crmCompanies.values()].find(
+              (item) =>
+                item.clientId === client.id ||
+                (client.document && item.document === client.document) ||
+                item.name.toLowerCase() === client.name.toLowerCase(),
+            ) || {
+              id: randomUUID(),
+              name: client.name,
+              legalName: client.legalName,
+              document: client.document,
+              website: client.website,
+              phone: client.primaryContactPhone,
+              segment: client.segment,
+              clientId: client.id,
+              responsibleId: "",
+              responsibleName: client.owner,
+              createdAt: now,
+              updatedAt: now,
+              activities: [],
+            };
+          Object.assign(company, {
+            name: client.name,
+            legalName: client.legalName,
+            document: client.document,
+            website: client.website,
+            phone: client.primaryContactPhone,
+            segment: client.segment,
+            clientId: client.id,
+            updatedAt: now,
+          });
+          company.activities.push({
+            id: randomUUID(), type: "UPDATED", description: "Empresa vinculada à carteira de clientes",
+            actorId: currentUser.id, actorName: currentUser.name, createdAt: now,
+          });
+          crmCompanies.set(company.id, company);
           if (client.primaryContactName) {
             const contact: ClientContact = {
               id: randomUUID(),
@@ -3385,8 +3527,20 @@ function localApi(
               createdAt: now,
             };
             clientContacts.set(contact.id, contact);
+            const crmContact: CrmContact = {
+              id: contact.id, name: contact.name, email: contact.email,
+              phone: contact.phone, whatsapp: contact.whatsapp, role: contact.role,
+              companyId: company.id, clientId: client.id, opportunityIds: [],
+              responsibleId: "", responsibleName: client.owner, createdAt: now,
+              updatedAt: now, activities: [{ id: randomUUID(), type: "CREATED",
+                description: "Contato principal vinculado ao cliente", actorId: currentUser.id,
+                actorName: currentUser.name, createdAt: now }],
+            };
+            crmContacts.set(crmContact.id, crmContact);
             persistClientContacts();
           }
+          persistCrmCompanies();
+          persistCrmContacts();
           persistClients();
           return json(response, 201, { client });
         }
@@ -3403,9 +3557,24 @@ function localApi(
             projects = [...onboardingProjects.values()].filter(
               (item) => item.clientId === client.id,
             ),
-            contacts = [...clientContacts.values()].filter(
+            localContacts = [...clientContacts.values()].filter(
               (item) => item.clientId === client.id,
-            );
+            ),
+            linkedCompanies = [...crmCompanies.values()].filter(
+              (item) => item.clientId === client.id,
+            ),
+            contacts = [...new Map<string, { id: string; name: string; role: string; email: string; phone: string; whatsapp: string; primary: boolean; createdAt: string; companyId: string; companyName: string }>([
+              ...localContacts.map((item) => [item.id, { ...item, companyId: "", companyName: "" }] as [string, { id: string; name: string; role: string; email: string; phone: string; whatsapp: string; primary: boolean; createdAt: string; companyId: string; companyName: string }]),
+              ...[...crmContacts.values()]
+                .filter((item) => item.clientId === client.id)
+                .map((item) => [item.id, {
+                  id: item.id, name: item.name, role: item.role, email: item.email,
+                  phone: item.phone, whatsapp: item.whatsapp, createdAt: item.createdAt,
+                  companyId: item.companyId,
+                  primary: localContacts.find((local) => local.id === item.id)?.primary || false,
+                  companyName: crmCompanies.get(item.companyId)?.name || "",
+                }] as [string, { id: string; name: string; role: string; email: string; phone: string; whatsapp: string; primary: boolean; createdAt: string; companyId: string; companyName: string }]),
+            ]).values()];
           const commercial = [...opportunities.values()]
             .filter((item) => item.convertedClientId === client.id)
             .flatMap((item) =>
@@ -3485,6 +3654,16 @@ function localApi(
           return json(response, 200, {
             client,
             contacts,
+            linkedCompanies,
+            availableCompanies: [...crmCompanies.values()].map((item) => ({
+              id: item.id, name: item.name, document: item.document, clientId: item.clientId,
+            })),
+            availableContacts: [...crmContacts.values()].map((item) => ({
+              id: item.id, name: item.name, role: item.role, email: item.email,
+              phone: item.phone, companyId: item.companyId,
+              companyName: crmCompanies.get(item.companyId)?.name || "",
+              clientId: item.clientId,
+            })),
             services,
             projects,
             timeline: [...commercial].sort((a, b) =>
@@ -3557,6 +3736,38 @@ function localApi(
             updatedAt: new Date().toISOString(),
           });
           clients.set(client.id, client);
+          const linkedCompany = [...crmCompanies.values()].find(
+            (item) => item.clientId === client.id,
+          );
+          if (linkedCompany) {
+            Object.assign(linkedCompany, {
+              name: client.name,
+              legalName: client.legalName,
+              document: client.document,
+              website: client.website,
+              phone: client.primaryContactPhone,
+              segment: client.segment,
+              updatedAt: client.updatedAt,
+            });
+            crmCompanies.set(linkedCompany.id, linkedCompany);
+            persistCrmCompanies();
+          }
+          const linkedPrimaryContact = [...crmContacts.values()].find(
+            (item) => item.clientId === client.id &&
+              (!!client.primaryContactEmail ? item.email === client.primaryContactEmail : item.role === "Contato principal"),
+          );
+          if (linkedPrimaryContact) {
+            Object.assign(linkedPrimaryContact, {
+              name: client.primaryContactName || linkedPrimaryContact.name,
+              email: client.primaryContactEmail,
+              phone: client.primaryContactPhone,
+              whatsapp: client.primaryContactPhone,
+              companyId: linkedCompany?.id || linkedPrimaryContact.companyId,
+              updatedAt: client.updatedAt,
+            });
+            crmContacts.set(linkedPrimaryContact.id, linkedPrimaryContact);
+            persistCrmContacts();
+          }
           persistClients();
           return json(response, 200, { client });
         }
@@ -3586,6 +3797,48 @@ function localApi(
           clients.delete(client.id);
           persistClients();
           return json(response, 200, { ok: true });
+        }
+        const clientCompanyLink = url.match(/^\/clients\/([^/]+)\/company-link$/);
+        if (clientCompanyLink && request.method === "POST") {
+          if (!hasPermission(currentUser, "clients.edit"))
+            return json(response, 403, { message: "Você não possui permissão para editar clientes." });
+          const client = clients.get(clientCompanyLink[1]), input = await body(request),
+            company = crmCompanies.get(String(input.companyId || ""));
+          if (!client || !company) return json(response, 404, { message: "Cliente ou empresa não encontrado." });
+          crmCompanies.forEach((item) => { if (item.clientId === client.id) item.clientId = ""; });
+          company.clientId = client.id;
+          company.updatedAt = new Date().toISOString();
+          company.activities.push({ id: randomUUID(), type: "UPDATED", description: `Empresa associada ao cliente ${client.name}`, actorId: currentUser.id, actorName: currentUser.name, createdAt: company.updatedAt });
+          crmCompanies.set(company.id, company); persistCrmCompanies();
+          let importedContacts = 0;
+          crmContacts.forEach((contact) => {
+            if (contact.companyId === company.id) {
+              if (contact.clientId !== client.id) importedContacts += 1;
+              contact.clientId = client.id;
+              contact.updatedAt = company.updatedAt;
+              crmContacts.set(contact.id, contact);
+            }
+          });
+          persistCrmContacts();
+          return json(response, 200, { company, importedContacts });
+        }
+        if (clientCompanyLink && request.method === "DELETE") {
+          if (!hasPermission(currentUser, "clients.edit"))
+            return json(response, 403, { message: "Você não possui permissão para editar clientes." });
+          crmCompanies.forEach((item) => { if (item.clientId === clientCompanyLink[1]) item.clientId = ""; });
+          persistCrmCompanies(); return json(response, 200, { ok: true });
+        }
+        const clientContactLink = url.match(/^\/clients\/([^/]+)\/contact-links$/);
+        if (clientContactLink && request.method === "POST") {
+          if (!hasPermission(currentUser, "clients.edit"))
+            return json(response, 403, { message: "Você não possui permissão para editar clientes." });
+          const client = clients.get(clientContactLink[1]), input = await body(request),
+            contact = crmContacts.get(String(input.contactId || ""));
+          if (!client || !contact) return json(response, 404, { message: "Cliente ou contato não encontrado." });
+          contact.clientId = client.id; contact.updatedAt = new Date().toISOString();
+          contact.activities.push({ id: randomUUID(), type: "UPDATED", description: `Contato associado ao cliente ${client.name}`, actorId: currentUser.id, actorName: currentUser.name, createdAt: contact.updatedAt });
+          crmContacts.set(contact.id, contact); persistCrmContacts();
+          return json(response, 200, { contact });
         }
         const clientContactCollection = url.match(
           /^\/clients\/([^/]+)\/contacts$/,
@@ -3628,6 +3881,28 @@ function localApi(
             createdAt: new Date().toISOString(),
           };
           clientContacts.set(contact.id, contact);
+          const company = [...crmCompanies.values()].find(
+            (item) => item.clientId === client.id,
+          );
+          crmContacts.set(contact.id, {
+            id: contact.id,
+            name: contact.name,
+            email: contact.email,
+            phone: contact.phone,
+            whatsapp: contact.whatsapp,
+            role: contact.role,
+            companyId: company?.id || "",
+            clientId: client.id,
+            opportunityIds: [],
+            responsibleId: "",
+            responsibleName: client.owner,
+            createdAt: contact.createdAt,
+            updatedAt: contact.createdAt,
+            activities: [{
+              id: randomUUID(), type: "CREATED", description: "Contato adicionado ao cliente",
+              actorId: currentUser.id, actorName: currentUser.name, createdAt: contact.createdAt,
+            }],
+          });
           if (primary) {
             client.primaryContactName = contact.name;
             client.primaryContactEmail = contact.email;
@@ -3636,6 +3911,7 @@ function localApi(
             persistClients();
           }
           persistClientContacts();
+          persistCrmContacts();
           return json(response, 201, { contact });
         }
         const clientContactMatch = url.match(
@@ -3647,10 +3923,14 @@ function localApi(
               message: "Você não possui permissão para editar clientes.",
             });
           const contact = clientContacts.get(clientContactMatch[2]);
-          if (!contact || contact.clientId !== clientContactMatch[1])
+          const crmContact = crmContacts.get(clientContactMatch[2]);
+          if ((!contact || contact.clientId !== clientContactMatch[1]) &&
+              (!crmContact || crmContact.clientId !== clientContactMatch[1]))
             return json(response, 404, { message: "Contato não encontrado." });
-          clientContacts.delete(contact.id);
+          if (contact) clientContacts.delete(contact.id);
+          if (crmContact) { crmContact.clientId = ""; crmContact.updatedAt = new Date().toISOString(); crmContacts.set(crmContact.id, crmContact); }
           persistClientContacts();
+          persistCrmContacts();
           return json(response, 200, { ok: true });
         }
         const clientServiceCollection = url.match(
@@ -4117,6 +4397,7 @@ function localApi(
           const pipeline: CrmPipeline = {
             id: randomUUID(),
             name,
+            isCommercial: input.isCommercial === "true",
             departmentIds,
             createdAt: new Date().toISOString(),
             stages: [
@@ -4172,6 +4453,7 @@ function localApi(
               message: "Já existe outro pipeline com este nome.",
             });
           pipeline.name = name;
+          pipeline.isCommercial = input.isCommercial === "true";
           if (Array.isArray(input.departmentIds))
             pipeline.departmentIds = input.departmentIds
               .map(String)
@@ -4485,7 +4767,7 @@ function localApi(
                   .replace(/\./g, "")
                   .replace(",", "."),
               ) || 0,
-            temperature: ["COLD", "WARM", "HOT"].includes(input.temperature)
+            temperature: ["COLD", "WARM", "HOT", "VERY_HOT"].includes(input.temperature)
               ? input.temperature
               : "WARM",
             priority: ["LOW", "MEDIUM", "HIGH"].includes(input.priority)
@@ -4560,7 +4842,7 @@ function localApi(
           );
           if (!stage)
             return json(response, 400, { message: "Etapa inválida." });
-          if (stage.terminal === "WON")
+          if (stage.terminal === "WON" && pipeline?.isCommercial === true)
             return json(response, 409, {
               message:
                 "Use o fluxo de conversão para fechar esta oportunidade como ganha.",
@@ -4751,25 +5033,27 @@ function localApi(
             createdAt: now,
             updatedAt: now,
           };
-          const service: ClientService = {
-            id: randomUUID(),
-            clientId: client.id,
-            opportunityId: opportunity.id,
-            name: String(input.serviceName).trim(),
-            negotiatedValue:
-              Number(
-                String(input.negotiatedValue || opportunity.potentialValue)
-                  .replace(/\./g, "")
-                  .replace(",", "."),
-              ) || 0,
-            billingType:
-              input.billingType === "ONE_TIME" ? "ONE_TIME" : "RECURRING",
-            startDate: String(input.startDate),
-            managerUserId: String(input.managerUserId || ""),
-            createdAt: now,
-          };
+          const moneyValue = (value: unknown) => Number(String(value || "0").replace(/\./g, "").replace(",", ".")) || 0,
+            billingType = ["ONE_TIME", "RECURRING", "BOTH"].includes(String(input.billingType)) ? String(input.billingType) : "RECURRING",
+            oneTimeValue = moneyValue(input.oneTimeValue),
+            recurringValue = moneyValue(input.recurringValue),
+            serviceName = String(input.serviceName).trim(),
+            serviceParts: ClientService[] = [];
+          if ((billingType === "ONE_TIME" || billingType === "BOTH") && oneTimeValue > 0) serviceParts.push({
+            id: randomUUID(), clientId: client.id, opportunityId: opportunity.id,
+            name: billingType === "BOTH" ? `${serviceName} — Implantação` : serviceName,
+            negotiatedValue: oneTimeValue, billingType: "ONE_TIME", startDate: String(input.startDate),
+            managerUserId: String(input.managerUserId || ""), createdAt: now,
+          });
+          if ((billingType === "RECURRING" || billingType === "BOTH") && recurringValue > 0) serviceParts.push({
+            id: randomUUID(), clientId: client.id, opportunityId: opportunity.id,
+            name: billingType === "BOTH" ? `${serviceName} — Mensalidade` : serviceName,
+            negotiatedValue: recurringValue, billingType: "RECURRING", startDate: String(input.startDate),
+            managerUserId: String(input.managerUserId || ""), createdAt: now,
+          });
+          if (!serviceParts.length) return json(response, 400, { message: "Informe ao menos um valor de cobrança válido." });
           if (!existingClient) clients.set(client.id, client);
-          clientServices.set(service.id, service);
+          serviceParts.forEach((service) => clientServices.set(service.id, service));
           opportunity.status = "CONVERTED";
           opportunity.convertedClientId = client.id;
           opportunity.convertedAt = now;
@@ -4788,41 +5072,24 @@ function localApi(
             actorId: currentUser.id,
             actorName: currentUser.name,
             createdAt: now,
-            metadata: { clientId: client.id, serviceId: service.id },
+            metadata: { clientId: client.id, serviceIds: serviceParts.map((service) => service.id).join(",") },
           });
-          if (input.createOnboarding === "true") {
-            const project: OnboardingProject = {
-              id: randomUUID(),
-              clientId: client.id,
-              serviceId: service.id,
-              name: `Onboarding — ${client.name}`,
-              status: "PLANNED",
-              createdAt: now,
-              tasks: [
-                {
-                  id: randomUUID(),
-                  title: "Reunião de kickoff",
-                  status: "TODO",
-                },
-                {
-                  id: randomUUID(),
-                  title: "Coletar acessos e materiais",
-                  status: "TODO",
-                },
-                {
-                  id: randomUUID(),
-                  title: "Validar planejamento inicial",
-                  status: "TODO",
-                },
-              ],
-            };
-            onboardingProjects.set(project.id, project);
+          const targetPipeline = pipelines.get(String(input.targetPipelineId || "")),
+            targetStage = targetPipeline?.stages.find((stage) => !stage.terminal);
+          if (targetPipeline && targetStage && targetPipeline.id !== opportunity.pipelineId) {
+            const followUp: Opportunity = { ...opportunity, id: randomUUID(), name: `${client.name} — ${serviceName}`, pipelineId: targetPipeline.id, stageId: targetStage.id, status: "OPEN", potentialValue: recurringValue || oneTimeValue, stageEnteredAt: now, createdAt: now, updatedAt: now, activities: [{ id: randomUUID(), type: "CREATED", description: `Criada automaticamente após ganho no funil ${pipelines.get(opportunity.pipelineId)?.name || "comercial"}`, actorId: currentUser.id, actorName: currentUser.name, createdAt: now }], proposals: [] };
+            delete followUp.convertedClientId; delete followUp.convertedAt; delete followUp.convertedBy;
+            opportunities.set(followUp.id, followUp);
           }
+          serviceParts.forEach((service) => {
+            const entry: FinancialEntry = { id: randomUUID(), type: "INCOME", description: service.name, amount: service.negotiatedValue, dueDate: service.startDate, paidAt: "", status: "OPEN", categoryId: "", accountId: "", clientId: client.id, supplier: "", costCenter: "Comercial", documentNumber: "", paymentMethod: "", recurrence: service.billingType === "RECURRING" ? "MONTHLY" : "NONE", notes: `Gerado pela conversão da oportunidade ${opportunity.name}.`, createdBy: currentUser.id, createdByName: currentUser.name, createdAt: now, updatedAt: now };
+            financialEntries.set(entry.id, entry);
+          });
           persistClients();
           persistClientServices();
           persistOpportunities();
-          persistProjects();
-          return json(response, 201, { client, service, opportunity });
+          persistFinancialEntries();
+          return json(response, 201, { client, services: serviceParts, opportunity });
         }
         const opportunityReverseMatch = url.match(
           /^\/crm\/opportunities\/([^/]+)\/reverse-conversion$/,
@@ -5084,7 +5351,7 @@ function localApi(
                   .replace(/\./g, "")
                   .replace(",", "."),
               ) || 0,
-            temperature: ["COLD", "WARM", "HOT"].includes(input.temperature)
+            temperature: ["COLD", "WARM", "HOT", "VERY_HOT"].includes(input.temperature)
               ? input.temperature
               : opportunity.temperature,
             priority: ["LOW", "MEDIUM", "HIGH"].includes(input.priority)
@@ -5627,6 +5894,8 @@ function localApi(
             });
           return json(response, 200, {
             assignments: [...mediaAssignments.values()],
+            canManage: hasPermission(currentUser, "media.edit"),
+            canSync: hasPermission(currentUser, "media.sync"),
           });
         }
         const mediaAssignmentMatch = url.match(
@@ -5711,20 +5980,11 @@ function localApi(
           url.startsWith("/media/google/campaigns") &&
           request.method === "GET"
         ) {
-          if (!hasPermission(currentUser, "media.view"))
+          const backgroundSync =
+            request.headers["x-pw-media-background"] === mediaInternalSyncToken;
+          if (!backgroundSync && !hasPermission(currentUser, "media.view"))
             return json(response, 403, {
               message: "Você não possui acesso às campanhas.",
-            });
-          const missing = [
-            !runtimeGoogleClientId && "OAuth Client ID",
-            !runtimeGoogleClientSecret && "OAuth Client Secret",
-            !runtimeGoogleRefreshToken && "Refresh token",
-            !runtimeGoogleDeveloperToken && "Chave da API (developer token)",
-          ].filter(Boolean);
-          if (missing.length)
-            return json(response, 503, {
-              message: `Complete a conexão do Google Ads: ${missing.join(", ")}.`,
-              missingCredentials: missing,
             });
           const requestUrl = new URL(request.url || "", "http://localhost"),
             today = new Date().toISOString().slice(0, 10),
@@ -5740,7 +6000,40 @@ function localApi(
               requestUrl.searchParams.get("until") || "",
             )
               ? requestUrl.searchParams.get("until")!
-              : today;
+              : today,
+            forceRefresh = requestUrl.searchParams.get("refresh") === "1";
+          if (!forceRefresh && existsSync(localGoogleDashboardCachePath))
+            try {
+              const cached = JSON.parse(
+                readFileSync(localGoogleDashboardCachePath, "utf8"),
+              ) as Record<string, any>;
+              if (cached.since === since && cached.until === until)
+                return json(response, 200, {
+                  ...cached,
+                  cache: {
+                    status: "stored",
+                    cachedAt: cached.syncedAt,
+                    nextSyncAt: new Date(
+                      new Date(cached.syncedAt).getTime() + mediaSyncIntervalMs,
+                    ).toISOString(),
+                  },
+                });
+            } catch {}
+          if (!backgroundSync && !hasPermission(currentUser, "media.sync"))
+            return json(response, 403, {
+              message: "Você não possui permissão para sincronizar campanhas.",
+            });
+          const missing = [
+            !runtimeGoogleClientId && "OAuth Client ID",
+            !runtimeGoogleClientSecret && "OAuth Client Secret",
+            !runtimeGoogleRefreshToken && "Refresh token",
+            !runtimeGoogleDeveloperToken && "Chave da API (developer token)",
+          ].filter(Boolean);
+          if (missing.length)
+            return json(response, 503, {
+              message: `Complete a conexão do Google Ads: ${missing.join(", ")}.`,
+              missingCredentials: missing,
+            });
           try {
             const oauthResponse = await fetch(
               "https://www.googleapis.com/oauth2/v3/token",
@@ -5940,7 +6233,7 @@ function localApi(
           request.method === "GET"
         ) {
           const backgroundSync =
-            request.headers["x-pw-meta-background"] === metaInternalSyncToken;
+            request.headers["x-pw-media-background"] === mediaInternalSyncToken;
           if (!backgroundSync && !hasPermission(currentUser, "media.view"))
             return json(response, 403, {
               message: "Você não possui acesso às campanhas.",
@@ -5980,9 +6273,7 @@ function localApi(
               if (
                 cached.schemaVersion === 6 &&
                 cached.since === since &&
-                cached.until === until &&
-                Date.now() - new Date(cached.cachedAt).getTime() <
-                  10 * 60 * 1000
+                cached.until === until
               ) {
                 Object.entries(cached.pictures || {}).forEach(([id, picture]) =>
                   metaAccountPictures.set(id, picture),
@@ -5993,12 +6284,16 @@ function localApi(
                     status: "fresh",
                     cachedAt: cached.cachedAt,
                     nextSyncAt: new Date(
-                      new Date(cached.cachedAt).getTime() + 10 * 60 * 1000,
+                      new Date(cached.cachedAt).getTime() + mediaSyncIntervalMs,
                     ).toISOString(),
                   },
                 });
               }
             } catch {}
+          if (!backgroundSync && !hasPermission(currentUser, "media.sync"))
+            return json(response, 403, {
+              message: "Você não possui permissão para sincronizar campanhas.",
+            });
           const graph = async <T>(path: string) => {
             const separator = path.includes("?") ? "&" : "?";
             const result = await fetch(
@@ -6367,7 +6662,7 @@ function localApi(
               cache: {
                 status: "updated",
                 cachedAt: syncedAt,
-                nextSyncAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+                nextSyncAt: new Date(Date.now() + mediaSyncIntervalMs).toISOString(),
               },
             });
           } catch (cause) {

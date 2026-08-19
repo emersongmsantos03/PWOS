@@ -21,6 +21,7 @@ import {
   UserRound,
   Users,
   WalletCards,
+  X,
 } from "lucide-react";
 import { NavLink } from "react-router-dom";
 import "./MediaDashboard.css";
@@ -315,6 +316,7 @@ function ClientCampaignGroup({
   onAssign,
   platform,
   showPlatform,
+  canManage,
 }: {
   group: ClientGroup;
   initialOpen: boolean;
@@ -322,6 +324,7 @@ function ClientCampaignGroup({
   users: User[];
   platform: "META_ADS" | "GOOGLE_ADS";
   showPlatform: boolean;
+  canManage: boolean;
   onAssign: (
     platform: "META_ADS" | "GOOGLE_ADS",
     accountIds: string[],
@@ -432,17 +435,17 @@ function ClientCampaignGroup({
               <b>{selectedResponsible?.name || "Não atribuído"}</b>
             </p>
           </div>
-          <button type="button" onClick={() => setLinkOpen((value) => !value)}>
+          {canManage && <button type="button" onClick={() => setLinkOpen((value) => !value)}>
             {linkOpen ? (
               "Fechar"
             ) : (
               <>
                 <Link2 /> Vincular cliente e responsável
-              </>
-            )}
-          </button>
+                </>
+              )}
+          </button>}
         </div>
-        {linkOpen && (
+        {canManage && linkOpen && (
           <div className="media-link-editor">
             <header>
               <div>
@@ -451,8 +454,8 @@ function ClientCampaignGroup({
                   Escolha como identificar esta conta e quem será o responsável.
                 </p>
               </div>
-              <button type="button" onClick={() => setLinkOpen(false)}>
-                ×
+              <button type="button" aria-label="Fechar" onClick={() => setLinkOpen(false)}>
+                <X />
               </button>
             </header>
             <div className="media-link-fields">
@@ -465,52 +468,58 @@ function ClientCampaignGroup({
                       : "Cliente"}
                   </b>
                 </span>
-                <select
-                  value={clientId}
-                  onChange={(event) => {
-                    setClientId(event.target.value);
-                    setSaved(false);
-                    setLinkError("");
-                  }}
-                >
-                  {platform === "META_ADS" && (
-                    <option value={META_PORTFOLIO}>
-                      Nome do portfólio Meta — {portfolioName}
-                    </option>
-                  )}
-                  <option value="">Sem cliente vinculado</option>
-                  <optgroup label={`Clientes cadastrados (${clients.length})`}>
-                    {clients.map((item) => (
-                      <option key={item.id} value={item.id}>
-                        {item.name}
+                <div className="media-link-select">
+                  <select
+                    value={clientId}
+                    onChange={(event) => {
+                      setClientId(event.target.value);
+                      setSaved(false);
+                      setLinkError("");
+                    }}
+                  >
+                    {platform === "META_ADS" && (
+                      <option value={META_PORTFOLIO}>
+                        Nome do portfólio Meta — {portfolioName}
                       </option>
-                    ))}
-                  </optgroup>
-                </select>
+                    )}
+                    <option value="">Sem cliente vinculado</option>
+                    <optgroup label={`Clientes cadastrados (${clients.length})`}>
+                      {clients.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  </select>
+                  <ChevronDown />
+                </div>
                 {!clients.length && (
                   <small>Nenhum cliente cadastrado no PW OS.</small>
                 )}
               </label>
               <label>
                 <span>
-                  <ResponsibleAvatar user={selectedResponsible} />
+                  <UserRound />
                   <b>Responsável</b>
                 </span>
-                <select
-                  value={responsibleId}
-                  onChange={(event) => {
-                    setResponsibleId(event.target.value);
-                    setSaved(false);
-                    setLinkError("");
-                  }}
-                >
-                  <option value="">Sem responsável</option>
-                  {users.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.name} · {item.role}
-                    </option>
-                  ))}
-                </select>
+                <div className="media-link-select">
+                  <select
+                    value={responsibleId}
+                    onChange={(event) => {
+                      setResponsibleId(event.target.value);
+                      setSaved(false);
+                      setLinkError("");
+                    }}
+                  >
+                    <option value="">Sem responsável</option>
+                    {users.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name} · {item.role}
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown />
+                </div>
                 {!users.length && (
                   <small>Nenhum usuário disponível para atribuição.</small>
                 )}
@@ -759,7 +768,9 @@ export function MediaDashboard() {
     }),
     [clients, setClients] = useState<Client[]>([]),
     [users, setUsers] = useState<User[]>([]),
-    [assignments, setAssignments] = useState<Assignment[]>([]);
+    [assignments, setAssignments] = useState<Assignment[]>([]),
+    [canManageAssignments, setCanManageAssignments] = useState(false),
+    [canSync, setCanSync] = useState(false);
   const [since, setSince] = useState(initialSince),
     [until, setUntil] = useState(() => iso(new Date()));
   const [query, setQuery] = useState(""),
@@ -802,6 +813,8 @@ export function MediaDashboard() {
       if (assignmentsResponse.ok) {
         const assignmentPayload = await assignmentsResponse.json();
         setAssignments(assignmentPayload.assignments || []);
+        setCanManageAssignments(!!assignmentPayload.canManage);
+        setCanSync(!!assignmentPayload.canSync);
       }
       if (!successful.length)
         throw new Error(
@@ -814,7 +827,12 @@ export function MediaDashboard() {
         schemaVersion: 5,
         since,
         until,
-        syncedAt: new Date().toISOString(),
+        syncedAt:
+          successful
+            .map((item) => item.payload.syncedAt as string | undefined)
+            .filter(Boolean)
+            .sort()
+            .at(-1) || new Date().toISOString(),
         accounts: successful.flatMap(({ source, payload }) => {
           return (payload.accounts || []).map((account: Account) => ({
             ...account,
@@ -1106,14 +1124,16 @@ export function MediaDashboard() {
               onChange={(event) => setUntil(event.target.value)}
             />
           </label>
-          <button
-            className="secondary"
-            onClick={() => void load(true)}
-            disabled={loading}
-          >
-            <RefreshCw className={loading ? "spin" : ""} />{" "}
-            {loading ? "Sincronizando…" : "Atualizar agora"}
-          </button>
+          {canSync && (
+            <button
+              className="secondary"
+              onClick={() => void load(true)}
+              disabled={loading}
+            >
+              <RefreshCw className={loading ? "spin" : ""} />{" "}
+              {loading ? "Sincronizando…" : "Sincronizar"}
+            </button>
+          )}
         </div>
       </header>
       {error && (
@@ -1276,25 +1296,23 @@ export function MediaDashboard() {
                 placeholder="Buscar cliente ou campanha…"
               />
             </label>
-            <select
-              value={status}
-              onChange={(event) => setStatus(event.target.value)}
-            >
-              <option value="ALL">Todos os status</option>
-              {statuses.map((item) => (
-                <option value={item} key={item}>
-                  {statusLabel[item] || item}
-                </option>
-              ))}
-            </select>
-            <select
-              value={delivery}
-              onChange={(event) => setDelivery(event.target.value)}
-            >
-              <option value="ALL">Todas as entregas</option>
-              <option value="WITH_DATA">Com entrega</option>
-              <option value="NO_DATA">Sem entrega</option>
-            </select>
+            <label className="traffic-filter-select">
+              <Gauge />
+              <select aria-label="Filtrar por status" value={status} onChange={(event) => setStatus(event.target.value)}>
+                <option value="ALL">Todos os status</option>
+                {statuses.map((item) => <option value={item} key={item}>{statusLabel[item] || item}</option>)}
+              </select>
+              <ChevronDown />
+            </label>
+            <label className="traffic-filter-select">
+              <Activity />
+              <select aria-label="Filtrar por entrega" value={delivery} onChange={(event) => setDelivery(event.target.value)}>
+                <option value="ALL">Todas as entregas</option>
+                <option value="WITH_DATA">Com entrega</option>
+                <option value="NO_DATA">Sem entrega</option>
+              </select>
+              <ChevronDown />
+            </label>
           </div>
         </section>
         {loading && !data ? (
@@ -1324,6 +1342,7 @@ export function MediaDashboard() {
                 onAssign={saveAssignment}
                 platform={group.platform}
                 showPlatform={platform === "ALL"}
+                canManage={canManageAssignments}
               />
             ))}
           </section>

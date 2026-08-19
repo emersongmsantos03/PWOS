@@ -1,0 +1,1 @@
+ALTER TYPE "LeadTemperature" ADD VALUE IF NOT EXISTS 'VERY_HOT';

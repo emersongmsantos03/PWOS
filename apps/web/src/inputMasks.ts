@@ -13,6 +13,20 @@ export function maskPhone(value:string){
   return raw.replace(/^(\d{2})(\d{5})(\d{0,4})/,"($1) $2-$3");
 }
 
+export function parseCurrency(value:string|number){
+  if(typeof value==="number")return Number.isFinite(value)?value:0;
+  const clean=value.replace(/[^\d,.-]/g,"").trim();
+  if(!clean)return 0;
+  if(clean.includes(","))return Number(clean.replace(/\./g,"").replace(",","."))||0;
+  return Number(clean)||0;
+}
+
+export function maskCurrency(value:string|number){
+  if(value==="")return "";
+  const amount=parseCurrency(value);
+  return amount.toLocaleString("pt-BR",{style:"currency",currency:"BRL",minimumFractionDigits:2});
+}
+
 function repeated(value:string){return /^(\d)\1+$/.test(value)}
 export function isValidCPF(value:string){
   const raw=digits(value);if(raw.length!==11||repeated(raw))return false;
