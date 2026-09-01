@@ -18,6 +18,7 @@ import {
   Users,
   X,
 } from "lucide-react";
+import { systemConfirm } from "./SystemDialog";
 
 type User = { id: string; name: string; email: string; avatarDataUrl?: string };
 type Department = {
@@ -114,6 +115,11 @@ export function TicketsManagement({ user }: { user: SessionUser }) {
   useEffect(() => {
     void load();
   }, []);
+  useEffect(() => {
+    const ticketId = new URLSearchParams(window.location.search).get("ticket");
+    if (ticketId && tickets.length)
+      setSelected(tickets.find((ticket) => ticket.id === ticketId) || null);
+  }, [tickets]);
   const visible = useMemo(
     () =>
       tickets.filter(
@@ -152,7 +158,7 @@ export function TicketsManagement({ user }: { user: SessionUser }) {
     await load();
   };
   const remove = async (ticket: Ticket) => {
-    if (!confirm(`Excluir o chamado ${ticket.code}?`)) return;
+    if (!await systemConfirm({ title: "Excluir este chamado?", message: `O chamado ${ticket.code} será removido permanentemente.`, confirmLabel: "Excluir chamado", tone: "danger" })) return;
     const response = await fetch(`/api/tickets/${ticket.id}`, {
       method: "DELETE",
     });

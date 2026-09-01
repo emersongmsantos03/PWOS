@@ -9,6 +9,7 @@ import {
   CircleDollarSign,
   Edit3,
   ExternalLink,
+  FileBarChart,
   FolderKanban,
   Globe2,
   History,
@@ -27,6 +28,7 @@ import {
 } from "lucide-react";
 import { isValidDocument, maskDocument, maskPhone } from "./inputMasks";
 import { SearchableSelect } from "./SearchableSelect";
+import { systemConfirm } from "./SystemDialog";
 import "./ClientConnections.css";
 import "./ClientRefinements.css";
 
@@ -171,7 +173,12 @@ export function ClientsManagement({ permissions = [], profile = "" }: { permissi
   const load = () =>
     fetch("/api/clients").then(async (response) => {
       const data = await response.json();
-      if (response.ok) setClients(data.clients || []);
+      if (response.ok) {
+        const loadedClients = data.clients || [];
+        setClients(loadedClients);
+        const requestedClient = new URLSearchParams(window.location.search).get("client");
+        if (requestedClient) setViewing(loadedClients.find((item: Client) => item.id === requestedClient) || null);
+      }
     });
   useEffect(() => {
     void load();
@@ -687,7 +694,7 @@ function ClientDetails({
     await load();
   };
   const removeContact = async (id: string) => {
-    if (!confirm("Desvincular este contato do cliente? O cadastro será preservado no CRM.")) return;
+    if (!await systemConfirm({ title: "Desvincular este contato?", message: "O contato deixará de aparecer neste cliente, mas seu cadastro será preservado no CRM.", confirmLabel: "Desvincular contato", tone: "warning" })) return;
     const response = await fetch(`/api/clients/${client.id}/contacts/${id}`, {
       method: "DELETE",
     });
@@ -915,7 +922,10 @@ function ClientDetails({
                     <h3>Contas e campanhas</h3>
                     <p>Contas vinculadas a este cadastro na Mídia Paga.</p>
                   </div>
-                  {canEdit && <a href="/midia">Gerenciar vínculos</a>}
+                  <nav>
+                    <a href={`/midia/relatorios?reportClient=${encodeURIComponent(client.id)}`}><FileBarChart /> Gerar relatório</a>
+                    {canEdit && <a href={`/midia/gestao?client=${encodeURIComponent(client.id)}`}><Globe2 /> Gerenciar vínculos</a>}
+                  </nav>
                 </div>
                 {connections.mediaAccounts.length ? (
                   <div className="client-media-accounts">
@@ -924,7 +934,7 @@ function ClientDetails({
                         <span className="client-media-logo">∞</span>
                         <div>
                           <b>{account.pageName || account.name}</b>
-                          <small>Meta Ads · {account.campaignCount} campanha(s)</small>
+                          <small>{account.platform === "GOOGLE_ADS" ? "Google Ads" : "Meta Ads"} · {account.campaignCount} campanha(s)</small>
                         </div>
                         <span>
                           <small>Responsável</small>

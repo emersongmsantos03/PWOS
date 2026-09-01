@@ -607,10 +607,12 @@ function ItemCard({
   item,
   onDrag,
   onOpen,
+  durationHours,
 }: {
   item: CalendarItem;
   onDrag: (event: DragEvent, item: CalendarItem) => void;
   onOpen: (item: CalendarItem) => void;
+  durationHours?: number;
 }) {
   const color = ownerColor(item.ownerId);
   return (
@@ -621,8 +623,8 @@ function ItemCard({
         event.stopPropagation();
         onOpen(item);
       }}
-      className={`calendar-item ${item.kind} ${item.category.toLowerCase()} ${item.editable ? "editable" : "read-only"}`}
-      style={{ "--owner-color": color } as React.CSSProperties}
+      className={`calendar-item ${item.kind} ${item.category.toLowerCase()} ${item.editable ? "editable" : "read-only"}${durationHours ? " calendar-duration" : ""}`}
+      style={{ "--owner-color": color, ...(durationHours ? { "--calendar-duration-height": `${Math.max(30, durationHours * 58 - 6)}px` } : {}) } as React.CSSProperties}
       title={
         item.kind === "task"
           ? `${item.ownerName} · ${item.editable ? "clique para editar" : "somente visualização"}`
@@ -663,6 +665,8 @@ function TimeGrid({
   onCreate: (date: Date) => void;
   onOpen: (item: CalendarItem) => void;
 }) {
+  const startHour = 6;
+  const endHour = 23;
   return (
     <div className="calendar-time-scroll">
       <div
@@ -681,7 +685,7 @@ function TimeGrid({
             <b>{day.getDate()}</b>
           </header>
         ))}
-        {Array.from({ length: 15 }, (_, index) => index + 6).flatMap((hour) => [
+        {Array.from({ length: endHour - startHour }, (_, index) => index + startHour).flatMap((hour) => [
           <time key={`time-${hour}`}>{pad(hour)}:00</time>,
           ...days.map((day) => (
             <section
@@ -719,6 +723,10 @@ function TimeGrid({
                     item={item}
                     onDrag={onDrag}
                     onOpen={onOpen}
+                    durationHours={Math.min(
+                      Math.max(0.5, (item.end.getTime() - item.start.getTime()) / 3_600_000),
+                      endHour - hour,
+                    )}
                     key={`${item.kind}-${item.id}`}
                   />
                 ))}

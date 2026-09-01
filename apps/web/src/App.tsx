@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import {
   useNavigate,
   useParams,
@@ -6,6 +6,7 @@ import {
   Route,
   NavLink,
   Navigate,
+  useLocation,
 } from "react-router-dom";
 import {
   Activity,
@@ -64,7 +65,6 @@ import { Connections } from "./Connections";
 import { AccessManagement } from "./AccessManagement";
 import { ClientsManagement } from "./ClientsManagement";
 import { TicketsManagement } from "./TicketsManagement";
-import { MediaDashboard } from "./MediaDashboard";
 import { DashboardBoards } from "./DashboardBoards";
 import { CrmManagement } from "./CrmManagement";
 import { TasksManagement } from "./TasksManagement";
@@ -72,11 +72,15 @@ import { CalendarManagement } from "./CalendarManagement";
 import { OperationalReports } from "./OperationalReports";
 import { PublicProposal } from "./PublicProposal";
 import { ProposalManagement } from "./ProposalManagement";
+
+const MediaDashboard = lazy(() => import("./MediaDashboard").then((module) => ({ default: module.MediaDashboard })));
 import { FinancialManagement } from "./FinancialManagement";
 import { SettingsManagement } from "./SettingsManagement";
 import { HelpCenter } from "./HelpCenter";
 import { maskPhone } from "./inputMasks";
 import "./Notifications.css";
+import "./SidebarMediaSubmenu.css";
+import "./SidebarMediaGapFix.css";
 
 const money = (value: number) =>
   value.toLocaleString("pt-BR", {
@@ -127,6 +131,8 @@ type SessionUser = {
   mustChangePassword: boolean;
   clientId?: string;
   permissions: string[];
+  departmentId?: string;
+  departmentName?: string;
 };
 type MediaNotification = {
   id: string;
@@ -187,7 +193,9 @@ function Shell({
   onUserUpdate: (user: SessionUser) => void;
 }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const [menu, setMenu] = useState(false);
+  const [mediaMenuOpen, setMediaMenuOpen] = useState(() => location.pathname.startsWith("/midia"));
   const [accountMenu, setAccountMenu] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notifications, setNotifications] = useState<MediaNotification[]>([]),
@@ -204,6 +212,20 @@ function Shell({
     document.documentElement.style.colorScheme = theme;
     localStorage.setItem("pw-os-theme", theme);
   }, [theme]);
+  useEffect(() => {
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setAccountMenu(false);
+        setNotificationsOpen(false);
+      }
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, []);
+  useEffect(() => {
+    setAccountMenu(false);
+    setNotificationsOpen(false);
+  }, [location.pathname]);
 
   const loadNotifications = async () => {
     try {
@@ -296,7 +318,21 @@ function Shell({
           <X />
         </button>
         <nav aria-label="Navegação principal">
-          {visibleNav.map((item) => (
+          {visibleNav.map((item) => item.to === "/midia" ? (
+            <div className={`sidebar-media-group ${mediaMenuOpen ? "open" : ""}`} key={item.to}>
+              <button type="button" className={`sidebar-media-parent ${location.pathname.startsWith("/midia") ? "active" : ""}`} onClick={() => setMediaMenuOpen((value) => !value)} aria-expanded={mediaMenuOpen}>
+                <item.icon />{item.label}<ChevronDown className="sidebar-media-chevron" />
+              </button>
+              <div className="sidebar-media-submenu">
+                <NavLink to="/midia/hoje" onClick={() => setMenu(false)}>Hoje</NavLink>
+                <NavLink to="/midia/compilado" onClick={() => setMenu(false)}>Visão geral</NavLink>
+                <NavLink to="/midia/campanhas" onClick={() => setMenu(false)}>Campanhas</NavLink>
+                <NavLink to="/midia/gestao" onClick={() => setMenu(false)}>Contas e vínculos</NavLink>
+                <NavLink to="/midia/relatorios" onClick={() => setMenu(false)}>Relatórios</NavLink>
+                <NavLink to="/midia/historico" onClick={() => setMenu(false)}>Histórico</NavLink>
+              </div>
+            </div>
+          ) : (
             <NavLink
               key={item.to}
               to={item.to}
@@ -482,6 +518,7 @@ function Shell({
                     <div className="account-cover">
                       <span>PW</span>
                       <i />
+                      <button type="button" className="account-menu-close" onClick={() => setAccountMenu(false)} aria-label="Fechar menu"><X /></button>
                     </div>
                     <header>
                       <UserAvatar user={user} className="large" />
@@ -543,7 +580,7 @@ function Shell({
                     </div>
                     <footer>
                       <span>PW OS · {user.profile}</span>
-                      <button onClick={onLogout}>
+                      <button onClick={() => { setAccountMenu(false); setNotificationsOpen(false); onLogout(); }}>
                         <LogOut /> Sair
                       </button>
                     </footer>
@@ -553,7 +590,7 @@ function Shell({
             </div>
           </div>
         </header>
-        <Routes>
+        <Suspense fallback={<div className="route-skeleton" role="status"><i/><i/><i/><span>Carregando módulo…</span></div>}><Routes>
           <Route
             path="/"
             element={
@@ -618,32 +655,38 @@ function Shell({
               )
             }
           />
-          <Route path="/financeiro" element={<FinancialManagement />} />
-          <Route path="/midia" element={<MediaDashboard />} />
-          <Route path="/midia/:id" element={<MediaDashboard />} />
-          <Route path="/relatorios" element={<OperationalReports />} />
-          <Route path="/chamados" element={<TicketsManagement user={user} />} />
+          <Route path="/financeiro" element={can("finance.view")?<FinancialManagement />:<Navigate to={firstAccessiblePath} replace />} />
+          <Route path="/midia" element={can("media.view")?<Navigate to="/midia/hoje" replace />:<Navigate to={firstAccessiblePath} replace />} />
+          <Route path="/midia/hoje" element={can("media.view")?<MediaDashboard section="TODAY" />:<Navigate to={firstAccessiblePath} replace />} />
+          <Route path="/midia/gestao" element={can("media.view")?<MediaDashboard section="CLIENTS" />:<Navigate to={firstAccessiblePath} replace />} />
+          <Route path="/midia/campanhas" element={can("media.view")?<MediaDashboard section="CAMPAIGNS" />:<Navigate to={firstAccessiblePath} replace />} />
+          <Route path="/midia/compilado" element={can("media.view")?<MediaDashboard section="COMPILED" />:<Navigate to={firstAccessiblePath} replace />} />
+          <Route path="/midia/relatorios" element={can("media.view")?<MediaDashboard section="REPORTS" />:<Navigate to={firstAccessiblePath} replace />} />
+          <Route path="/midia/historico" element={can("media.view")?<MediaDashboard section="HISTORY" />:<Navigate to={firstAccessiblePath} replace />} />
+          <Route path="/midia/:id" element={can("media.view")?<MediaDashboard />:<Navigate to={firstAccessiblePath} replace />} />
+          <Route path="/relatorios" element={can("reports.view")?<OperationalReports />:<Navigate to={firstAccessiblePath} replace />} />
+          <Route path="/chamados" element={can("tickets.view")?<TicketsManagement user={user} />:<Navigate to={firstAccessiblePath} replace />} />
           <Route
             path="/equipe"
             element={
-              <AccessManagement
+              can("users.view") ? <AccessManagement
                 permissions={user.permissions || []}
                 profile={user.profile}
                 role={user.role}
                 roleId={user.roleId}
-              />
+              /> : <Navigate to={firstAccessiblePath} replace />
             }
           />
-          <Route path="/configuracoes/integracoes" element={<Connections />} />
+          <Route path="/configuracoes/integracoes" element={can("integrations.view")?<Connections />:<Navigate to={firstAccessiblePath} replace />} />
           <Route
             path="/configuracoes"
             element={
-              <SettingsManagement
+              can("settings.view") ? <SettingsManagement
                 theme={theme}
                 onTheme={setTheme}
                 onOpenProfile={() => setProfilePanel("profile")}
                 onOpenSecurity={() => setProfilePanel("security")}
-              />
+              /> : <Navigate to={firstAccessiblePath} replace />
             }
           />
           <Route path="/ajuda" element={<HelpCenter user={user} />} />
@@ -657,7 +700,7 @@ function Shell({
               )
             }
           />
-        </Routes>
+        </Routes></Suspense>
         <MobileNav />
         {profilePanel && (
           <ProfilePanel
@@ -1838,6 +1881,11 @@ function Login({
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [help, setHelp] = useState(false);
+  const [email, setEmail] = useState("");
+  const [recoveryMessage, setRecoveryMessage] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [passwordConfirmation, setPasswordConfirmation] = useState("");
+  const resetToken = new URLSearchParams(window.location.search).get("resetToken") || "";
   const [theme, setTheme] = useState<"light" | "dark">(() =>
     document.documentElement.dataset.theme === "dark" ? "dark" : "light",
   );
@@ -1845,6 +1893,7 @@ function Login({
     ? "pw-client-remembered-email"
     : "pw-os-remembered-email";
   const rememberedEmail = localStorage.getItem(rememberedEmailKey) || "";
+  useEffect(() => { if (!email && rememberedEmail) setEmail(rememberedEmail); }, [email, rememberedEmail]);
   const toggleTheme = () =>
     setTheme((current) => {
       const next = current === "light" ? "dark" : "light";
@@ -1862,6 +1911,12 @@ function Login({
       ...(clientPortal ? { portal: "client" } : {}),
     };
     try {
+      if (resetToken) {
+        const response = await fetch("/api/auth/reset-password", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: resetToken, password: newPassword, confirmation: passwordConfirmation }) });
+        const data = await response.json();
+        if (!response.ok) setError(data.message); else { window.history.replaceState({}, "", window.location.pathname); setRecoveryMessage(data.message); setNewPassword(""); setPasswordConfirmation(""); window.setTimeout(() => window.location.assign("/"), 1200); }
+        return;
+      }
       const response = await fetch(
         clientPortal ? "/api/client-auth/login" : "/api/auth/login",
         {
@@ -1883,6 +1938,15 @@ function Login({
     } finally {
       setLoading(false);
     }
+  };
+  const requestRecovery = async () => {
+    if (!email) { setError("Informe seu e-mail para recuperar a senha."); return; }
+    setLoading(true); setError(""); setRecoveryMessage("");
+    try {
+      const response = await fetch("/api/auth/forgot-password", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email }) }), data = await response.json();
+      response.ok ? setRecoveryMessage(data.message) : setError(data.message);
+    } catch { setError("Não foi possível solicitar a recuperação agora."); }
+    finally { setLoading(false); }
   };
   const features = [
     [BarChart3, "Operação", "Tudo em um só lugar"],
@@ -1991,13 +2055,17 @@ function Login({
               <ShieldCheck /> Acesso seguro
             </span>
           )}
-          <h2>{clientPortal ? "Portal do Cliente" : "Bem-vindo de volta"}</h2>
+          <h2>{resetToken ? "Crie uma nova senha" : clientPortal ? "Portal do Cliente" : "Bem-vindo de volta"}</h2>
           <p>
             {clientPortal
               ? "Consulte os resultados das suas campanhas com segurança."
-              : "Entre com sua conta para acessar o PW OS."}
+              : resetToken ? "Defina uma senha forte para recuperar seu acesso." : "Entre com sua conta para acessar o PW OS."}
           </p>
           <form onSubmit={submit}>
+            {resetToken ? <>
+              <label>Nova senha<div className="password-field login-input"><LockKeyhole/><input type="password" value={newPassword} onChange={event=>setNewPassword(event.target.value)} minLength={8} required autoComplete="new-password" placeholder="Nova senha"/></div></label>
+              <label>Confirmar nova senha<div className="password-field login-input"><LockKeyhole/><input type="password" value={passwordConfirmation} onChange={event=>setPasswordConfirmation(event.target.value)} minLength={8} required autoComplete="new-password" placeholder="Repita a nova senha"/></div></label>
+            </> : <>
             <label>
               E-mail
               <div className="login-input">
@@ -2007,7 +2075,8 @@ function Login({
                   type="email"
                   autoComplete="username"
                   required
-                  defaultValue={rememberedEmail}
+                  value={email}
+                  onChange={event => setEmail(event.target.value)}
                   placeholder="seuemail@empresa.com"
                 />
               </div>
@@ -2049,11 +2118,13 @@ function Login({
               <div className="login-help">
                 <HelpCircle />
                 <span>
-                  <b>Precisa recuperar o acesso?</b>Solicite ao administrador do
-                  PW OS a redefinição da sua senha.
+                  <b>Recupere seu acesso</b>Enviaremos um link seguro para o e-mail informado acima.
+                  <button type="button" onClick={() => void requestRecovery()} disabled={loading}>Enviar link de recuperação</button>
                 </span>
               </div>
             )}
+            </>}
+            {recoveryMessage && <div className="login-help"><ShieldCheck/><span>{recoveryMessage}</span></div>}
             {error && (
               <div className="form-error">
                 <AlertTriangle />
@@ -2062,7 +2133,9 @@ function Login({
             )}
             <button className="primary login-submit" disabled={loading}>
               {loading
-                ? "Entrando..."
+                ? "Processando..."
+                : resetToken
+                  ? "Redefinir senha"
                 : clientPortal
                   ? "Acessar minhas campanhas"
                   : "Entrar no PW OS"}
@@ -2071,8 +2144,8 @@ function Login({
           </form>
           {!clientPortal && (
             <small>
-              <LockKeyhole /> Suas credenciais são validadas somente no ambiente
-              local.
+              <LockKeyhole /> Suas credenciais são validadas somente pelo servidor
+              seguro do PW OS.
             </small>
           )}
         </div>

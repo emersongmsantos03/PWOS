@@ -1,0 +1,30 @@
+.report-window-switch {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 4%, var(--surface));
+}
+
+.report-window-switch > span { display: flex; flex-direction: column; gap: 2px; margin-right: auto; }
+.report-window-switch b { color: var(--heading); font-size: 11px; }
+.report-window-switch small { color: var(--subtle); font-size: 8px; }
+.report-window-switch button {
+  min-height: 34px;
+  padding: 0 13px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 750;
+  cursor: pointer;
+}
+.report-window-switch button.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 11%, var(--surface)); color: var(--accent); }
+@media (max-width: 760px) { .report-window-switch { flex-wrap: wrap; justify-content: flex-start; } .report-window-switch > span { flex-basis: 100%; } }
+
+.client-report-builder-actions > button.preview-report { background: var(--surface); color: var(--accent); }

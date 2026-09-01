@@ -5,6 +5,7 @@ import {
   ArrowUpRight,
   BarChart3,
   BriefcaseBusiness,
+  CalendarClock,
   CalendarDays,
   CheckCircle2,
   ChevronDown,
@@ -31,6 +32,7 @@ import {
   YAxis,
 } from "recharts";
 import "./ReportsDashboard.css";
+import { ClientReportAgenda } from "./ClientReportAgenda";
 
 type User = { id: string; profile: string; permissions: string[] };
 type Opportunity = {
@@ -85,7 +87,7 @@ type Data = {
   finance: Entry[];
   canViewFinanceValues: boolean;
 };
-type View = "OVERVIEW" | "COMMERCIAL" | "OPERATIONS" | "FINANCE";
+type View = "OVERVIEW" | "CAMPAIGN_REPORTS" | "COMMERCIAL" | "OPERATIONS" | "FINANCE";
 type Sort = "name" | "owner" | "status" | "value";
 const empty: Data = {
   opportunities: [],
@@ -258,11 +260,11 @@ export function OperationalReports() {
             })),
           );
       };
-      add("opportunities", "opportunities.view", "/api/crm/opportunities");
-      add("tasks", "tasks.view", "/api/tasks");
+      if (allowed("reports.view_commercial")) add("opportunities", "opportunities.view", "/api/crm/opportunities");
+      if (allowed("reports.view_operations")) add("tasks", "tasks.view", "/api/tasks");
       add("clients", "clients.view", "/api/clients");
-      add("events", "calendar.view", "/api/calendar/events");
-      add("finance", "finance.view", "/api/finance");
+      if (allowed("reports.view_operations")) add("events", "calendar.view", "/api/calendar/events");
+      if (allowed("reports.view_finance")) add("finance", "finance.view", "/api/finance");
       const results = await Promise.all(requests),
         next = { ...empty };
       results.forEach((r) => {
@@ -481,14 +483,15 @@ export function OperationalReports() {
   };
   const tabs: Array<[View, string, typeof Activity, boolean]> = [
     ["OVERVIEW", "Resumo executivo", BarChart3, true],
-    ["COMMERCIAL", "Comercial", TrendingUp, can("opportunities.view")],
+    ["CAMPAIGN_REPORTS", "Agenda de campanhas", CalendarClock, can("reports.view_operations") || can("media.view")],
+    ["COMMERCIAL", "Comercial", TrendingUp, can("reports.view_commercial") && can("opportunities.view")],
     [
       "OPERATIONS",
       "Operação",
       ListChecks,
-      can("tasks.view") || can("calendar.view"),
+      can("reports.view_operations") && (can("tasks.view") || can("calendar.view")),
     ],
-    ["FINANCE", "Financeiro", WalletCards, can("finance.view")],
+    ["FINANCE", "Financeiro", WalletCards, can("reports.view_finance") && can("finance.view")],
   ];
   if (loading)
     return (
@@ -550,7 +553,7 @@ export function OperationalReports() {
             ))}
           </Select>
         )}
-        {owners.length > 0 && (
+        {can("reports.view_team") && owners.length > 0 && (
           <Select
             icon={UserRound}
             label="Responsável"
@@ -602,6 +605,7 @@ export function OperationalReports() {
             </button>
           ))}
       </nav>
+      {view === "CAMPAIGN_REPORTS" && <ClientReportAgenda />}
       {view === "OVERVIEW" && (
         <>
           <section className="report-kpi-grid">

@@ -1,5 +1,5 @@
 export const permissionCatalog = [
-  { module: "Visão geral", key: "dashboard", actions: ["view"] },
+  { module: "Visão geral", key: "dashboard", actions: ["view", "view_team", "view_executive"] },
   { module: "Clientes", key: "clients", actions: ["view", "create", "edit", "delete", "assign", "create_access"] },
   { module: "CRM", key: "crm", actions: ["view", "create", "edit", "delete", "manage_pipelines"] },
   { module: "Oportunidades", key: "opportunities", actions: ["view", "create", "edit", "delete", "assign", "move_stage", "convert", "reverse_conversion", "view_values", "export"] },
@@ -9,7 +9,7 @@ export const permissionCatalog = [
   { module: "Agenda", key: "calendar", actions: ["view", "create", "edit", "delete", "view_team", "edit_all"] },
   { module: "Financeiro", key: "finance", actions: ["view", "create", "edit", "delete", "settle", "manage_settings", "view_values", "export"] },
   { module: "Mídia paga", key: "media", actions: ["view", "create", "edit", "sync"] },
-  { module: "Relatórios", key: "reports", actions: ["view", "create", "share", "download"] },
+  { module: "Relatórios", key: "reports", actions: ["view", "view_commercial", "view_operations", "view_finance", "view_team", "create", "share", "download"] },
   { module: "Chamados internos", key: "tickets", actions: ["view", "create", "edit", "delete", "comment", "assign", "view_all", "manage_departments"] },
   { module: "Usuários", key: "users", actions: ["view", "create", "edit", "block"] },
   { module: "Cargos e permissões", key: "roles", actions: ["view", "create", "edit", "delete"] },

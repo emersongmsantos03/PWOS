@@ -15,3 +15,4 @@
 .notification-list em{color:var(--subtle);font-size:6px;font-style:normal}
 .notification-list>button>u{position:absolute;right:11px;top:13px;width:6px;height:6px;border-radius:50%;background:var(--accent);text-decoration:none}
 .notification-list>button.read{opacity:.66}
+.route-skeleton{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;min-height:220px;padding:24px}.route-skeleton i{height:110px;border-radius:14px;background:linear-gradient(90deg,var(--surface-soft),var(--surface),var(--surface-soft));background-size:200% 100%;animation:route-skeleton 1.2s infinite}.route-skeleton span{grid-column:1/-1;color:var(--subtle);font-size:10px;text-align:center}@keyframes route-skeleton{to{background-position:-200% 0}}@media(max-width:700px){.route-skeleton{grid-template-columns:1fr}.route-skeleton span{grid-column:1}}

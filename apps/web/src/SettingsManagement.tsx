@@ -6,20 +6,27 @@ import {
   Database,
   DoorOpen,
   Globe2,
+  Eye,
+  EyeOff,
+  KeyRound,
   LayoutGrid,
   LockKeyhole,
+  Mail,
   Moon,
   Plug,
   Plus,
   Save,
+  Send,
   Settings,
   ShieldCheck,
   SlidersHorizontal,
+  Sparkles,
   Sun,
   Trash2,
   UserRound,
 } from "lucide-react";
 import { NavLink } from "react-router-dom";
+import "./OpenAiSettings.css";
 
 type Theme = "light" | "dark";
 type Preferences = {
@@ -97,6 +104,8 @@ export function SettingsManagement({
     ["general", Settings, "Geral"],
     ["appearance", Sun, "Aparência"],
     ["notifications", Bell, "Notificações"],
+    ["email", Mail, "E-mail e SMTP"],
+    ["openai", Sparkles, "OpenAI e insights"],
     ["rooms", DoorOpen, "Salas de reunião"],
     ["security", ShieldCheck, "Conta e segurança"],
     ["data", Database, "Dados e integrações"],
@@ -295,6 +304,8 @@ export function SettingsManagement({
               </div>
             </>
           )}
+          {tab === "email" && <UserEmailSettings />}
+          {tab === "openai" && <OpenAiSettings />}
           {tab === "security" && (
             <>
               <SettingsHeader
@@ -394,6 +405,39 @@ export function SettingsManagement({
       </div>
     </div>
   );
+}
+type OpenAiConnection = { configured:boolean;source:"SETTINGS"|"ENVIRONMENT"|"NONE";lastFour:string;model:string;verifiedAt:string|null;updatedByName:string|null };
+function OpenAiSettings(){
+  const [connection,setConnection]=useState<OpenAiConnection|null>(null),[loading,setLoading]=useState(true),[saving,setSaving]=useState(false),[showKey,setShowKey]=useState(false),[message,setMessage]=useState(""),[error,setError]=useState("");
+  const load=async()=>{try{const response=await fetch("/api/openai-settings"),payload=await response.json();if(response.ok)setConnection(payload);else setError(payload.message||"Não foi possível carregar a configuração.")}catch{setError("Falha de conexão ao carregar a integração.")}finally{setLoading(false)}};
+  useEffect(()=>{void load()},[]);
+  const saveKey=async(event:FormEvent<HTMLFormElement>)=>{event.preventDefault();setSaving(true);setError("");setMessage("");const form=event.currentTarget,data=Object.fromEntries(new FormData(form));try{const response=await fetch("/api/openai-settings",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)}),payload=await response.json();if(!response.ok){setError(payload.message||"Não foi possível salvar a chave.");return}setConnection(payload);setMessage("Chave validada, criptografada e conectada com sucesso.");form.reset();setShowKey(false)}catch{setError("Falha de conexão durante a validação.")}finally{setSaving(false)}};
+  const test=async()=>{setSaving(true);setError("");setMessage("");try{const response=await fetch("/api/openai-settings/test",{method:"POST"}),payload=await response.json();response.ok?setMessage(`Conexão confirmada com o modelo ${payload.model}.`):setError(payload.message||"Falha ao testar a conexão.")}catch{setError("Falha de conexão ao testar a OpenAI.")}finally{setSaving(false)}};
+  const remove=async()=>{if(!window.confirm("Remover a chave salva nas configurações?"))return;setSaving(true);setError("");const response=await fetch("/api/openai-settings",{method:"DELETE"}),payload=await response.json();setSaving(false);if(!response.ok)return setError(payload.message||"Não foi possível remover a chave.");setMessage(payload.fallbackToEnvironment?"Chave visual removida. O servidor voltou a usar a variável de ambiente.":"Chave removida. Os insights por IA ficaram desativados.");void load()};
+  if(loading)return <p>Carregando configuração da OpenAI…</p>;
+  return <><SettingsHeader icon={Sparkles} title="OpenAI e insights" text="Conecte uma chave de projeto para gerar diagnósticos nos relatórios operacionais."/>
+    <section className={`openai-connection-card ${connection?.configured?"connected":"empty"}`}><span>{connection?.configured?<Check/>:<KeyRound/>}</span><div><small>STATUS DA INTEGRAÇÃO</small><b>{connection?.configured?"OpenAI conectada":"Chave ainda não configurada"}</b><p>{connection?.configured?`Chave ••••••••${connection.lastFour} · ${connection.model}${connection.verifiedAt?` · validada em ${new Date(connection.verifiedAt).toLocaleString("pt-BR")}`:""}`:"Cadastre uma chave para habilitar o PDF da operação com insights."}</p></div>{connection?.configured&&<em>{connection.source==="SETTINGS"?"Configurações":"Ambiente"}</em>}</section>
+    <form className="openai-settings-form" onSubmit={saveKey}><header><div><small>CREDENCIAL DO SERVIDOR</small><h3>{connection?.configured?"Substituir chave":"Conectar chave da OpenAI"}</h3><p>A nova chave só substitui a atual depois de ser validada pela OpenAI.</p></div><a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer">Criar nova chave</a></header><label className="openai-key-field">Chave secreta<div><input name="apiKey" type={showKey?"text":"password"} required autoComplete="new-password" placeholder="sk-proj-••••••••••••••••"/><button type="button" onClick={()=>setShowKey(value=>!value)} aria-label={showKey?"Ocultar chave":"Mostrar chave"}>{showKey?<EyeOff/>:<Eye/>}</button></div><small>A chave é enviada diretamente ao backend, criptografada e nunca exibida novamente.</small></label><label>Modelo dos insights<select name="model" defaultValue={connection?.model||"gpt-5.5"}><option value="gpt-5.5">GPT-5.5 — maior qualidade</option><option value="gpt-5.4">GPT-5.4 — equilíbrio</option><option value="gpt-5.4-mini">GPT-5.4 mini — menor custo</option></select><small>É possível trocar o modelo sem alterar o fluxo dos relatórios.</small></label><footer>{connection?.configured&&<><button type="button" className="secondary" disabled={saving} onClick={()=>void test()}><Plug/> Testar conexão</button>{connection.source==="SETTINGS"&&<button type="button" className="danger-row" disabled={saving} onClick={()=>void remove()}><Trash2/> Remover</button>}</>}<button className="primary" disabled={saving}><Save/>{saving?"Validando…":connection?.configured?"Validar e substituir":"Validar e conectar"}</button></footer></form>
+    <div className="openai-safety-note"><ShieldCheck/><div><b>Proteção da credencial</b><p>O frontend recebe apenas o status, o modelo e os quatro últimos caracteres. A chave completa permanece criptografada no servidor.</p></div></div>
+    {message&&<div className="settings-email-message success"><Check/>{message}</div>}{error&&<div className="settings-email-message error"><LockKeyhole/>{error}</div>}
+  </>;
+}
+type EmailConnection = { method:"SMTP"|"GOOGLE";email:string;senderName:string;verifiedAt:string;configured:boolean };
+function UserEmailSettings(){
+  const [connection,setConnection]=useState<EmailConnection|null>(null),[googleAvailable,setGoogleAvailable]=useState(false),[loading,setLoading]=useState(true),[saving,setSaving]=useState(false),[message,setMessage]=useState(""),[error,setError]=useState("");
+  const load=async()=>{const response=await fetch("/api/email-connection"),payload=await response.json();if(response.ok){setConnection(payload.connection||null);setGoogleAvailable(!!payload.googleOAuthAvailable)}setLoading(false)};
+  useEffect(()=>{void load();const status=new URLSearchParams(window.location.search).get("email");if(status==="connected")setMessage("Conta Google conectada com sucesso.");if(status==="error")setError("Não foi possível concluir a conexão com o Google.")},[]);
+  const saveSmtp=async(event:FormEvent<HTMLFormElement>)=>{event.preventDefault();setSaving(true);setError("");setMessage("");const response=await fetch("/api/email-connection",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(Object.fromEntries(new FormData(event.currentTarget)))}),payload=await response.json();setSaving(false);if(!response.ok)return setError(payload.message||"Falha ao conectar.");setConnection(payload.connection);setMessage("Gmail conectado e validado.");event.currentTarget.reset()};
+  const test=async()=>{setSaving(true);setError("");const response=await fetch("/api/email-connection/test",{method:"POST"}),payload=await response.json();setSaving(false);response.ok?setMessage("E-mail de teste enviado para sua conta."):setError(payload.message||"Falha no teste.")};
+  const connectGoogle=async()=>{setError("");const response=await fetch("/api/email-connection/google/start",{method:"POST"}),payload=await response.json();if(!response.ok)return setError(payload.message);window.location.href=payload.authUrl};
+  const disconnect=async()=>{await fetch("/api/email-connection",{method:"DELETE"});setConnection(null);setMessage("Conexão removida.")};
+  if(loading)return <p>Carregando configuração de e-mail…</p>;
+  return <><SettingsHeader icon={Mail} title="E-mail e SMTP" text="Envie acessos do portal e relatórios usando sua própria conta Gmail."/>
+    {connection&&<div className="email-connection-status"><span><Check/></span><div><b>{connection.email}</b><small>{connection.method==="GOOGLE"?"Conectado com Google":"Gmail SMTP"} · validado em {new Date(connection.verifiedAt).toLocaleString("pt-BR")}</small></div><button onClick={()=>void test()} disabled={saving}><Send/> Enviar teste</button><button className="danger-row" onClick={()=>void disconnect()}>Desconectar</button></div>}
+    <div className="gmail-connect-choice"><button className="google-connect" disabled={!googleAvailable} onClick={()=>void connectGoogle()}><b>G</b><span><strong>Entrar com Google</strong><small>{googleAvailable?"Autorize o envio sem informar senha de app.":"OAuth Google ainda não configurado no servidor."}</small></span></button><i>ou</i></div>
+    <form className="smtp-settings-form" onSubmit={saveSmtp}><label>Nome do remetente<input name="senderName" required defaultValue={connection?.senderName||""} placeholder="Seu nome ou nome da agência"/></label><label>E-mail Gmail / Workspace<input name="email" type="email" required defaultValue={connection?.email||""} placeholder="voce@seudominio.com.br"/></label><label className="full">Senha de app do Google<input name="appPassword" type="password" minLength={16} required placeholder="16 caracteres"/><small>Use uma senha de app; nunca informe a senha normal do Gmail.</small></label><div className="smtp-fixed-data"><span>Servidor <b>smtp.gmail.com</b></span><span>Segurança <b>SSL</b></span><span>Porta <b>465</b></span></div><button className="primary" disabled={saving}><Plug/>{saving?"Testando e salvando…":"Testar e conectar SMTP"}</button></form>
+    {message&&<div className="settings-email-message success"><Check/>{message}</div>}{error&&<div className="settings-email-message error"><LockKeyhole/>{error}</div>}
+  </>;
 }
 type MeetingRoom={id:string;name:string;location:string;capacity:number};
 function MeetingRoomsSettings(){

@@ -16,3 +16,4 @@
 .access-modal .permission-extra-cell label span{font-size:7.5px!important;white-space:nowrap}
 .access-modal .permission-extra-cell input[type="checkbox"]{width:17px!important;height:17px!important;min-width:17px!important}
 @media(max-width:760px){.access-modal .permission-extra-cell{padding:38px 14px 12px!important;flex-wrap:wrap!important;overflow:visible}.access-modal .permission-extra-cell:before{top:13px!important;transform:none}}
+.department-system-label{display:inline-flex;align-items:center;gap:3px;margin-left:7px;padding:3px 6px;border-radius:999px;background:var(--surface-soft);color:var(--subtle);font-size:6px;font-style:normal;font-weight:750;vertical-align:middle}.department-system-label svg{width:9px;height:9px}.department-row-actions button:disabled{cursor:not-allowed;opacity:.5}

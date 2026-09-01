@@ -1,4 +1,5 @@
 import {
+  createHash,
   createCipheriv,
   createDecipheriv,
   randomBytes,
@@ -18,8 +19,12 @@ import {
   writeFileSync,
 } from "node:fs";
 import { once } from "node:events";
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { defineConfig, loadEnv, type Plugin } from "vite";
+import { defineConfig, loadEnv, type Plugin, type PreviewServer, type ViteDevServer } from "vite";
+import nodemailer from "nodemailer";
+import OpenAI from "openai";
 import { extractMetaLeads, type MetaAction } from "./metaInsights";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
@@ -71,6 +76,8 @@ type Integration = {
 };
 type MetaInsight = {
   campaign_id?: string;
+  region?: string;
+  zip?: string;
   spend?: string;
   reach?: string;
   impressions?: string;
@@ -87,7 +94,87 @@ type MetaCampaignPayload = {
   effective_status?: string;
   daily_budget?: string;
   lifetime_budget?: string;
+  budget_remaining?: string;
   promoted_object?: { page_id?: string; instagram_actor_id?: string };
+};
+const landingPageFromCreative = (creative: any): string | null => {
+  const url = creative?.object_story_spec?.link_data?.link ||
+    creative?.object_story_spec?.video_data?.call_to_action?.value?.link;
+  return typeof url === "string" && /^https?:\/\//i.test(url) ? url : null;
+};
+type LandingPageStatus = "ACTIVE" | "INACTIVE" | "UNKNOWN";
+const isPrivateAddress = (address: string) => {
+  if (isIP(address) === 6)
+    return address === "::1" || address.startsWith("fc") || address.startsWith("fd") || address.startsWith("fe80:");
+  const parts = address.split(".").map(Number);
+  return parts[0] === 10 || parts[0] === 127 ||
+    (parts[0] === 169 && parts[1] === 254) ||
+    (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) ||
+    (parts[0] === 192 && parts[1] === 168) || parts[0] === 0;
+};
+const validatePublicLandingPage = async (initialUrl: string): Promise<LandingPageStatus> => {
+  let current = initialUrl;
+  try {
+    for (let redirects = 0; redirects < 5; redirects += 1) {
+      const parsed = new URL(current);
+      if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password)
+        return "UNKNOWN";
+      const addresses = await lookup(parsed.hostname, { all: true });
+      if (!addresses.length || addresses.some(({ address }) => isPrivateAddress(address)))
+        return "UNKNOWN";
+      let result = await fetch(parsed, {
+        method: "HEAD",
+        redirect: "manual",
+        signal: AbortSignal.timeout(6_000),
+        headers: { "User-Agent": "PW-OS-Landing-Page-Monitor/1.0" },
+      });
+      if (result.status === 405)
+        result = await fetch(parsed, {
+          method: "GET",
+          redirect: "manual",
+          signal: AbortSignal.timeout(6_000),
+          headers: {
+            "User-Agent": "PW-OS-Landing-Page-Monitor/1.0",
+            Range: "bytes=0-0",
+          },
+        });
+      if (result.status >= 300 && result.status < 400) {
+        const location = result.headers.get("location");
+        if (!location) return "INACTIVE";
+        current = new URL(location, parsed).toString();
+        continue;
+      }
+      if ((result.status >= 200 && result.status < 300) || result.status === 401 || result.status === 403)
+        return "ACTIVE";
+      return "INACTIVE";
+    }
+    return "UNKNOWN";
+  } catch {
+    return "UNKNOWN";
+  }
+};
+const brazilianPostalLocationCache = new Map<string, { neighborhood?: string; city?: string }>();
+const resolveBrazilianPostalLocation = async (rawPostalCode: string) => {
+  const digits = rawPostalCode.replace(/\D/g, "");
+  if (![5, 8].includes(digits.length)) return {};
+  const cached = brazilianPostalLocationCache.get(digits);
+  if (cached) return cached;
+  const candidates = digits.length === 8
+    ? [digits]
+    : ["000", "001", "010", "050", "100", "200", "300", "400", "500", "600", "700", "800", "900"].map((suffix) => `${digits}${suffix}`);
+  for (const candidate of candidates) {
+    try {
+      const result = await fetch(`https://viacep.com.br/ws/${candidate}/json/`, { signal: AbortSignal.timeout(4_000) }),
+        address = await result.json() as { bairro?: string; localidade?: string; erro?: boolean | string };
+      if (!address.erro && (address.bairro || address.localidade)) {
+        const location = { neighborhood: address.bairro, city: address.localidade };
+        brazilianPostalLocationCache.set(digits, location);
+        return location;
+      }
+    } catch { /* tenta o próximo sufixo do prefixo postal */ }
+  }
+  brazilianPostalLocationCache.set(digits, {});
+  return {};
 };
 type MetaAccountPayload = {
   id: string;
@@ -143,6 +230,56 @@ type Client = {
   createdAt: string;
   updatedAt: string;
 };
+type ClientReportSchedule = {
+  id: string;
+  clientId: string;
+  frequency: "WEEKLY" | "BIWEEKLY" | "MONTHLY";
+  nextDueAt: string;
+  responsibleId: string;
+  useMediaResponsible?: boolean;
+  recipients: string[];
+  template: "PERFORMANCE" | "EXECUTIVE" | "COMPLETE";
+  reportRange: "FIRST_HALF" | "LAST_30" | "FULL_MONTH";
+  deliveryMethod: "EMAIL" | "WHATSAPP" | "MEETING" | "OTHER";
+  deliveryLagDays: 0 | 1 | 2;
+  workflowStatus: "SCHEDULED" | "PREPARING" | "READY" | "BLOCKED";
+  blockedReason?: string;
+  active: boolean;
+  notes: string;
+  lastSentAt?: string;
+  activities?: Array<{
+    id: string;
+    action: "GENERATED" | "VIEWED" | "DOWNLOADED" | "LINK_COPIED" | "STATUS_CHANGED" | "SENT";
+    actorId: string;
+    actorName: string;
+    createdAt: string;
+    detail?: string;
+  }>;
+  artifacts?: Array<{
+    id: string;
+    version: number;
+    fileName: string;
+    mimeType: "application/pdf";
+    dataUrl: string;
+    since: string;
+    until: string;
+    createdAt: string;
+    createdById: string;
+    createdByName: string;
+    publicToken?: string;
+    shareExpiresAt?: string;
+  }>;
+  history: Array<{
+    id: string;
+    dueAt: string;
+    sentAt: string;
+    sentById: string;
+    sentByName: string;
+    deliveryMethod: "EMAIL" | "WHATSAPP" | "MEETING" | "OTHER";
+  }>;
+  createdAt: string;
+  updatedAt: string;
+};
 type Department = {
   id: string;
   name: string;
@@ -151,6 +288,7 @@ type Department = {
   managerUserId?: string;
   managerName?: string;
   createdAt: string;
+  system?: boolean;
 };
 type TicketComment = {
   id: string;
@@ -518,6 +656,7 @@ const mediaAssignments = new Map<string, MediaAssignment>();
 const notificationReads = new Map<string, string>();
 const metaAccountPictures = new Map<string, string>();
 const clients = new Map<string, Client>();
+const clientReportSchedules = new Map<string, ClientReportSchedule>();
 const departments = new Map<string, Department>();
 const tickets = new Map<string, Ticket>();
 const pipelines = new Map<string, CrmPipeline>();
@@ -633,11 +772,30 @@ function localApi(
   googleClientSecret: string,
   googleDeveloperToken: string,
   googleRefreshToken: string,
+  openAiApiKey: string,
+  openAiModel: string,
+  azureEmailHost: string,
+  azureEmailUsername: string,
+  azureEmailPassword: string,
+  azureEmailFrom: string,
+  azureEmailFromName: string,
+  appBaseUrl: string,
 ): Plugin {
   const localMetaTokenPath = "data/meta-token.local.json";
   const localGoogleDeveloperTokenPath =
     "data/google-developer-token.local.json";
+  const localGoogleOAuthPath = "data/google-oauth.local.json";
   const localIntegrationKeyPath = "data/integration.local.key";
+  const localAiInsightsPath = "data/openai-insights.local.json";
+  const localOpenAiSettingsPath = "data/openai-settings.local.json";
+  type CampaignAiInsight = { verdict: "HEALTHY" | "WATCH" | "CRITICAL"; headline: string; summary: string; evidence: Array<{ metric: string; finding: string }>; priorities: string[]; risks: string[]; experiments: string[]; generatedAt: string; model: string };
+  let aiInsightsCache: Record<string, CampaignAiInsight> = {};
+  if (existsSync(localAiInsightsPath)) {
+    try { aiInsightsCache = JSON.parse(readFileSync(localAiInsightsPath, "utf8")); }
+    catch { aiInsightsCache = {}; }
+  }
+  const persistAiInsights = () => { mkdirSync("data", { recursive: true }); writeFileSync(localAiInsightsPath, JSON.stringify(aiInsightsCache, null, 2), { mode: 0o600 }); };
+  const localUserEmailConnectionsPath = "data/user-email-connections.local.json";
   let runtimeMetaAccessToken = metaAccessToken;
   let runtimeGoogleClientId = googleClientId;
   let runtimeGoogleClientSecret = googleClientSecret;
@@ -677,6 +835,71 @@ function localApi(
       decipher.final(),
     ]).toString("utf8");
   };
+  type OpenAiSettings = { secret: ReturnType<typeof encryptIntegrationToken>; model: string; lastFour: string; verifiedAt: string; updatedAt: string; updatedById: string; updatedByName: string };
+  let openAiSettings: OpenAiSettings | null = null;
+  if (existsSync(localOpenAiSettingsPath)) {
+    try { openAiSettings = JSON.parse(readFileSync(localOpenAiSettingsPath, "utf8")) as OpenAiSettings; }
+    catch { openAiSettings = null; }
+  }
+  const persistOpenAiSettings = () => { mkdirSync("data", { recursive: true }); if (openAiSettings) writeFileSync(localOpenAiSettingsPath, JSON.stringify(openAiSettings, null, 2), { mode: 0o600 }); else if (existsSync(localOpenAiSettingsPath)) unlinkSync(localOpenAiSettingsPath); };
+  const activeOpenAiApiKey = () => openAiSettings ? decryptIntegrationToken(openAiSettings.secret) : openAiApiKey;
+  const activeOpenAiModel = () => openAiSettings?.model || openAiModel;
+  const openAiClient = () => { const apiKey = activeOpenAiApiKey(); return apiKey ? new OpenAI({ apiKey }) : null; };
+  type UserEmailConnection = {
+    userId: string;
+    method: "SMTP" | "GOOGLE";
+    email: string;
+    senderName: string;
+    secret?: ReturnType<typeof encryptIntegrationToken>;
+    refreshToken?: ReturnType<typeof encryptIntegrationToken>;
+    verifiedAt: string;
+    updatedAt: string;
+  };
+  const userEmailConnections = new Map<string, UserEmailConnection>();
+  if (existsSync(localUserEmailConnectionsPath)) {
+    try {
+      (JSON.parse(readFileSync(localUserEmailConnectionsPath, "utf8")) as UserEmailConnection[]).forEach((item) => userEmailConnections.set(item.userId, item));
+    } catch { /* configuração inválida será refeita pelo usuário */ }
+  }
+  const persistUserEmailConnections = () => {
+    mkdirSync("data", { recursive: true });
+    writeFileSync(localUserEmailConnectionsPath, JSON.stringify([...userEmailConnections.values()], null, 2), { mode: 0o600 });
+  };
+  const googleAccessToken = async (refreshToken: string) => {
+    const tokenResponse = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ client_id: runtimeGoogleClientId, client_secret: runtimeGoogleClientSecret, refresh_token: refreshToken, grant_type: "refresh_token" }) });
+    const tokenPayload = await tokenResponse.json() as { access_token?: string; error_description?: string };
+    if (!tokenResponse.ok || !tokenPayload.access_token) throw new Error(tokenPayload.error_description || "Não foi possível renovar a autorização do Google.");
+    return tokenPayload.access_token;
+  };
+  const emailTransport = async (userId: string) => {
+    const connection = userEmailConnections.get(userId);
+    if (!connection) throw new Error("Configure seu Gmail em Configurações → E-mail e SMTP antes de enviar.");
+    if (connection.method === "SMTP" && connection.secret) return { connection, transport: nodemailer.createTransport({ host: "smtp.gmail.com", port: 465, secure: true, auth: { user: connection.email, pass: decryptIntegrationToken(connection.secret) } }) };
+    if (connection.method === "GOOGLE" && connection.refreshToken) {
+      const refreshToken = decryptIntegrationToken(connection.refreshToken), accessToken = await googleAccessToken(refreshToken);
+      return { connection, transport: nodemailer.createTransport({ service: "gmail", auth: { type: "OAuth2", user: connection.email, clientId: runtimeGoogleClientId, clientSecret: runtimeGoogleClientSecret, refreshToken, accessToken } }) };
+    }
+    throw new Error("A conexão de e-mail está incompleta.");
+  };
+  const sendUserEmail = async (userId: string, input: { to: string[]; subject: string; html: string; attachments?: Array<{ filename: string; content: Buffer; contentType: string }> }) => {
+    const connection = userEmailConnections.get(userId);
+    if (connection) {
+      const configured = await emailTransport(userId);
+      await configured.transport.sendMail({ from: { name: configured.connection.senderName, address: configured.connection.email }, to: input.to, subject: input.subject, html: input.html, attachments: input.attachments });
+      return;
+    }
+    if (!azureEmailUsername || !azureEmailPassword || !azureEmailFrom)
+      throw new Error("Configure seu Gmail ou o e-mail transacional da Azure antes de enviar.");
+    const transport = nodemailer.createTransport({ host: azureEmailHost || "smtp.azurecomm.net", port: 587, secure: false, requireTLS: true, auth: { user: azureEmailUsername, pass: azureEmailPassword } });
+    await transport.sendMail({ from: { name: azureEmailFromName || "PW OS", address: azureEmailFrom }, to: input.to, subject: input.subject, html: input.html, attachments: input.attachments });
+  };
+  const sendSystemEmail = async (input: { to: string[]; subject: string; html: string }) => {
+    if (!azureEmailUsername || !azureEmailPassword || !azureEmailFrom)
+      throw new Error("O e-mail transacional da Azure ainda não foi configurado.");
+    const transport = nodemailer.createTransport({ host: azureEmailHost || "smtp.azurecomm.net", port: 587, secure: false, requireTLS: true, auth: { user: azureEmailUsername, pass: azureEmailPassword } });
+    await transport.sendMail({ from: { name: azureEmailFromName || "PW OS", address: azureEmailFrom }, to: input.to, subject: input.subject, html: input.html });
+  };
+  const emailOAuthStates = new Map<string, { userId: string; redirectUri: string; createdAt: number }>();
   if (existsSync(localMetaTokenPath)) {
     try {
       runtimeMetaAccessToken = decryptIntegrationToken(
@@ -695,15 +918,135 @@ function localApi(
       runtimeGoogleDeveloperToken = googleDeveloperToken;
     }
   }
+  type StoredGoogleOAuth = {
+    clientId: ReturnType<typeof encryptIntegrationToken>;
+    clientSecret: ReturnType<typeof encryptIntegrationToken>;
+    refreshToken: ReturnType<typeof encryptIntegrationToken>;
+  };
+  if (existsSync(localGoogleOAuthPath)) {
+    try {
+      const stored = JSON.parse(readFileSync(localGoogleOAuthPath, "utf8")) as StoredGoogleOAuth;
+      runtimeGoogleClientId = decryptIntegrationToken(stored.clientId);
+      runtimeGoogleClientSecret = decryptIntegrationToken(stored.clientSecret);
+      runtimeGoogleRefreshToken = decryptIntegrationToken(stored.refreshToken);
+    } catch {
+      // Se o arquivo estiver inválido, as variáveis de ambiente continuam sendo a fonte de recuperação.
+    }
+  } else if (runtimeGoogleClientId && runtimeGoogleClientSecret && runtimeGoogleRefreshToken) {
+    try {
+      mkdirSync("data", { recursive: true });
+      writeFileSync(localGoogleOAuthPath, JSON.stringify({
+        clientId: encryptIntegrationToken(runtimeGoogleClientId),
+        clientSecret: encryptIntegrationToken(runtimeGoogleClientSecret),
+        refreshToken: encryptIntegrationToken(runtimeGoogleRefreshToken),
+      }, null, 2), { mode: 0o600 });
+    } catch (error) {
+      console.error("Não foi possível persistir a autorização OAuth do Google Ads.", error);
+    }
+  }
+  // A primeira inicialização no Azure pode receber as credenciais via secrets.
+  // Em seguida elas também ficam protegidas no Azure Files, junto da chave de
+  // criptografia, e continuam disponíveis quando uma nova imagem for publicada.
+  if (!existsSync(localMetaTokenPath) && runtimeMetaAccessToken) {
+    try {
+      mkdirSync("data", { recursive: true });
+      writeFileSync(localMetaTokenPath, JSON.stringify(encryptIntegrationToken(runtimeMetaAccessToken), null, 2), { mode: 0o600 });
+    } catch (error) { console.error("Não foi possível persistir o token da Meta.", error); }
+  }
+  if (!existsSync(localGoogleDeveloperTokenPath) && runtimeGoogleDeveloperToken) {
+    try {
+      mkdirSync("data", { recursive: true });
+      writeFileSync(localGoogleDeveloperTokenPath, JSON.stringify(encryptIntegrationToken(runtimeGoogleDeveloperToken), null, 2), { mode: 0o600 });
+    } catch (error) { console.error("Não foi possível persistir a chave do Google Ads.", error); }
+  }
   const localUsersPath = "data/users.local.json";
+  const localPasswordResetsPath = "data/password-resets.local.json";
+  const passwordResetAttempts = new Map<string, number>();
+  type PasswordReset = { tokenHash: string; userId: string; expiresAt: string; createdAt: string };
+  let passwordResets: PasswordReset[] = [];
+  if (existsSync(localPasswordResetsPath)) {
+    try { passwordResets = JSON.parse(readFileSync(localPasswordResetsPath, "utf8")) as PasswordReset[]; }
+    catch { passwordResets = []; }
+  }
+  const persistPasswordResets = () => {
+    mkdirSync("data", { recursive: true });
+    passwordResets = passwordResets.filter(item => new Date(item.expiresAt).getTime() > Date.now());
+    writeFileSync(localPasswordResetsPath, JSON.stringify(passwordResets, null, 2), { mode: 0o600 });
+  };
   const localRolesPath = "data/roles.local.json";
   const localIntegrationsPath = "data/integrations.local.json";
   const localClientsPath = "data/clients.local.json";
+  const localClientReportSchedulesPath = "data/client-report-schedules.local.json";
   const localMediaAssignmentsPath = "data/media-assignments.local.json";
   const localNotificationReadsPath = "data/notification-reads.local.json";
   const localMetaDashboardCachePath = "data/meta-dashboard-cache.local.json";
   const localGoogleDashboardCachePath = "data/google-dashboard-cache.local.json";
-  const mediaSyncIntervalMs = 30 * 60 * 1000;
+  const localCampaignVerificationsPath = "data/campaign-verifications.local.json";
+  const localCampaignOptimizationHistoryPath = "data/campaign-optimization-history.local.json";
+  const mediaSyncIntervalMs = 60 * 60 * 1000;
+  type CampaignReviewEntry = {
+    action: "ANALYSIS" | "REVIEW" | "REPORT_DOWNLOADED" | "REPORT_SENT";
+    createdAt: string;
+    userId: string;
+    userName: string;
+    score?: number;
+    spend?: number;
+    leads?: number;
+    cpl?: number | null;
+    periodDays?: number;
+    recipientCount?: number;
+  };
+  const campaignVerifications: Record<string, { verified: boolean; verifiedAt: string; verifiedBy: string; history?: CampaignReviewEntry[] }> = existsSync(localCampaignVerificationsPath)
+    ? JSON.parse(readFileSync(localCampaignVerificationsPath, "utf8"))
+    : {};
+  let campaignVerificationsPersistTimer: ReturnType<typeof setTimeout> | undefined;
+  const persistCampaignVerifications = () => {
+    clearTimeout(campaignVerificationsPersistTimer);
+    campaignVerificationsPersistTimer = setTimeout(() => {
+      try {
+        mkdirSync("data", { recursive: true });
+        writeFileSync(localCampaignVerificationsPath, JSON.stringify(campaignVerifications, null, 2), { mode: 0o600 });
+      } catch (error) {
+        console.error("Não foi possível persistir o histórico de verificações.", error);
+      }
+    }, 80);
+    campaignVerificationsPersistTimer.unref();
+  };
+  const campaignVerificationKey = (platform: string, accountId: string, campaignId: string) => `${platform}:${accountId}:${campaignId}`;
+  const withCampaignVerifications = (payload: any, platform: string) => ({
+    ...payload,
+    campaigns: (payload.campaigns || []).map((campaign: any) => ({
+      ...campaign,
+      verified: !!campaignVerifications[campaignVerificationKey(platform, campaign.accountId, campaign.id)]?.verified,
+      verifiedAt: campaignVerifications[campaignVerificationKey(platform, campaign.accountId, campaign.id)]?.verifiedAt || null,
+      verifiedBy: campaignVerifications[campaignVerificationKey(platform, campaign.accountId, campaign.id)]?.verifiedBy || null,
+      verificationHistory: campaignVerifications[campaignVerificationKey(platform, campaign.accountId, campaign.id)]?.history || [],
+    })),
+  });
+  const campaignOptimizationHistory: Record<string, Array<{ value: string; capturedAt: string }>> = existsSync(localCampaignOptimizationHistoryPath)
+    ? JSON.parse(readFileSync(localCampaignOptimizationHistoryPath, "utf8"))
+    : {};
+  const withOptimizationHistory = (campaigns: Record<string, any>[], platform: string, capturedAt: string): Record<string, any>[] => {
+    let changed = false;
+    const day = capturedAt.slice(0, 10);
+    const result: Record<string, any>[] = campaigns.map((campaign): Record<string, any> => {
+      const key = campaignVerificationKey(platform, campaign.accountId, campaign.id),
+        history = [...(campaignOptimizationHistory[key] || [])],
+        value = String(campaign.optimizationStatus || "Indisponível"),
+        latest = history.at(-1);
+      if (!latest || latest.capturedAt.slice(0, 10) !== day || latest.value !== value) {
+        history.push({ value, capturedAt });
+        campaignOptimizationHistory[key] = history.slice(-30);
+        changed = true;
+      }
+      return { ...campaign, optimizationHistory: campaignOptimizationHistory[key] || history };
+    });
+    if (changed) {
+      mkdirSync("data", { recursive: true });
+      writeFileSync(localCampaignOptimizationHistoryPath, JSON.stringify(campaignOptimizationHistory, null, 2), { mode: 0o600 });
+    }
+    return result;
+  };
   const localMasterProfilePath = "data/master-profile.local.json";
   const localMasterUserPath = "data/master-user.local.json";
   const localDepartmentsPath = "data/departments.local.json";
@@ -909,6 +1252,20 @@ function localApi(
     );
     scheduleDatabaseMirror();
   };
+  if (existsSync(localClientReportSchedulesPath))
+    (
+      JSON.parse(
+        readFileSync(localClientReportSchedulesPath, "utf8"),
+      ) as ClientReportSchedule[]
+    ).forEach((item) => clientReportSchedules.set(item.id, item));
+  const persistClientReportSchedules = () => {
+    mkdirSync("data", { recursive: true });
+    writeFileSync(
+      localClientReportSchedulesPath,
+      JSON.stringify([...clientReportSchedules.values()], null, 2),
+      { mode: 0o600 },
+    );
+  };
   if (existsSync(localDepartmentsPath))
     (
       JSON.parse(readFileSync(localDepartmentsPath, "utf8")) as Department[]
@@ -925,6 +1282,31 @@ function localApi(
       { mode: 0o600 },
     );
   };
+  const standardDepartments = [
+    { id: "department-campaign-intelligence", name: "Inteligência de Campanha", description: "Monitoramento, análise, revisão e otimização das campanhas de mídia." },
+    { id: "department-marketing-creative", name: "Marketing e Criação", description: "Estratégia de marketing, conteúdo, design e produção criativa." },
+    { id: "department-management", name: "Gestão", description: "Coordenação operacional, processos, pessoas e entregas da empresa." },
+    { id: "department-directors", name: "Diretoria", description: "Direcionamento estratégico, decisões executivas e acompanhamento de resultados." },
+    { id: "department-sales", name: "Comercial", description: "Prospecção, relacionamento, propostas, negociações e vendas." },
+  ];
+  let standardDepartmentsChanged = false;
+  standardDepartments.forEach((standard) => {
+    const existing = [...departments.values()].find(
+      (item) => item.name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase() === standard.name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase(),
+    );
+    if (existing) {
+      if (!existing.system || !existing.active) {
+        existing.system = true;
+        existing.active = true;
+        departments.set(existing.id, existing);
+        standardDepartmentsChanged = true;
+      }
+      return;
+    }
+    departments.set(standard.id, { ...standard, active: true, system: true, createdAt: new Date().toISOString() });
+    standardDepartmentsChanged = true;
+  });
+  if (standardDepartmentsChanged) persistDepartments();
   const persistTickets = () => {
     mkdirSync("data", { recursive: true });
     writeFileSync(
@@ -1345,7 +1727,7 @@ function localApi(
             `${ref.id}?fields=id,name,currency,amount_spent,spend_cap`,
           ),
           campaignRows = await listAll<MetaCampaignPayload>(
-            `${ref.id}/campaigns?fields=id,name,objective,effective_status,daily_budget,lifetime_budget,promoted_object&limit=500`,
+            `${ref.id}/campaigns?fields=id,name,objective,effective_status,daily_budget,lifetime_budget,budget_remaining,promoted_object&limit=500`,
           ),
           pageIds = new Map<string, number>(),
           instagramIds = new Map<string, number>();
@@ -1461,6 +1843,7 @@ function localApi(
             status: row.effective_status || "UNKNOWN",
             dailyBudget: Number(row.daily_budget || 0) / 100,
             lifetimeBudget: Number(row.lifetime_budget || 0) / 100,
+            remainingBudget: row.budget_remaining == null ? null : Number(row.budget_remaining) / 100,
             spend,
             reach: Number(insight.reach || 0),
             impressions: Number(insight.impressions || 0),
@@ -1474,7 +1857,7 @@ function localApi(
       }
       const syncedAt = new Date().toISOString(),
         payload = {
-          schemaVersion: 6,
+          schemaVersion: 7,
           since,
           until,
           syncedAt,
@@ -1493,7 +1876,7 @@ function localApi(
         localMetaDashboardCachePath,
         JSON.stringify(
           {
-            schemaVersion: 6,
+            schemaVersion: 7,
             since,
             until,
             cachedAt: syncedAt,
@@ -1520,9 +1903,7 @@ function localApi(
     pipeline.departmentIds.length === 0 ||
     (!!user.departmentId && pipeline.departmentIds.includes(user.departmentId));
   if (!existsSync(localPipelinesPath)) persistPipelines();
-  return {
-    name: "pw-os-local-api",
-    configureServer(server) {
+  const configureApiServer = (server: ViteDevServer | PreviewServer) => {
       cleanupExpiredTaskAttachments();
       const attachmentCleanupTimer = setInterval(
         cleanupExpiredTaskAttachments,
@@ -1543,7 +1924,20 @@ function localApi(
           ].map(async ([provider, cachePath, configured]) => {
             if (!configured || !existsSync(String(cachePath))) return;
             try {
-              const cached = JSON.parse(readFileSync(String(cachePath), "utf8")) as { since: string; until: string };
+              const cached = JSON.parse(readFileSync(String(cachePath), "utf8")) as {
+                since: string;
+                until: string;
+                syncedAt?: string;
+                cachedAt?: string;
+                payload?: { syncedAt?: string };
+              };
+              const lastSyncAt = new Date(
+                cached.syncedAt || cached.cachedAt || cached.payload?.syncedAt || 0,
+              ).getTime();
+              if (
+                Number.isFinite(lastSyncAt) &&
+                Date.now() - lastSyncAt < mediaSyncIntervalMs
+              ) return;
               await fetch(
                 `http://127.0.0.1:${address.port}/api/media/${provider}/campaigns?since=${encodeURIComponent(cached.since)}&until=${encodeURIComponent(cached.until)}&refresh=1`,
                 { headers: { "x-pw-media-background": mediaInternalSyncToken } },
@@ -1568,16 +1962,59 @@ function localApi(
       server.httpServer?.once("close", () => clearInterval(scheduledMediaTimer));
       server.middlewares.use("/api", async (request, response) => {
         const url = request.url || "/";
+        if (url === "/health" && request.method === "GET")
+          return json(response, 200, { ok: true, service: "pw-os", storage: "data" });
         const sessionId = cookies(request).pw_os_session;
         const clientSessionId = cookies(request).pw_client_session;
         const isClientAuthRoute = url.startsWith("/client-auth/") || url === "/client-portal/data";
         const userId = isClientAuthRoute
           ? clientSessionId && clientSessions.get(clientSessionId)
           : sessionId && sessions.get(sessionId);
-        const currentUser = userId && users.get(userId);
+        const currentUser = (userId && users.get(userId)) ||
+          (request.headers["x-pw-media-background"] === mediaInternalSyncToken && /^\/media\/(meta|google)\/campaigns/.test(url)
+            ? master
+            : undefined);
         const mutationMethod=request.method||"GET",ignoredAudit=/^\/(auth|client-auth|notifications|media\/.*\/token)/.test(url)||/\/(test|sync)$/.test(url),shouldAudit=!!currentUser&&!ignoredAudit&&["POST","PATCH","PUT","DELETE"].includes(mutationMethod);
         if(shouldAudit){const originalEnd=response.end.bind(response);response.end=((chunk?:any,...args:any[])=>{if(response.statusCode>=200&&response.statusCode<400){let payload:any={};try{payload=JSON.parse(typeof chunk==="string"?chunk:chunk?.toString?.()||"{}")}catch{}const entity=Object.values(payload||{}).find(value=>value&&typeof value==="object"&&!Array.isArray(value)&&(value as any).id) as any,pathParts=url.split("?")[0].split("/").filter(Boolean),commentLike=/\/(comments|activities)$/.test(url),action:SystemAudit["action"]=commentLike?"COMMENT":mutationMethod==="DELETE"?"DELETE":mutationMethod==="PATCH"||mutationMethod==="PUT"||/\/(read|read-all|response|reorder|move|convert|reverse|decision|submit)$/.test(url)?"UPDATE":"CREATE";systemAudits.push({id:randomUUID(),action,resource:pathParts[0]||"system",resourceId:String(entity?.id||payload?.id||pathParts.find(part=>/^[0-9a-f-]{20,}$/i.test(part))||""),path:url.split("?")[0],method:mutationMethod,userId:currentUser.id,userName:currentUser.name,status:response.statusCode,createdAt:new Date().toISOString()});persistSystemAudits()}return originalEnd(chunk,...args)}) as typeof response.end}
         if(url==="/audit-logs"&&request.method==="GET"){if(!currentUser||(currentUser.profile!=="MASTER"&&!hasPermission(currentUser,"users.manage")))return json(response,403,{message:"Você não possui acesso aos logs."});return json(response,200,{logs:systemAudits.slice(-1000).reverse()})}
+        if (url === "/auth/forgot-password" && request.method === "POST") {
+          const input = await body(request), email = String(input.email || "").trim().toLowerCase();
+          const attemptKey = `${String(request.headers["x-forwarded-for"] || request.socket.remoteAddress || "unknown").split(",")[0]}:${email}`, lastAttempt = passwordResetAttempts.get(attemptKey) || 0;
+          if (Date.now() - lastAttempt < 60_000)
+            return json(response, 429, { message: "Aguarde um minuto antes de solicitar outro link." });
+          passwordResetAttempts.set(attemptKey, Date.now());
+          const user = [...users.values()].find(item => item.email.toLowerCase() === email);
+          if (user) {
+            const token = randomBytes(32).toString("base64url"), now = new Date();
+            passwordResets = passwordResets.filter(item => item.userId !== user.id && new Date(item.expiresAt).getTime() > Date.now());
+            passwordResets.push({ tokenHash: createHash("sha256").update(token).digest("hex"), userId: user.id, createdAt: now.toISOString(), expiresAt: new Date(now.getTime() + 30 * 60 * 1000).toISOString() });
+            persistPasswordResets();
+            const forwardedProto = String(request.headers["x-forwarded-proto"] || "").split(",")[0].trim(), origin = appBaseUrl || `${forwardedProto || "http"}://${request.headers.host}`;
+            const resetUrl = `${origin.replace(/\/$/, "")}/?resetToken=${encodeURIComponent(token)}`;
+            try {
+              await sendSystemEmail({ to: [user.email], subject: "Recuperação de senha — PW OS", html: `<div style="font-family:Arial,sans-serif;color:#17263b"><h2>Recuperação de senha</h2><p>Olá, ${user.name}. Recebemos uma solicitação para redefinir sua senha.</p><p><a href="${resetUrl}" style="display:inline-block;padding:12px 18px;background:#0c79d8;color:#fff;text-decoration:none;border-radius:7px">Criar nova senha</a></p><p>Este link expira em 30 minutos e só pode ser usado uma vez. Se você não fez esta solicitação, ignore esta mensagem.</p></div>` });
+            } catch (cause) {
+              passwordResets = passwordResets.filter(item => item.userId !== user.id);
+              persistPasswordResets();
+              console.error("[Email] Falha ao enviar recuperação de senha:", cause instanceof Error ? cause.message : cause);
+            }
+          }
+          return json(response, 200, { message: "Se o e-mail estiver cadastrado, você receberá um link de recuperação." });
+        }
+        if (url === "/auth/reset-password" && request.method === "POST") {
+          const input = await body(request), tokenHash = createHash("sha256").update(String(input.token || "")).digest("hex"), reset = passwordResets.find(item => item.tokenHash === tokenHash && new Date(item.expiresAt).getTime() > Date.now()), password = String(input.password || ""), confirmation = String(input.confirmation || "");
+          if (!reset) return json(response, 400, { message: "O link é inválido ou expirou." });
+          if (password !== confirmation) return json(response, 400, { message: "A confirmação não corresponde à nova senha." });
+          if (password.length < 8 || !/[a-z]/.test(password) || !/[A-Z]/.test(password) || !/\d/.test(password) || !/[^A-Za-z0-9]/.test(password) || /\s/.test(password))
+            return json(response, 400, { message: "Use ao menos 8 caracteres, com maiúscula, minúscula, número e símbolo." });
+          const user = users.get(reset.userId);
+          if (!user) return json(response, 400, { message: "O acesso não está mais disponível." });
+          user.salt = randomBytes(16).toString("hex"); user.passwordHash = hash(password, user.salt); user.mustChangePassword = false; persistUser(user);
+          passwordResets = passwordResets.filter(item => item.userId !== user.id); persistPasswordResets();
+          for (const [sessionToken, sessionUserId] of sessions) if (sessionUserId === user.id) sessions.delete(sessionToken);
+          for (const [sessionToken, sessionUserId] of clientSessions) if (sessionUserId === user.id) clientSessions.delete(sessionToken);
+          return json(response, 200, { ok: true, message: "Senha redefinida. Você já pode entrar." });
+        }
         if ((url === "/auth/login" || url === "/client-auth/login") && request.method === "POST") {
           const input = await body(request);
           const user = [...users.values()].find(
@@ -1601,7 +2038,7 @@ function localApi(
           (portal ? clientSessions : sessions).set(token, user.id);
           response.setHeader(
             "Set-Cookie",
-            `${portal ? "pw_client_session" : "pw_os_session"}=${token}; HttpOnly; SameSite=Strict; Path=/`,
+            `${portal ? "pw_client_session" : "pw_os_session"}=${token}; HttpOnly; SameSite=Strict; Path=/${String(request.headers["x-forwarded-proto"] || "").includes("https") ? "; Secure" : ""}`,
           );
           return json(response, 200, { user: publicUser(user) });
         }
@@ -1615,9 +2052,100 @@ function localApi(
           if (!portal && sessionId) sessions.delete(sessionId);
           response.setHeader(
             "Set-Cookie",
-            `${portal ? "pw_client_session" : "pw_os_session"}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`,
+            `${portal ? "pw_client_session" : "pw_os_session"}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${String(request.headers["x-forwarded-proto"] || "").includes("https") ? "; Secure" : ""}`,
           );
           return json(response, 200, { ok: true });
+        }
+        if (url.startsWith("/email/google/callback") && request.method === "GET") {
+          const parsed = new URL(url, `http://${request.headers.host || "127.0.0.1"}`), state = parsed.searchParams.get("state") || "", code = parsed.searchParams.get("code") || "", pending = emailOAuthStates.get(state);
+          if (!pending || Date.now() - pending.createdAt > 10 * 60 * 1000 || !code) { response.statusCode = 302; response.setHeader("Location", "/configuracoes?email=error"); return response.end(); }
+          emailOAuthStates.delete(state);
+          try {
+            const tokenResponse = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ code, client_id: runtimeGoogleClientId, client_secret: runtimeGoogleClientSecret, redirect_uri: pending.redirectUri, grant_type: "authorization_code" }) }), tokenPayload = await tokenResponse.json() as { access_token?: string; refresh_token?: string };
+            if (!tokenResponse.ok || !tokenPayload.access_token) throw new Error("Autorização recusada.");
+            const profileResponse = await fetch("https://openidconnect.googleapis.com/v1/userinfo", { headers: { Authorization: `Bearer ${tokenPayload.access_token}` } }), profile = await profileResponse.json() as { email?: string; name?: string };
+            if (!profile.email || !tokenPayload.refresh_token) throw new Error("O Google não retornou a autorização permanente.");
+            const now = new Date().toISOString();
+            userEmailConnections.set(pending.userId, { userId: pending.userId, method: "GOOGLE", email: profile.email, senderName: profile.name || users.get(pending.userId)?.name || "PW OS", refreshToken: encryptIntegrationToken(tokenPayload.refresh_token), verifiedAt: now, updatedAt: now });
+            persistUserEmailConnections();
+            response.statusCode = 302; response.setHeader("Location", "/configuracoes?email=connected"); return response.end();
+          } catch { response.statusCode = 302; response.setHeader("Location", "/configuracoes?email=error"); return response.end(); }
+        }
+        if (url === "/email-connection" && request.method === "GET") {
+          if (!currentUser || currentUser.profile === "CLIENT") return json(response, 401, { message: "Sessão necessária." });
+          const connection = userEmailConnections.get(currentUser.id);
+          return json(response, 200, { connection: connection ? { method: connection.method, email: connection.email, senderName: connection.senderName, verifiedAt: connection.verifiedAt, configured: true } : null, googleOAuthAvailable: !!runtimeGoogleClientId && !!runtimeGoogleClientSecret });
+        }
+        if (url === "/email-connection" && request.method === "PUT") {
+          if (!currentUser || currentUser.profile === "CLIENT") return json(response, 401, { message: "Sessão necessária." });
+          const input = await body(request), email = String(input.email || "").trim().toLowerCase(), appPassword = String(input.appPassword || "").replace(/\s/g, ""), senderName = String(input.senderName || currentUser.name).trim();
+          if (!/^\S+@\S+\.\S+$/.test(email) || appPassword.length < 16) return json(response, 400, { message: "Informe o Gmail e a senha de app de 16 caracteres." });
+          try {
+            const transport = nodemailer.createTransport({ host: "smtp.gmail.com", port: 465, secure: true, auth: { user: email, pass: appPassword } });
+            await transport.verify();
+            const now = new Date().toISOString(); userEmailConnections.set(currentUser.id, { userId: currentUser.id, method: "SMTP", email, senderName, secret: encryptIntegrationToken(appPassword), verifiedAt: now, updatedAt: now }); persistUserEmailConnections();
+            return json(response, 200, { connection: { method: "SMTP", email, senderName, verifiedAt: now, configured: true } });
+          } catch { return json(response, 400, { message: "O Gmail recusou a conexão. Confira o e-mail, a verificação em duas etapas e a senha de app." }); }
+        }
+        if (url === "/email-connection/test" && request.method === "POST") {
+          if (!currentUser || currentUser.profile === "CLIENT") return json(response, 401, { message: "Sessão necessária." });
+          try { await sendUserEmail(currentUser.id, { to: [currentUser.email], subject: "Teste de envio — PW OS", html: `<div style="font-family:Arial,sans-serif"><h2>Seu Gmail está conectado</h2><p>O PW OS já pode enviar acessos e relatórios em seu nome.</p></div>` }); return json(response, 200, { ok: true }); } catch (cause) { return json(response, 400, { message: cause instanceof Error ? cause.message : "Falha no teste de envio." }); }
+        }
+        if (url === "/email-connection/google/start" && request.method === "POST") {
+          if (!currentUser || currentUser.profile === "CLIENT") return json(response, 401, { message: "Sessão necessária." });
+          if (!runtimeGoogleClientId || !runtimeGoogleClientSecret) return json(response, 409, { message: "Configure GOOGLE_ADS_CLIENT_ID e GOOGLE_ADS_CLIENT_SECRET no ambiente para habilitar o login Google." });
+          const origin = `${request.headers["x-forwarded-proto"] || "http"}://${request.headers.host}`, redirectUri = `${origin}/api/email/google/callback`, state = randomBytes(24).toString("hex");
+          emailOAuthStates.set(state, { userId: currentUser.id, redirectUri, createdAt: Date.now() });
+          const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?${new URLSearchParams({ client_id: runtimeGoogleClientId, redirect_uri: redirectUri, response_type: "code", scope: "openid email profile https://mail.google.com/", access_type: "offline", prompt: "consent", state })}`;
+          return json(response, 200, { authUrl });
+        }
+        if (url === "/email-connection" && request.method === "DELETE") {
+          if (!currentUser || currentUser.profile === "CLIENT") return json(response, 401, { message: "Sessão necessária." });
+          userEmailConnections.delete(currentUser.id); persistUserEmailConnections(); return json(response, 200, { ok: true });
+        }
+        if (url === "/openai-settings" && request.method === "GET") {
+          if (!hasPermission(currentUser, "settings.view")) return json(response, 403, { message: "Permissão insuficiente." });
+          const configured = !!activeOpenAiApiKey();
+          return json(response, 200, { configured, source: openAiSettings ? "SETTINGS" : openAiApiKey ? "ENVIRONMENT" : "NONE", lastFour: openAiSettings?.lastFour || (openAiApiKey ? openAiApiKey.slice(-4) : ""), model: activeOpenAiModel(), verifiedAt: openAiSettings?.verifiedAt || null, updatedByName: openAiSettings?.updatedByName || null });
+        }
+        if (url === "/openai-settings" && request.method === "PUT") {
+          if (!hasPermission(currentUser, "settings.edit")) return json(response, 403, { message: "Você não possui permissão para alterar integrações." });
+          const input = await body(request), apiKey = String(input.apiKey || "").trim(), model = String(input.model || "gpt-5.5").trim().slice(0, 80);
+          if (!apiKey.startsWith("sk-") || apiKey.length < 30) return json(response, 400, { message: "Informe uma chave de API válida da OpenAI." });
+          try {
+            const candidate = new OpenAI({ apiKey }); await candidate.models.retrieve(model);
+            const now = new Date().toISOString(); openAiSettings = { secret: encryptIntegrationToken(apiKey), model, lastFour: apiKey.slice(-4), verifiedAt: now, updatedAt: now, updatedById: currentUser.id, updatedByName: currentUser.name }; persistOpenAiSettings();
+            return json(response, 200, { configured: true, source: "SETTINGS", lastFour: openAiSettings.lastFour, model, verifiedAt: now, updatedByName: currentUser.name });
+          } catch (cause: any) {
+            const status = Number(cause?.status || 0); return json(response, status === 401 ? 401 : status === 403 ? 403 : 400, { message: status === 401 ? "A OpenAI recusou esta chave. Verifique se ela está ativa." : status === 403 ? `A chave não possui acesso ao modelo ${model}.` : "Não foi possível validar a chave e o modelo na OpenAI." });
+          }
+        }
+        if (url === "/openai-settings/test" && request.method === "POST") {
+          if (!hasPermission(currentUser, "settings.edit")) return json(response, 403, { message: "Permissão insuficiente." });
+          const client = openAiClient(); if (!client) return json(response, 409, { message: "Nenhuma chave OpenAI foi configurada." });
+          try { await client.models.retrieve(activeOpenAiModel()); return json(response, 200, { ok: true, model: activeOpenAiModel(), testedAt: new Date().toISOString() }); }
+          catch (cause: any) { return json(response, Number(cause?.status) === 401 ? 401 : 400, { message: Number(cause?.status) === 401 ? "A chave configurada não é mais válida." : "A conexão com a OpenAI falhou." }); }
+        }
+        if (url === "/openai-settings" && request.method === "DELETE") {
+          if (!hasPermission(currentUser, "settings.edit")) return json(response, 403, { message: "Permissão insuficiente." });
+          openAiSettings = null; persistOpenAiSettings();
+          return json(response, 200, { ok: true, fallbackToEnvironment: !!openAiApiKey });
+        }
+        const publicReportMatch = url.match(/^\/public\/client-reports\/([a-f0-9]{48})$/);
+        if (publicReportMatch && request.method === "GET") {
+          const artifact = [...clientReportSchedules.values()]
+            .flatMap((schedule) => schedule.artifacts || [])
+            .find((item) => item.publicToken === publicReportMatch[1]);
+          if (!artifact || !artifact.shareExpiresAt || artifact.shareExpiresAt < new Date().toISOString())
+            return json(response, 404, { message: "Relatório indisponível ou link expirado." });
+          const encoded = artifact.dataUrl.split(",")[1] || "";
+          const pdf = Buffer.from(encoded, "base64");
+          response.statusCode = 200;
+          response.setHeader("Content-Type", "application/pdf");
+          response.setHeader("Content-Disposition", `inline; filename="${artifact.fileName.replace(/[\"\r\n]/g, "")}"`);
+          response.setHeader("Cache-Control", "private, no-store");
+          response.setHeader("X-Content-Type-Options", "nosniff");
+          return response.end(pdf);
         }
         const publicProposalMatch = url.match(/^\/public\/proposals\/([a-f0-9]{32,})$/);
         if (publicProposalMatch) {
@@ -2471,11 +2999,12 @@ function localApi(
             return json(response, 400, {
               message: "Selecione um responsável válido.",
             });
-          department.name = String(input.name || department.name).trim();
+          if (!department.system)
+            department.name = String(input.name || department.name).trim();
           department.description = String(
             input.description ?? department.description,
           ).trim();
-          department.active = input.active !== false;
+          department.active = department.system ? true : input.active !== false;
           if (managerSpecified) {
             department.managerUserId = manager?.id;
             department.managerName = manager?.name;
@@ -2487,6 +3016,9 @@ function localApi(
         if (departmentMatch && request.method === "DELETE") {
           if (!hasPermission(currentUser, "tickets.manage_departments"))
             return json(response, 403, { message: "Permissão insuficiente." });
+          const department = departments.get(departmentMatch[1]);
+          if (department?.system)
+            return json(response, 409, { message: "Os setores padrão do sistema não podem ser excluídos." });
           if (
             [...tickets.values()].some(
               (ticket) => ticket.departmentId === departmentMatch[1],
@@ -3524,6 +4056,217 @@ function localApi(
           persistCalendarEvents();
           return json(response, 200, { ok: true });
         }
+        const canUseCampaignReportAgenda =
+          hasPermission(currentUser, "reports.view_operations") ||
+          hasPermission(currentUser, "media.view");
+        if (url === "/client-report-schedules" && request.method === "GET") {
+          if (!canUseCampaignReportAgenda)
+            return json(response, 403, { message: "Permissão insuficiente." });
+          return json(response, 200, {
+            schedules: [...clientReportSchedules.values()]
+              .map((item) => {
+                const mediaResponsibleId = [...mediaAssignments.values()].find((assignment) => assignment.clientId === item.clientId && assignment.responsibleId)?.responsibleId || "";
+                const effectiveResponsibleId = item.useMediaResponsible && mediaResponsibleId ? mediaResponsibleId : item.responsibleId;
+                return ({
+                ...item, responsibleId: effectiveResponsibleId,
+                artifacts: (item.artifacts || []).map(({ dataUrl: _dataUrl, publicToken: _publicToken, ...artifact }) => artifact),
+                activities: item.activities || [],
+                clientName: clients.get(item.clientId)?.name || "Cliente removido",
+                responsibleName: users.get(effectiveResponsibleId)?.name || "Não atribuído",
+              });})
+              .sort((a, b) => a.nextDueAt.localeCompare(b.nextDueAt)),
+            clients: [...clients.values()]
+              .filter((item) => item.status !== "INACTIVE")
+              .map(({ id, name, primaryContactEmail }) => {
+                const clientAssignments = [...mediaAssignments.values()].filter((assignment) => assignment.clientId === id), mediaResponsibleId = clientAssignments.find((assignment) => assignment.responsibleId)?.responsibleId || "";
+                return { id, name, primaryContactEmail, mediaAssignmentCount: clientAssignments.length, mediaResponsibleId, mediaResponsibleName: users.get(mediaResponsibleId)?.name || "", portalUserCount: clientUsers(id).length };
+              })
+              .sort((a, b) => a.name.localeCompare(b.name, "pt-BR")),
+            users: [...users.values()]
+              .filter((item) => item.profile !== "CLIENT")
+              .map((item) => ({ id: item.id, name: item.name }))
+              .sort((a, b) => a.name.localeCompare(b.name, "pt-BR")),
+          });
+        }
+        if (url === "/client-report-schedules" && request.method === "POST") {
+          if (!canUseCampaignReportAgenda)
+            return json(response, 403, { message: "Permissão insuficiente." });
+          const input = await body(request),
+            clientId = String(input.clientId || ""),
+            frequency = String(input.frequency || ""),
+            nextDueAt = String(input.nextDueAt || "").slice(0, 10);
+          if (!clients.has(clientId))
+            return json(response, 400, { message: "Selecione um cliente válido." });
+          if (!["WEEKLY", "BIWEEKLY", "MONTHLY"].includes(frequency) || !/^\d{4}-\d{2}-\d{2}$/.test(nextDueAt))
+            return json(response, 400, { message: "Informe a frequência e a primeira entrega." });
+          if ([...clientReportSchedules.values()].some((item) => item.clientId === clientId && item.active))
+            return json(response, 409, { message: "Este cliente já possui uma rotina ativa." });
+          const requestedResponsible = users.get(String(input.responsibleId || ""));
+          if (requestedResponsible?.profile === "CLIENT") return json(response, 400, { message: "O responsável pelo relatório deve ser um funcionário." });
+          const mediaResponsibleId = [...mediaAssignments.values()].find((assignment) => assignment.clientId === clientId && assignment.responsibleId)?.responsibleId || "", useMediaResponsible = input.useMediaResponsible === true && !!mediaResponsibleId;
+          const now = new Date().toISOString(), schedule: ClientReportSchedule = {
+            id: randomUUID(), clientId,
+            frequency: frequency as ClientReportSchedule["frequency"], nextDueAt,
+            responsibleId: useMediaResponsible ? mediaResponsibleId : requestedResponsible ? requestedResponsible.id : currentUser.id,
+            useMediaResponsible,
+            recipients: Array.isArray(input.recipients) ? input.recipients.map(String).map((item) => item.trim()).filter(Boolean) : [],
+            template: ["PERFORMANCE", "EXECUTIVE", "COMPLETE"].includes(input.template) ? input.template : "PERFORMANCE",
+            reportRange: ["FIRST_HALF", "LAST_30", "FULL_MONTH"].includes(input.reportRange) ? input.reportRange : "LAST_30",
+            deliveryMethod: ["EMAIL", "WHATSAPP", "MEETING", "OTHER"].includes(input.deliveryMethod) ? input.deliveryMethod : "EMAIL",
+            deliveryLagDays: [0, 1, 2].includes(Number(input.deliveryLagDays)) ? Number(input.deliveryLagDays) as 0 | 1 | 2 : 1,
+            workflowStatus: "SCHEDULED", blockedReason: "", active: true,
+            notes: String(input.notes || "").trim(), history: [], activities: [], artifacts: [], createdAt: now, updatedAt: now,
+          };
+          clientReportSchedules.set(schedule.id, schedule);
+          persistClientReportSchedules();
+          return json(response, 201, { schedule });
+        }
+        const reportScheduleMatch = url.match(/^\/client-report-schedules\/([^/]+)$/);
+        if (reportScheduleMatch && request.method === "PATCH") {
+          if (!canUseCampaignReportAgenda)
+            return json(response, 403, { message: "Permissão insuficiente." });
+          const schedule = clientReportSchedules.get(reportScheduleMatch[1]);
+          if (!schedule) return json(response, 404, { message: "Rotina não encontrada." });
+          const input = await body(request);
+          if (["SCHEDULED", "PREPARING", "READY", "BLOCKED"].includes(input.workflowStatus)) {
+            schedule.workflowStatus = input.workflowStatus;
+            if (input.workflowStatus !== "BLOCKED") schedule.blockedReason = "";
+            schedule.activities = schedule.activities || [];
+            schedule.activities.unshift({ id: randomUUID(), action: "STATUS_CHANGED", actorId: currentUser.id, actorName: currentUser.name, createdAt: new Date().toISOString(), detail: input.workflowStatus === "BLOCKED" ? String(input.blockedReason || "Bloqueio sem motivo informado").trim() : String(input.workflowStatus) });
+          }
+          if (typeof input.blockedReason === "string") schedule.blockedReason = input.blockedReason.trim().slice(0, 500);
+          if (["WEEKLY", "BIWEEKLY", "MONTHLY"].includes(input.frequency)) schedule.frequency = input.frequency;
+          if (/^\d{4}-\d{2}-\d{2}$/.test(String(input.nextDueAt || ""))) schedule.nextDueAt = String(input.nextDueAt);
+          if (typeof input.useMediaResponsible === "boolean") schedule.useMediaResponsible = input.useMediaResponsible;
+          if (users.has(String(input.responsibleId || ""))) {
+            const responsible = users.get(String(input.responsibleId));
+            if (responsible?.profile === "CLIENT") return json(response, 400, { message: "O responsável pelo relatório deve ser um funcionário." });
+            schedule.responsibleId = String(input.responsibleId);
+          }
+          if (Array.isArray(input.recipients)) schedule.recipients = input.recipients.map(String).map((item) => item.trim()).filter(Boolean);
+          if (["PERFORMANCE", "EXECUTIVE", "COMPLETE"].includes(input.template)) schedule.template = input.template;
+          if (["FIRST_HALF", "LAST_30", "FULL_MONTH"].includes(input.reportRange)) schedule.reportRange = input.reportRange;
+          if (["EMAIL", "WHATSAPP", "MEETING", "OTHER"].includes(input.deliveryMethod)) schedule.deliveryMethod = input.deliveryMethod;
+          if ([0, 1, 2].includes(Number(input.deliveryLagDays))) schedule.deliveryLagDays = Number(input.deliveryLagDays) as 0 | 1 | 2;
+          if (typeof input.active === "boolean") schedule.active = input.active;
+          if (typeof input.notes === "string") schedule.notes = input.notes.trim();
+          schedule.updatedAt = new Date().toISOString();
+          persistClientReportSchedules();
+          return json(response, 200, { schedule });
+        }
+        const reportActivityMatch = url.match(/^\/client-report-schedules\/([^/]+)\/activity$/);
+        if (reportActivityMatch && request.method === "POST") {
+          if (!canUseCampaignReportAgenda) return json(response, 403, { message: "Permissão insuficiente." });
+          const schedule = clientReportSchedules.get(reportActivityMatch[1]);
+          if (!schedule) return json(response, 404, { message: "Rotina não encontrada." });
+          const input = await body(request), action = String(input.action || "");
+          if (!["GENERATED", "VIEWED", "DOWNLOADED", "LINK_COPIED"].includes(action)) return json(response, 400, { message: "Ação inválida." });
+          schedule.activities = schedule.activities || [];
+          schedule.activities.unshift({ id: randomUUID(), action: action as "GENERATED" | "VIEWED" | "DOWNLOADED" | "LINK_COPIED", actorId: currentUser.id, actorName: currentUser.name, createdAt: new Date().toISOString(), detail: String(input.detail || "").trim().slice(0, 500) });
+          schedule.activities = schedule.activities.slice(0, 200); schedule.updatedAt = new Date().toISOString();
+          persistClientReportSchedules();
+          return json(response, 201, { activity: schedule.activities[0] });
+        }
+        const reportShareMatch = url.match(/^\/client-report-schedules\/([^/]+)\/share$/);
+        if (reportShareMatch && request.method === "POST") {
+          if (!canUseCampaignReportAgenda) return json(response, 403, { message: "Permissão insuficiente." });
+          const schedule = clientReportSchedules.get(reportShareMatch[1]), input = await body(request), artifact = schedule?.artifacts?.find((item) => item.id === String(input.artifactId || "")) || schedule?.artifacts?.[0];
+          if (!schedule || !artifact) return json(response, 409, { message: "Gere ou visualize o PDF antes de criar um link compartilhável." });
+          artifact.publicToken = randomBytes(24).toString("hex");
+          const expiresAt = new Date(); expiresAt.setDate(expiresAt.getDate() + 7); artifact.shareExpiresAt = expiresAt.toISOString();
+          schedule.activities = schedule.activities || [];
+          schedule.activities.unshift({ id: randomUUID(), action: "LINK_COPIED", actorId: currentUser.id, actorName: currentUser.name, createdAt: new Date().toISOString(), detail: `Versão ${artifact.version} · expira em ${expiresAt.toLocaleDateString("pt-BR")}` });
+          persistClientReportSchedules();
+          return json(response, 200, { url: `/api/public/client-reports/${artifact.publicToken}`, expiresAt: artifact.shareExpiresAt, version: artifact.version });
+        }
+        const reportArtifactDownloadMatch = url.match(/^\/client-report-artifacts\/([^/]+)\/download$/);
+        if (reportArtifactDownloadMatch && request.method === "GET") {
+          if (!canUseCampaignReportAgenda) return json(response, 403, { message: "Permissão insuficiente." });
+          const artifact = [...clientReportSchedules.values()].flatMap((item) => item.artifacts || []).find((item) => item.id === reportArtifactDownloadMatch[1]);
+          if (!artifact) return json(response, 404, { message: "Versão não encontrada." });
+          const pdf = Buffer.from(artifact.dataUrl.split(",")[1] || "", "base64");
+          response.statusCode = 200; response.setHeader("Content-Type", "application/pdf"); response.setHeader("Content-Disposition", `inline; filename="${artifact.fileName.replace(/[\"\r\n]/g, "")}"`); response.setHeader("Cache-Control", "private, no-store");
+          return response.end(pdf);
+        }
+        if (url === "/client-report-artifacts" && request.method === "POST") {
+          if (!canUseCampaignReportAgenda) return json(response, 403, { message: "Permissão insuficiente." });
+          const input = await body(request), clientId = String(input.clientId || ""), dataUrl = String(input.dataUrl || "");
+          const schedule = [...clientReportSchedules.values()].find((item) => item.clientId === clientId && item.active);
+          if (!schedule) return json(response, 404, { message: "Este cliente não possui rotina ativa." });
+          if (!dataUrl.startsWith("data:application/pdf;") || dataUrl.length > 20_000_000) return json(response, 400, { message: "PDF inválido ou maior que 15 MB." });
+          schedule.artifacts = schedule.artifacts || []; schedule.activities = schedule.activities || [];
+          const createdAt = new Date().toISOString(), artifact = { id: randomUUID(), version: (schedule.artifacts[0]?.version || 0) + 1, fileName: String(input.fileName || "Relatório.pdf").replace(/[<>:"/\\|?*\u0000-\u001F]/g, "-").replace(/\s+/g, " ").trim().slice(0, 160), mimeType: "application/pdf" as const, dataUrl, since: String(input.since || "").slice(0, 10), until: String(input.until || "").slice(0, 10), createdAt, createdById: currentUser.id, createdByName: currentUser.name };
+          schedule.artifacts.unshift(artifact); schedule.artifacts = schedule.artifacts.slice(0, 12);
+          schedule.activities.unshift({ id: randomUUID(), action: input.mode === "preview" ? "VIEWED" : "DOWNLOADED", actorId: currentUser.id, actorName: currentUser.name, createdAt, detail: `Versão ${artifact.version} · ${artifact.since} a ${artifact.until}` });
+          schedule.activities = schedule.activities.slice(0, 200); schedule.updatedAt = createdAt; persistClientReportSchedules();
+          return json(response, 201, { artifact: { ...artifact, dataUrl: undefined } });
+        }
+        if (url === "/media/ai-insights" && request.method === "POST") {
+          if (!hasPermission(currentUser, "media.view")) return json(response, 403, { message: "Você não possui acesso às campanhas." });
+          const openai = openAiClient();
+          if (!openai) return json(response, 503, { code: "AI_NOT_CONFIGURED", message: "Configure a chave da OpenAI em Configurações para gerar insights." });
+          const input = await body(request), clientName = String(input.clientName || "").trim().slice(0, 120), since = String(input.since || "").slice(0, 10), until = String(input.until || "").slice(0, 10), mode = input.mode === "AUTO" ? "AUTO" : "DEEP", cacheScope = String(input.cacheScope || clientName).trim().slice(0, 120), analysisScope = input.analysisScope === "OVERVIEW" ? "OVERVIEW" : "CAMPAIGNS", overview = input.overview && typeof input.overview === "object" ? Object.fromEntries(["campaignCount", "spend", "impressions", "clicks", "leads", "cpl", "ctr", "previousSpend", "previousImpressions", "previousClicks", "previousLeads", "previousCpl", "previousCtr"].map((key) => [key, Number(input.overview[key] || 0)])) : null, campaigns = Array.isArray(input.campaigns) ? input.campaigns.slice(0, 100).map((item: any) => ({ name: String(item.name || "").slice(0, 120), platform: String(item.platform || ""), status: String(item.status || ""), objective: String(item.objective || "").slice(0, 80), spend: Number(item.spend || 0), impressions: Number(item.impressions || 0), clicks: Number(item.clicks || 0), leads: Number(item.leads || 0), cpl: item.cpl == null ? null : Number(item.cpl), score: Number(item.score ?? -1) })) : [];
+          if (!clientName || !since || !until || !campaigns.length) return json(response, 400, { message: "Dados insuficientes para gerar os insights." });
+          const compactInput = { analysisScope, clientName, since, until, overview, campaigns }, sixHourWindow = Math.floor(Date.now() / (6 * 60 * 60 * 1000)), cacheKey = createHash("sha256").update(JSON.stringify(mode === "AUTO" ? { version: 3, model: activeOpenAiModel(), cacheScope, analysisScope, since, until, overview, sixHourWindow } : { version: 3, model: activeOpenAiModel(), compactInput })).digest("hex"), cached = aiInsightsCache[cacheKey];
+          if (cached) return json(response, 200, { insight: cached, cached: true });
+          try {
+            const aiResponse = await openai.responses.create({
+              model: activeOpenAiModel(),
+              reasoning: { effort: "low" },
+              store: false,
+              // O limite inclui os tokens internos de raciocínio. Com 1.100,
+              // a resposta podia terminar antes de concluir o JSON estruturado.
+              max_output_tokens: 2500,
+              prompt_cache_key: "pw-media-insights-v3",
+              input: [{ role: "developer", content: `Você é líder sênior de mídia paga. Entregue uma conclusão decisiva em português do Brasil, baseada somente nos dados fornecidos. Sucesso significa: começar pelo que os números provam; citar métricas exatas em toda evidência; priorizar ações pelo impacto provável; propor testes específicos. Não invente benchmarks, causas, metas ou contexto. Se os dados não sustentarem uma conclusão, declare a limitação. Evite conselhos genéricos. Headline até 90 caracteres, summary até 320, demais itens até 180. ${analysisScope === "OVERVIEW" ? "Você está na VISÃO GERAL. Analise exclusivamente os KPIs consolidados exibidos nesta tela (total de campanhas, investimento, impressões, cliques, conversões, CPL e CTR, incluindo comparação com o período anterior). Campanhas individuais só podem servir para justificar esses totais; não transforme a resposta em uma lista de análises individuais." : "Você está na aba CAMPANHAS. Faça uma leitura operacional específica das campanhas fornecidas, identificando campanhas, objetivos ou plataformas que expliquem os achados."}` }, { role: "user", content: `Produza o diagnóstico estruturado para ${analysisScope === "OVERVIEW" ? "a visão geral" : "as campanhas"}. Dados dinâmicos: ${JSON.stringify(compactInput)}` }],
+              text: { verbosity: "low", format: { type: "json_schema", name: "campaign_insights_v2", strict: true, schema: { type: "object", additionalProperties: false, properties: { verdict: { type: "string", enum: ["HEALTHY", "WATCH", "CRITICAL"] }, headline: { type: "string" }, summary: { type: "string" }, evidence: { type: "array", minItems: 2, maxItems: 4, items: { type: "object", additionalProperties: false, properties: { metric: { type: "string" }, finding: { type: "string" } }, required: ["metric", "finding"] } }, priorities: { type: "array", minItems: 2, maxItems: 4, items: { type: "string" } }, risks: { type: "array", minItems: 1, maxItems: 3, items: { type: "string" } }, experiments: { type: "array", minItems: 2, maxItems: 4, items: { type: "string" } } }, required: ["verdict", "headline", "summary", "evidence", "priorities", "risks", "experiments"] } } },
+            });
+            const parsed = JSON.parse(aiResponse.output_text) as Omit<CampaignAiInsight, "generatedAt" | "model">, insight = { ...parsed, generatedAt: new Date().toISOString(), model: activeOpenAiModel() };
+            aiInsightsCache[cacheKey] = insight; persistAiInsights();
+            return json(response, 200, { insight, cached: false, usage: aiResponse.usage ? { inputTokens: aiResponse.usage.input_tokens, outputTokens: aiResponse.usage.output_tokens, totalTokens: aiResponse.usage.total_tokens } : null });
+          } catch (cause: any) {
+            const apiCode = String(cause?.code || cause?.error?.code || ""), quota = apiCode === "insufficient_quota" || apiCode === "billing_hard_limit_reached";
+            if (quota) return json(response, 402, { code: "AI_QUOTA_EXHAUSTED", message: "Os créditos da OpenAI acabaram. Recarregue o saldo para voltar a gerar insights." });
+            if (Number(cause?.status) === 429) return json(response, 429, { code: "AI_RATE_LIMIT", message: "A OpenAI está temporariamente no limite de requisições. Aguarde um pouco e tente novamente." });
+            console.error("[OpenAI insights]", cause instanceof Error ? cause.message : cause);
+            return json(response, 502, { code: "AI_GENERATION_FAILED", message: "Não foi possível gerar os insights agora. O relatório numérico continua disponível." });
+          }
+        }
+        const reportSentMatch = url.match(/^\/client-report-schedules\/([^/]+)\/sent$/);
+        if (reportSentMatch && request.method === "POST") {
+          if (!canUseCampaignReportAgenda)
+            return json(response, 403, { message: "Permissão insuficiente." });
+          const schedule = clientReportSchedules.get(reportSentMatch[1]);
+          if (!schedule) return json(response, 404, { message: "Rotina não encontrada." });
+          if ((schedule.deliveryMethod || "EMAIL") === "EMAIL") {
+            if (!schedule.recipients.length) return json(response, 400, { message: "Adicione ao menos um destinatário antes de enviar por e-mail." });
+            const client = clients.get(schedule.clientId), artifact = schedule.artifacts?.[0], attachments = artifact ? [{ filename: artifact.fileName, content: Buffer.from(artifact.dataUrl.split(",")[1] || "", "base64"), contentType: "application/pdf" }] : undefined;
+            let reportLink = "";
+            if (artifact) { artifact.publicToken = randomBytes(24).toString("hex"); const expiresAt = new Date(); expiresAt.setDate(expiresAt.getDate() + 7); artifact.shareExpiresAt = expiresAt.toISOString(); reportLink = `${String(request.headers.origin || `http://${request.headers.host}`)}/api/public/client-reports/${artifact.publicToken}`; }
+            try { await sendUserEmail(currentUser.id, { to: schedule.recipients, subject: `Relatório de performance — ${client?.name || "Cliente"}`, html: `<div style="font-family:Arial,sans-serif;color:#17263b"><h2>Relatório de performance</h2><p>Olá! Segue o relatório de <strong>${client?.name || "sua empresa"}</strong>.</p>${artifact ? `<p>O PDF está anexado. Você também pode <a href="${reportLink}">abrir o relatório pelo link protegido</a>, válido por 7 dias.</p>` : "<p>O relatório foi concluído pela equipe.</p>"}<p style="color:#718096">Enviado pelo PW OS.</p></div>`, attachments }); }
+            catch (cause) { return json(response, 400, { message: cause instanceof Error ? cause.message : "Não foi possível enviar o relatório por e-mail." }); }
+          }
+          const sentAt = new Date().toISOString(), due = new Date(`${schedule.nextDueAt}T12:00:00`);
+          schedule.history.unshift({ id: randomUUID(), dueAt: schedule.nextDueAt, sentAt, sentById: currentUser.id, sentByName: currentUser.name, deliveryMethod: schedule.deliveryMethod || "EMAIL" });
+          schedule.history = schedule.history.slice(0, 50);
+          if (schedule.frequency === "WEEKLY") due.setDate(due.getDate() + 7);
+          else if (schedule.frequency === "BIWEEKLY") due.setDate(due.getDate() + 14);
+          else {
+            const originalDay = due.getDate();
+            due.setDate(1); due.setMonth(due.getMonth() + 1);
+            const lastDay = new Date(due.getFullYear(), due.getMonth() + 1, 0).getDate();
+            due.setDate(Math.min(originalDay, lastDay));
+          }
+          schedule.nextDueAt = due.toISOString().slice(0, 10);
+          schedule.lastSentAt = sentAt;
+          schedule.workflowStatus = "SCHEDULED";
+          schedule.blockedReason = "";
+          schedule.activities = schedule.activities || [];
+          schedule.activities.unshift({ id: randomUUID(), action: "SENT", actorId: currentUser.id, actorName: currentUser.name, createdAt: sentAt, detail: `${schedule.recipients.length} destinatário(s) · ${schedule.deliveryMethod}` });
+          schedule.updatedAt = sentAt;
+          persistClientReportSchedules();
+          return json(response, 200, { schedule });
+        }
         if (url === "/clients" && request.method === "GET") {
           if (!hasPermission(currentUser, "clients.view"))
             return json(response, 403, {
@@ -3728,7 +4471,7 @@ function localApi(
                 .filter((account) => linkedAccountIds.has(account.id))
                 .map((account) => {
                   const assignment = clientAssignments.find(
-                    (item) => item.accountId === account.id,
+                    (item) => item.platform === "META_ADS" && item.accountId === account.id,
                   );
                   return {
                     ...account,
@@ -3744,6 +4487,19 @@ function localApi(
             } catch {
               mediaAccounts = [];
             }
+          if (existsSync(localGoogleDashboardCachePath))
+            try {
+              const cached = JSON.parse(readFileSync(localGoogleDashboardCachePath, "utf8")) as {
+                accounts?: Array<{ id: string; name: string; pageName?: string | null }>;
+                campaigns?: Array<{ accountId: string }>;
+              };
+              mediaAccounts.push(...(cached.accounts || [])
+                .filter((account) => linkedAccountIds.has(account.id))
+                .map((account) => {
+                  const assignment = clientAssignments.find((item) => item.platform === "GOOGLE_ADS" && item.accountId === account.id);
+                  return { ...account, platform: "GOOGLE_ADS", responsibleName: users.get(assignment?.responsibleId || "")?.name || "Não atribuído", campaignCount: (cached.campaigns || []).filter((campaign) => campaign.accountId === account.id).length };
+                }));
+            } catch {}
           const relatedEntries = [...financialEntries.values()].filter(
               (item) => item.clientId === client.id,
             ),
@@ -5654,6 +6410,17 @@ function localApi(
           return json(response, 403, {
             message: "Clientes externos não acessam a Central de Conexões.",
           });
+        if (/^\/media\/(meta|google)\/token\/reveal$/.test(url) && request.method === "GET") {
+          if (currentUser.profile !== "MASTER")
+            return json(response, 403, {
+              message: "Somente o Master pode visualizar esta credencial.",
+            });
+          const platform = url.includes("/meta/") ? "META_ADS" : "GOOGLE_ADS";
+          const token = platform === "META_ADS" ? runtimeMetaAccessToken : runtimeGoogleDeveloperToken;
+          if (!token)
+            return json(response, 404, { message: "Nenhuma credencial configurada para esta plataforma." });
+          return json(response, 200, { token });
+        }
         if (url === "/media/meta/token" && request.method === "GET") {
           let updatedAt: string | null = null;
           if (existsSync(localMetaTokenPath)) {
@@ -6031,6 +6798,43 @@ function localApi(
             } catch {
               /* cache inválido não impede o restante do sistema */
             }
+          const addLowBalanceAlerts = (platform: "META_ADS" | "GOOGLE_ADS", cachedAt: string, since: string, until: string, accounts: any[], campaigns: any[]) => {
+            const days = Math.max(1, Math.round((new Date(until).getTime() - new Date(since).getTime()) / 86400000) + 1),
+              isMaster = currentUser.profile === "MASTER";
+            campaigns.forEach((campaign) => {
+              if (campaign.status !== "ACTIVE" || (Number(campaign.dailyBudget || 0) <= 0 && Number(campaign.lifetimeBudget || 0) <= 0) || Number(campaign.spend || 0) <= 0) return;
+              if (campaign.remainingBudget == null) return;
+              const dailyBudget = Number(campaign.dailyBudget || 0), lifetimeBudget = Number(campaign.lifetimeBudget || 0), totalBudget = lifetimeBudget > 0 ? lifetimeBudget : dailyBudget * days,
+                balance = Math.max(0, Number(campaign.remainingBudget)), lowThreshold = lifetimeBudget > 0 ? lifetimeBudget * .3 : dailyBudget * 2;
+              if (balance > lowThreshold) return;
+              const assignment = mediaAssignments.get(`${platform}:${campaign.accountId}`);
+              if (!assignment?.responsibleId || (!isMaster && assignment.responsibleId !== currentUser.id)) return;
+              const responsible = users.get(assignment.responsibleId), client = clients.get(assignment.clientId), account = accounts.find((item) => item.id === campaign.accountId),
+                coverage = dailyBudget ? balance / dailyBudget : days * (totalBudget ? balance / totalBudget : 0),
+                id = `media:${platform}:${campaign.accountId}:${campaign.id}:low-balance:${cachedAt.slice(0, 10)}`;
+              alerts.push({
+                id, type: "LOW_CAMPAIGN_BALANCE", severity: coverage <= 1 ? "CRITICAL" : "WARNING",
+                title: "Saldo da campanha baixo",
+                message: `Saldo atual de R$ ${balance.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}, suficiente para aproximadamente ${coverage.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} dia(s).`,
+                accountId: campaign.accountId, campaignId: campaign.id, campaignName: campaign.name,
+                clientName: client?.name || account?.pageName || account?.name || campaign.client || "Conta de anúncios",
+                responsibleId: assignment.responsibleId, responsibleName: responsible?.name || "Responsável",
+                createdAt: cachedAt, read: notificationReads.has(`${currentUser.id}:${id}`), targetUrl: "/midia",
+              });
+            });
+          };
+          try {
+            if (existsSync(localMetaDashboardCachePath)) {
+              const cache = JSON.parse(readFileSync(localMetaDashboardCachePath, "utf8"));
+              addLowBalanceAlerts("META_ADS", cache.cachedAt || new Date().toISOString(), cache.payload?.since || cache.since, cache.payload?.until || cache.until, cache.payload?.accounts || [], cache.payload?.campaigns || []);
+            }
+            if (existsSync(localGoogleDashboardCachePath)) {
+              const cache = JSON.parse(readFileSync(localGoogleDashboardCachePath, "utf8"));
+              addLowBalanceAlerts("GOOGLE_ADS", cache.syncedAt || new Date().toISOString(), cache.since, cache.until, cache.accounts || [], cache.campaigns || []);
+            }
+          } catch {
+            /* Um cache de mídia inválido não bloqueia as demais notificações. */
+          }
           for (const task of workTasks.values()) {
             if (task.archivedAt || !task.approvalHistory?.length) continue;
             const latest = task.approvalHistory.at(-1)!;
@@ -6079,6 +6883,17 @@ function localApi(
               read: notificationReads.has(readKey),
               targetUrl: `/tarefas?task=${encodeURIComponent(task.id)}`,
             });
+          }
+          for (const schedule of clientReportSchedules.values()) {
+            if (!schedule.active || (currentUser.profile !== "MASTER" && schedule.responsibleId !== currentUser.id)) continue;
+            const dueDays = Math.round((new Date(`${schedule.nextDueAt}T12:00:00`).getTime() - new Date(`${new Date().toISOString().slice(0, 10)}T12:00:00`).getTime()) / 86400000);
+            const shouldAlert = dueDays < 0 || dueDays <= 1 || schedule.workflowStatus === "READY" || schedule.workflowStatus === "BLOCKED";
+            if (!shouldAlert) continue;
+            const id = `client-report:${schedule.id}:${schedule.nextDueAt}:${schedule.workflowStatus}`,
+              readKey = `${currentUser.id}:${id}`,
+              client = clients.get(schedule.clientId), responsible = users.get(schedule.responsibleId),
+              blocked = schedule.workflowStatus === "BLOCKED", late = dueDays < 0, ready = schedule.workflowStatus === "READY";
+            alerts.push({ id, type: blocked ? "REPORT_BLOCKED" : late ? "REPORT_LATE" : ready ? "REPORT_READY" : "REPORT_DUE", severity: blocked || late ? "CRITICAL" : ready ? "INFO" : "WARNING", title: blocked ? "Relatório bloqueado" : late ? "Relatório atrasado" : ready ? "Relatório pronto para envio" : "Entrega de relatório próxima", message: blocked ? schedule.blockedReason || "Informe o motivo e resolva o bloqueio." : late ? `A entrega está atrasada há ${Math.abs(dueDays)} dia(s).` : ready ? "O relatório pode ser enviado ao cliente." : `A entrega vence ${dueDays === 0 ? "hoje" : "amanhã"}.`, accountId: schedule.id, campaignName: "Controle de relatórios", clientName: client?.name || "Cliente", responsibleId: schedule.responsibleId, responsibleName: responsible?.name || "Responsável", createdAt: schedule.updatedAt, read: notificationReads.has(readKey), targetUrl: "/midia/relatorios" });
           }
           const severityOrder = { CRITICAL: 0, WARNING: 1, INFO: 2 };
           alerts.sort(
@@ -6153,6 +6968,8 @@ function localApi(
             return json(response, 400, {
               message: "Selecione um responsável válido.",
             });
+          if (responsibleId && users.get(responsibleId)?.profile === "CLIENT")
+            return json(response, 400, { message: "O responsável pela mídia deve ser um funcionário." });
           const identitySource: MediaAssignment["identitySource"] =
             input.identitySource === "META_PORTFOLIO"
               ? "META_PORTFOLIO"
@@ -6170,6 +6987,20 @@ function localApi(
           };
           mediaAssignments.set(`${platform}:${accountId}`, assignment);
           persistMediaAssignments();
+          let inheritedScheduleChanged = false;
+          for (const schedule of clientReportSchedules.values()) {
+            if (
+              clientId &&
+              schedule.clientId === clientId &&
+              schedule.useMediaResponsible &&
+              schedule.responsibleId !== responsibleId
+            ) {
+              schedule.responsibleId = responsibleId;
+              schedule.updatedAt = new Date().toISOString();
+              inheritedScheduleChanged = true;
+            }
+          }
+          if (inheritedScheduleChanged) persistClientReportSchedules();
           return json(response, 200, { assignment });
         }
         const metaPictureMatch = url.match(
@@ -6209,6 +7040,61 @@ function localApi(
           }
         }
         if (
+          url === "/media/campaigns/verification" &&
+          request.method === "PATCH"
+        ) {
+          const input = await body(request),
+            platform = String(input.platform || ""),
+            accountId = String(input.accountId || ""),
+            campaignId = String(input.campaignId || ""),
+            action: CampaignReviewEntry["action"] = ["ANALYSIS", "REVIEW", "REPORT_DOWNLOADED", "REPORT_SENT"].includes(input.action) ? input.action : "REVIEW";
+          if (!hasPermission(currentUser, "media.view"))
+            return json(response, 403, { message: "Você não possui acesso às campanhas." });
+          if (!(["META_ADS", "GOOGLE_ADS"].includes(platform)) || !accountId || !campaignId)
+            return json(response, 400, { message: "Campanha inválida." });
+          const key = campaignVerificationKey(platform, accountId, campaignId),
+            current = campaignVerifications[key] || { verified: false, verifiedAt: "", verifiedBy: "", history: [] },
+            createdAt = new Date().toISOString(),
+            entry: CampaignReviewEntry = {
+              action,
+              createdAt,
+              userId: currentUser.id,
+              userName: currentUser.name,
+              ...(Number.isFinite(Number(input.score)) ? { score: Number(input.score) } : {}),
+              ...(Number.isFinite(Number(input.spend)) ? { spend: Number(input.spend) } : {}),
+              ...(Number.isFinite(Number(input.leads)) ? { leads: Number(input.leads) } : {}),
+              ...(input.cpl === null || Number.isFinite(Number(input.cpl)) ? { cpl: input.cpl === null ? null : Number(input.cpl) } : {}),
+              ...(Number.isFinite(Number(input.periodDays)) ? { periodDays: Number(input.periodDays) } : {}),
+              ...(Number.isFinite(Number(input.recipientCount)) ? { recipientCount: Number(input.recipientCount) } : {}),
+            };
+          campaignVerifications[key] = {
+            ...current,
+            ...(action === "REVIEW" ? { verified: true, verifiedAt: createdAt, verifiedBy: currentUser.id } : {}),
+            history: [...(current.history || []), entry].slice(-200),
+          };
+          persistCampaignVerifications();
+          let reportSchedule: ClientReportSchedule | null = null;
+          if (action === "REPORT_SENT") {
+            const assignment = mediaAssignments.get(`${platform}:${accountId}`);
+            reportSchedule = [...clientReportSchedules.values()].find((item) => item.active && item.clientId === assignment?.clientId) || null;
+            if (reportSchedule) {
+              const due = new Date(`${reportSchedule.nextDueAt}T12:00:00`);
+              reportSchedule.history.unshift({ id: randomUUID(), dueAt: reportSchedule.nextDueAt, sentAt: createdAt, sentById: currentUser.id, sentByName: currentUser.name, deliveryMethod: reportSchedule.deliveryMethod || "EMAIL" });
+              reportSchedule.history = reportSchedule.history.slice(0, 50);
+              if (reportSchedule.frequency === "WEEKLY") due.setDate(due.getDate() + 7);
+              else if (reportSchedule.frequency === "BIWEEKLY") due.setDate(due.getDate() + 14);
+              else { const originalDay = due.getDate(); due.setDate(1); due.setMonth(due.getMonth() + 1); due.setDate(Math.min(originalDay, new Date(due.getFullYear(), due.getMonth() + 1, 0).getDate())); }
+              reportSchedule.nextDueAt = due.toISOString().slice(0, 10);
+              reportSchedule.lastSentAt = createdAt; reportSchedule.workflowStatus = "SCHEDULED"; reportSchedule.blockedReason = ""; reportSchedule.updatedAt = createdAt;
+              reportSchedule.activities = reportSchedule.activities || [];
+              reportSchedule.activities.unshift({ id: randomUUID(), action: "SENT", actorId: currentUser.id, actorName: currentUser.name, createdAt, detail: `${reportSchedule.recipients.length} destinatário(s) · ${reportSchedule.deliveryMethod}` });
+              persistClientReportSchedules();
+            }
+          }
+          scheduleDatabaseMirror();
+          return json(response, 200, { verified: !!campaignVerifications[key]?.verified, verifiedAt: campaignVerifications[key]?.verifiedAt || null, history: campaignVerifications[key]?.history || [], reportSchedule: reportSchedule ? { nextDueAt: reportSchedule.nextDueAt, frequency: reportSchedule.frequency } : null });
+        }
+        if (
           url.startsWith("/media/google/campaigns") &&
           request.method === "GET"
         ) {
@@ -6233,14 +7119,15 @@ function localApi(
             )
               ? requestUrl.searchParams.get("until")!
               : today,
-            forceRefresh = requestUrl.searchParams.get("refresh") === "1";
+            forceRefresh = requestUrl.searchParams.get("refresh") === "1",
+            comparisonRequest = requestUrl.searchParams.get("comparison") === "1";
           if (!forceRefresh && existsSync(localGoogleDashboardCachePath))
             try {
               const cached = JSON.parse(
                 readFileSync(localGoogleDashboardCachePath, "utf8"),
               ) as Record<string, any>;
-              if (cached.since === since && cached.until === until)
-                return json(response, 200, {
+              if (cached.schemaVersion === 7 && cached.since === since && cached.until === until)
+                return json(response, 200, withCampaignVerifications({
                   ...cached,
                   cache: {
                     status: "stored",
@@ -6249,7 +7136,7 @@ function localApi(
                       new Date(cached.syncedAt).getTime() + mediaSyncIntervalMs,
                     ).toISOString(),
                   },
-                });
+                }, "GOOGLE_ADS"));
             } catch {}
           if (!backgroundSync && !hasPermission(currentUser, "media.sync"))
             return json(response, 403, {
@@ -6387,11 +7274,146 @@ function localApi(
               ),
               campaigns: Record<string, any>[] = [];
             for (const account of accounts) {
-              const rows = await search(
-                account.id,
-                account.loginCustomerId,
-                `SELECT customer.id, customer.descriptive_name, customer.currency_code, campaign.id, campaign.name, campaign.status, campaign.advertising_channel_type, campaign_budget.amount_micros, campaign_budget.period, metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions, metrics.average_cpc FROM campaign WHERE segments.date BETWEEN '${since}' AND '${until}'`,
-              );
+              const baseGoogleFields = `customer.id, customer.descriptive_name, customer.currency_code, campaign.id, campaign.name, campaign.status, campaign.advertising_channel_type, campaign.optimization_score, campaign_budget.amount_micros, campaign_budget.period, metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions, metrics.average_cpc, metrics.search_top_impression_share, metrics.search_absolute_top_impression_share`;
+              let rows: Record<string, any>[];
+              try {
+                rows = await search(
+                  account.id,
+                  account.loginCustomerId,
+                  `SELECT ${baseGoogleFields}, metrics.unique_users, metrics.average_impression_frequency_per_user FROM campaign WHERE segments.date BETWEEN '${since}' AND '${until}'`,
+                );
+              } catch {
+                // Alguns tipos de campanha/conta não disponibilizam métricas de
+                // usuários únicos. Mantém a sincronização e sinaliza indisponível.
+                rows = await search(
+                  account.id,
+                  account.loginCustomerId,
+                  `SELECT ${baseGoogleFields} FROM campaign WHERE segments.date BETWEEN '${since}' AND '${until}'`,
+                );
+              }
+              const landingPages = new Map<string, string>();
+              try {
+                const landingRows = await search(
+                  account.id,
+                  account.loginCustomerId,
+                  "SELECT campaign.id, ad_group_ad.ad.final_urls FROM ad_group_ad WHERE campaign.status = 'ENABLED'",
+                );
+                landingRows.forEach((landingRow) => {
+                  const campaignId = String(landingRow.campaign?.id || ""),
+                    candidate = landingRow.adGroupAd?.ad?.finalUrls?.[0];
+                  if (campaignId && typeof candidate === "string" && /^https?:\/\//i.test(candidate) && !landingPages.has(campaignId))
+                    landingPages.set(campaignId, candidate);
+                });
+              } catch {
+                /* Alguns formatos de campanha não expõem URLs no nível do anúncio. */
+              }
+              try {
+                const assetGroupRows = await search(
+                  account.id,
+                  account.loginCustomerId,
+                  "SELECT campaign.id, asset_group.final_urls FROM asset_group WHERE campaign.status = 'ENABLED'",
+                );
+                assetGroupRows.forEach((assetGroupRow) => {
+                  const campaignId = String(assetGroupRow.campaign?.id || ""),
+                    candidate = assetGroupRow.assetGroup?.finalUrls?.[0];
+                  if (campaignId && typeof candidate === "string" && /^https?:\/\//i.test(candidate) && !landingPages.has(campaignId))
+                    landingPages.set(campaignId, candidate);
+                });
+              } catch {
+                /* Consulta complementar exclusiva para campanhas Performance Max. */
+              }
+              const landingPageStatuses = new Map<string, LandingPageStatus>(),
+                landingPageEntries = [...landingPages];
+              for (let offset = 0; offset < landingPageEntries.length; offset += 10) {
+                const checks = await Promise.all(
+                  landingPageEntries.slice(offset, offset + 10).map(async ([campaignId, landingPage]) => [
+                    campaignId,
+                    await validatePublicLandingPage(landingPage),
+                  ] as const),
+                );
+                checks.forEach(([campaignId, result]) => landingPageStatuses.set(campaignId, result));
+              }
+              const searchTermsByCampaign = new Map<string, Array<{ term: string; clicks: number; impressions: number; leads: number; spend: number }>>();
+              try {
+                const termRows = await search(account.id, account.loginCustomerId, `SELECT campaign.id, search_term_view.search_term, metrics.impressions, metrics.clicks, metrics.conversions, metrics.cost_micros FROM search_term_view WHERE segments.date BETWEEN '${since}' AND '${until}'`);
+                termRows.forEach((termRow) => {
+                  const campaignId = String(termRow.campaign?.id || ""), term = String(termRow.searchTermView?.searchTerm || "").trim();
+                  if (!campaignId || !term) return;
+                  const items = searchTermsByCampaign.get(campaignId) || [], metrics = termRow.metrics || {};
+                  items.push({ term, impressions: Number(metrics.impressions || 0), clicks: Number(metrics.clicks || 0), leads: Number(metrics.conversions || 0), spend: Number(metrics.costMicros || 0) / 1_000_000 });
+                  searchTermsByCampaign.set(campaignId, items);
+                });
+                searchTermsByCampaign.forEach((items, campaignId) => searchTermsByCampaign.set(campaignId, items.sort((a, b) => b.clicks - a.clicks || b.impressions - a.impressions).slice(0, 15)));
+              } catch {
+                /* Termos existem apenas para campanhas Google compatíveis com pesquisa. */
+              }
+              const geographyByCampaign = new Map<string, Array<{ name: string; level: "REGION" | "CITY" | "NEIGHBORHOOD"; leads: number; clicks: number; spend: number }>>();
+              try {
+                const geoRows = await search(
+                    account.id,
+                    account.loginCustomerId,
+                    `SELECT campaign.id, segments.geo_target_most_specific_location, segments.geo_target_postal_code, segments.geo_target_city, segments.geo_target_region, metrics.conversions, metrics.clicks, metrics.cost_micros FROM geographic_view WHERE segments.date BETWEEN '${since}' AND '${until}'`,
+                  ),
+                  geoResources = [...new Set(geoRows.flatMap((geoRow) => [geoRow.segments?.geoTargetMostSpecificLocation, geoRow.segments?.geoTargetPostalCode, geoRow.segments?.geoTargetCity, geoRow.segments?.geoTargetRegion]).filter(Boolean))] as string[],
+                  geoNames = new Map<string, string>(),
+                  geoTypes = new Map<string, string>();
+                for (let offset = 0; offset < geoResources.length; offset += 100) {
+                  const resources = geoResources.slice(offset, offset + 100),
+                    constants = await search(
+                      account.id,
+                      account.loginCustomerId,
+                      `SELECT geo_target_constant.resource_name, geo_target_constant.name, geo_target_constant.canonical_name, geo_target_constant.target_type FROM geo_target_constant WHERE geo_target_constant.resource_name IN (${resources.map((resource) => `'${resource.replaceAll("'", "\\'")}'`).join(",")})`,
+                    );
+                  constants.forEach((constantRow) => {
+                    const constant = constantRow.geoTargetConstant || {};
+                    if (constant.resourceName) {
+                      geoNames.set(constant.resourceName, constant.canonicalName || constant.name || constant.resourceName);
+                      geoTypes.set(constant.resourceName, constant.targetType || "");
+                    }
+                  });
+                }
+                const postalLabels = new Map<string, { name: string; level: "CITY" | "NEIGHBORHOOD" }>(),
+                  postalResources = [...new Set(geoRows.map((geoRow) => geoRow.segments?.geoTargetPostalCode).filter(Boolean))] as string[];
+                for (let offset = 0; offset < postalResources.length; offset += 12) {
+                  const resolved = await Promise.all(postalResources.slice(offset, offset + 12).map(async (resource) => {
+                    const label = geoNames.get(resource) || "",
+                      zip = label.match(/\b\d{5}(?:-?\d{3})?\b/)?.[0]?.replace(/\D/g, "");
+                    if (!zip) return [resource, null] as const;
+                    const address = await resolveBrazilianPostalLocation(zip);
+                    return [resource, address.neighborhood
+                      ? { name: `${address.neighborhood}${address.city ? ` · ${address.city}` : ""}`, level: "NEIGHBORHOOD" as const }
+                      : address.city ? { name: address.city, level: "CITY" as const } : null] as const;
+                  }));
+                  resolved.forEach(([resource, location]) => { if (location) postalLabels.set(resource, location); });
+                }
+                geoRows.forEach((geoRow) => {
+                  const campaignId = String(geoRow.campaign?.id || ""),
+                    cityResource = geoRow.segments?.geoTargetCity,
+                    regionResource = geoRow.segments?.geoTargetRegion,
+                    postalResource = geoRow.segments?.geoTargetPostalCode,
+                    specificResource = geoRow.segments?.geoTargetMostSpecificLocation;
+                  if (!campaignId) return;
+                  const entries = geographyByCampaign.get(campaignId) || [],
+                    postalLocation = postalResource ? postalLabels.get(postalResource) : undefined,
+                    metrics = {
+                    leads: Number(geoRow.metrics?.conversions || 0),
+                    clicks: Number(geoRow.metrics?.clicks || 0),
+                    spend: Number(geoRow.metrics?.costMicros || 0) / 1_000_000,
+                    };
+                  if (cityResource)
+                    entries.push({ name: geoNames.get(cityResource) || cityResource.replace("geoTargetConstants/", "Local "), level: "CITY", ...metrics });
+                  else if (regionResource)
+                    entries.push({ name: geoNames.get(regionResource) || regionResource.replace("geoTargetConstants/", "Local "), level: "REGION", ...metrics });
+                  const specificType = specificResource ? (geoTypes.get(specificResource) || "").toLowerCase() : "";
+                  if (specificResource && specificType.includes("neighborhood"))
+                    entries.push({ name: geoNames.get(specificResource) || "Bairro não identificado", level: "NEIGHBORHOOD", ...metrics });
+                  else if (postalLocation?.level === "NEIGHBORHOOD")
+                    entries.push({ name: postalLocation.name, level: "NEIGHBORHOOD", ...metrics });
+                  geographyByCampaign.set(campaignId, entries);
+                });
+              } catch {
+                /* O recorte geográfico pode ser restrito pela conta ou tipo de campanha. */
+              }
               rows.forEach((row) => {
                 const campaign = row.campaign || {},
                   metrics = row.metrics || {},
@@ -6417,21 +7439,41 @@ function localApi(
                       : 0,
                   lifetimeBudget: 0,
                   spend,
-                  reach: 0,
+                  reach:
+                    metrics.uniqueUsers == null
+                      ? -1
+                      : Number(metrics.uniqueUsers),
                   impressions: Number(metrics.impressions || 0),
                   clicks: Number(metrics.clicks || 0),
                   leads: conversions,
                   conversations: 0,
                   cpl: conversions ? spend / conversions : null,
-                  frequency: 0,
+                  frequency:
+                    metrics.averageImpressionFrequencyPerUser == null
+                      ? -1
+                      : Number(metrics.averageImpressionFrequencyPerUser),
+                  auctionPosition: metrics.searchAbsoluteTopImpressionShare != null
+                    ? `${(Number(metrics.searchAbsoluteTopImpressionShare) * 100).toFixed(1)}% no topo absoluto`
+                    : metrics.searchTopImpressionShare != null
+                      ? `${(Number(metrics.searchTopImpressionShare) * 100).toFixed(1)}% no topo`
+                      : null,
+                  optimizationStatus: campaign.optimizationScore == null
+                    ? null
+                    : `${Math.round(Number(campaign.optimizationScore) * 100)}% otimizada`,
+                  landingPageStatus: landingPageStatuses.get(String(campaign.id || "")) || "UNKNOWN",
+                  landingPageUrl: landingPages.get(String(campaign.id || "")) || null,
+                  geography: geographyByCampaign.get(String(campaign.id || "")) || [],
+                  searchTerms: searchTermsByCampaign.get(String(campaign.id || "")) || [],
                 });
               });
             }
-            const googlePayload = {
-              schemaVersion: 5,
+            const googleSyncedAt = new Date().toISOString(),
+              googleCampaigns = withOptimizationHistory(campaigns, "GOOGLE_ADS", googleSyncedAt),
+              googlePayload = {
+              schemaVersion: 7,
               since,
               until,
-              syncedAt: new Date().toISOString(),
+              syncedAt: googleSyncedAt,
               accounts: accounts.map((account) => ({
                 id: `google_${account.id}`,
                 name: account.name,
@@ -6439,18 +7481,22 @@ function localApi(
                 pageName: account.name,
                 profilePictureUrl: null,
                 currency: account.currency,
-                amountSpent: campaigns
+                amountSpent: googleCampaigns
                   .filter(
                     (campaign) => campaign.accountId === `google_${account.id}`,
                   )
                   .reduce((sum, campaign) => sum + campaign.spend, 0),
                 spendCap: 0,
               })),
-              campaigns,
+              campaigns: googleCampaigns,
             };
-            mkdirSync("data", { recursive: true });
-            writeFileSync(localGoogleDashboardCachePath, JSON.stringify(googlePayload, null, 2), { mode: 0o600 });
-            return json(response, 200, googlePayload);
+            // Uma comparação usa outro intervalo e não deve substituir o
+            // cache principal. Isso fazia cada abertura disparar nova consulta.
+            if (!comparisonRequest) {
+              mkdirSync("data", { recursive: true });
+              writeFileSync(localGoogleDashboardCachePath, JSON.stringify(googlePayload, null, 2), { mode: 0o600 });
+            }
+            return json(response, 200, withCampaignVerifications(googlePayload, "GOOGLE_ADS"));
           } catch (cause) {
             return json(response, 502, {
               message:
@@ -6503,14 +7549,14 @@ function localApi(
                 pictures?: Record<string, string>;
               };
               if (
-                cached.schemaVersion === 6 &&
+                cached.schemaVersion === 7 &&
                 cached.since === since &&
                 cached.until === until
               ) {
                 Object.entries(cached.pictures || {}).forEach(([id, picture]) =>
                   metaAccountPictures.set(id, picture),
                 );
-                return json(response, 200, {
+                return json(response, 200, withCampaignVerifications({
                   ...cached.payload,
                   cache: {
                     status: "fresh",
@@ -6519,7 +7565,7 @@ function localApi(
                       new Date(cached.cachedAt).getTime() + mediaSyncIntervalMs,
                     ).toISOString(),
                   },
-                });
+                }, "META_ADS"));
               }
             } catch {}
           if (!backgroundSync && !hasPermission(currentUser, "media.sync"))
@@ -6603,6 +7649,8 @@ function localApi(
             const accounts: MetaAccountPayload[] = [];
             const accountCampaigns = new Map<string, MetaCampaignPayload[]>();
             const accountInsights = new Map<string, Map<string, MetaInsight>>();
+            const accountGeographies = new Map<string, Map<string, Array<{ name: string; level: "REGION" | "CITY" | "NEIGHBORHOOD"; leads: number; clicks: number; spend: number }>>>();
+            const campaignLandingPages = new Map<string, string>();
             for (const item of accountRefs) {
               const accountDetail = await graph<MetaAccountPayload>(
                 `${item.id}?fields=id,name,currency,amount_spent,spend_cap`,
@@ -6639,15 +7687,13 @@ function localApi(
                 /* business_management é opcional; página e Instagram continuam como fallback */
               }
               const campaignRows = await listAll<MetaCampaignPayload>(
-                `${item.id}/campaigns?fields=id,name,objective,effective_status,daily_budget,lifetime_budget&limit=500`,
+                `${item.id}/campaigns?fields=id,name,objective,effective_status,daily_budget,lifetime_budget,budget_remaining&limit=500`,
               );
               const adSetRows = await listAll<{
-                promoted_object?: {
-                  page_id?: string;
-                  instagram_actor_id?: string;
-                };
+                promoted_object?: { page_id?: string; instagram_actor_id?: string };
               }>(`${item.id}/adsets?fields=promoted_object&limit=500`);
               const adRows = await listAll<{
+                campaign_id?: string;
                 creative?: {
                   effective_object_story_id?: string;
                   object_story_id?: string;
@@ -6656,11 +7702,18 @@ function localApi(
                   object_story_spec?: {
                     page_id?: string;
                     instagram_actor_id?: string;
+                    link_data?: { link?: string };
+                    video_data?: { call_to_action?: { value?: { link?: string } } };
                   };
                 };
               }>(
-                `${item.id}/ads?fields=creative{effective_object_story_id,object_story_id,instagram_actor_id,thumbnail_url,object_story_spec}&limit=500`,
+                `${item.id}/ads?fields=campaign_id,creative{effective_object_story_id,object_story_id,instagram_actor_id,thumbnail_url,object_story_spec{page_id,instagram_actor_id,link_data{link},video_data{call_to_action{value}}}}&limit=500`,
               ).catch(() => []);
+              adRows.forEach((ad) => {
+                const landingPage = landingPageFromCreative(ad.creative);
+                if (ad.campaign_id && landingPage && !campaignLandingPages.has(ad.campaign_id))
+                  campaignLandingPages.set(ad.campaign_id, landingPage);
+              });
               const pageFrequency = new Map<string, number>();
               adSetRows.forEach((adset) => {
                 const pageId = adset.promoted_object?.page_id;
@@ -6790,6 +7843,22 @@ function localApi(
               const insightRows = await listAll<MetaInsight>(
                 `${item.id}/insights?fields=campaign_id,spend,reach,impressions,clicks,ctr,frequency,actions,cost_per_action_type&level=campaign&time_range=${encodeURIComponent(JSON.stringify({ since, until }))}&action_report_time=conversion&use_account_attribution_setting=true&limit=500`,
               );
+              const locationInsights = async (breakdown: "region" | "zip") => {
+                const base = `${item.id}/insights?level=campaign&breakdowns=${breakdown}&time_range=${encodeURIComponent(JSON.stringify({ since, until }))}&limit=500`;
+                try {
+                  return await listAll<MetaInsight>(
+                    `${base}&fields=campaign_id,spend,clicks,actions&action_report_time=conversion&use_account_attribution_setting=true`,
+                  );
+                } catch {
+                  try {
+                    return await listAll<MetaInsight>(`${base}&fields=campaign_id,spend,clicks`);
+                  } catch (cause) {
+                    console.warn(`[Meta Ads] Breakdown por ${breakdown} indisponível para ${item.id}:`, cause instanceof Error ? cause.message : cause);
+                    return [];
+                  }
+                }
+              };
+              const regionRows = await locationInsights("region");
               accountCampaigns.set(item.id, campaignRows);
               accountInsights.set(
                 item.id,
@@ -6799,6 +7868,20 @@ function localApi(
                     .map((row) => [row.campaign_id!, row]),
                 ),
               );
+              const geographyByCampaign = new Map<string, Array<{ name: string; level: "REGION" | "CITY" | "NEIGHBORHOOD"; leads: number; clicks: number; spend: number }>>();
+              regionRows.forEach((region) => {
+                if (!region.campaign_id || !region.region) return;
+                const entries = geographyByCampaign.get(region.campaign_id) || [];
+                entries.push({
+                  name: region.region,
+                  level: "REGION",
+                  leads: extractMetaLeads(region.actions).leads,
+                  clicks: Number(region.clicks || 0),
+                  spend: Number(region.spend || 0),
+                });
+                geographyByCampaign.set(region.campaign_id, entries);
+              });
+              accountGeographies.set(item.id, geographyByCampaign);
             }
             const actionValue = (
               actions: MetaAction[] | undefined,
@@ -6842,6 +7925,7 @@ function localApi(
                   status: campaign.effective_status || "UNKNOWN",
                   dailyBudget: Number(campaign.daily_budget || 0) / 100,
                   lifetimeBudget: Number(campaign.lifetime_budget || 0) / 100,
+                  remainingBudget: campaign.budget_remaining == null ? null : Number(campaign.budget_remaining) / 100,
                   spend,
                   reach: Number(insight.reach || 0),
                   impressions: Number(insight.impressions || 0),
@@ -6850,12 +7934,18 @@ function localApi(
                   conversations,
                   cpl: leads ? spend / leads : null,
                   frequency: Number(insight.frequency || 0),
+                  auctionPosition: null,
+                  optimizationStatus: campaign.effective_status === "ACTIVE" ? "Em veiculação" : "Requer atenção",
+                  landingPageStatus: campaignLandingPages.has(campaign.id) ? "ACTIVE" : "UNKNOWN",
+                  landingPageUrl: campaignLandingPages.get(campaign.id) || null,
+                  geography: accountGeographies.get(account.id)?.get(campaign.id) || [],
                 };
               }),
             );
             const syncedAt = new Date().toISOString(),
+              campaignsWithHistory = withOptimizationHistory(campaigns, "META_ADS", syncedAt),
               payload = {
-                schemaVersion: 6,
+                schemaVersion: 7,
                 since,
                 until,
                 syncedAt,
@@ -6869,14 +7959,14 @@ function localApi(
                   amountSpent: Number(account.amount_spent || 0) / 100,
                   spendCap: Number(account.spend_cap || 0) / 100,
                 })),
-                campaigns,
+                campaigns: campaignsWithHistory,
               };
             mkdirSync("data", { recursive: true });
             writeFileSync(
               localMetaDashboardCachePath,
               JSON.stringify(
                 {
-                  schemaVersion: 6,
+                  schemaVersion: 7,
                   since,
                   until,
                   cachedAt: syncedAt,
@@ -6889,15 +7979,23 @@ function localApi(
               { mode: 0o600 },
             );
             scheduleDatabaseMirror();
-            return json(response, 200, {
+            return json(response, 200, withCampaignVerifications({
               ...payload,
               cache: {
                 status: "updated",
                 cachedAt: syncedAt,
                 nextSyncAt: new Date(Date.now() + mediaSyncIntervalMs).toISOString(),
               },
-            });
+            }, "META_ADS"));
           } catch (cause) {
+            if (existsSync(localMetaDashboardCachePath)) try {
+              const cached = JSON.parse(readFileSync(localMetaDashboardCachePath, "utf8"));
+              return json(response, 200, withCampaignVerifications({
+                ...cached.payload,
+                cache: { status: "stale", cachedAt: cached.cachedAt, nextSyncAt: new Date(Date.now() + mediaSyncIntervalMs).toISOString() },
+                syncWarning: cause instanceof Error ? cause.message : "A Meta está temporariamente indisponível.",
+              }, "META_ADS"));
+            } catch { /* cache inválido: mantém o erro original */ }
             return json(response, 502, {
               message:
                 cause instanceof Error
@@ -7075,6 +8173,10 @@ function localApi(
             passwordHash: hash(String(input.password), userSalt),
           };
           users.set(user.id, user); persistUsers();
+          if (input.sendEmail === true || input.sendEmail === "on") {
+            try { await sendUserEmail(currentUser.id, { to: [email], subject: `Seu acesso ao Portal do Cliente — ${client.name}`, html: `<div style="font-family:Arial,sans-serif;color:#17263b"><h2>Seu acesso ao Portal do Cliente</h2><p>Olá, ${user.name}. Seu acesso foi criado.</p><p><strong>Login:</strong> ${email}<br/><strong>Senha temporária:</strong> ${String(input.password)}<br/><strong>Portal:</strong> <a href="${String(request.headers.origin || `http://${request.headers.host}`)}/portal-cliente">Abrir Portal do Cliente</a></p><p>Você deverá criar uma nova senha no primeiro acesso.</p></div>` }); }
+            catch (cause) { users.delete(user.id); persistUsers(); return json(response, 400, { message: cause instanceof Error ? `Acesso não criado: ${cause.message}` : "Não foi possível enviar o convite." }); }
+          }
           return json(response, 201, { user: publicUser(user), portalUrl: "/portal-cliente" });
         }
         const userAccessMatch = url.match(/^\/users\/([^/]+)\/access$/);
@@ -7236,15 +8338,24 @@ function localApi(
         }
         return json(response, 404, { message: "Rota não encontrada." });
       });
-    },
+    };
+  return {
+    name: "pw-os-api",
+    configureServer: configureApiServer,
+    configurePreviewServer: configureApiServer,
   };
 }
 
-export default defineConfig(({ mode }) => {
+export default defineConfig(({ mode, command }) => {
   const env = loadEnv(mode, process.cwd(), "");
-  const masterEmail = env.PW_OS_MASTER_EMAIL;
-  const masterPassword = env.PW_OS_MASTER_INITIAL_PASSWORD;
-  if (!masterEmail || !masterPassword)
+  const isBuild = command === "build";
+  // Build-time placeholders keep credentials out of the image. The real values
+  // are injected by Azure when `vite preview` starts the application.
+  const masterEmail = env.PW_OS_MASTER_EMAIL || (isBuild ? "build@invalid.local" : "");
+  const masterPassword = env.PW_OS_MASTER_INITIAL_PASSWORD || (isBuild ? "build-only-placeholder" : "");
+  // A imagem é compilada sem segredos. Eles são fornecidos ao `vite preview`
+  // somente quando o contêiner inicia no Azure.
+  if (!isBuild && (!masterEmail || !masterPassword))
     throw new Error(
       "Configure PW_OS_MASTER_EMAIL e PW_OS_MASTER_INITIAL_PASSWORD no arquivo .env.local.",
     );
@@ -7260,6 +8371,14 @@ export default defineConfig(({ mode }) => {
         env.GOOGLE_ADS_CLIENT_SECRET || "",
         env.GOOGLE_ADS_DEVELOPER_TOKEN || "",
         env.GOOGLE_ADS_REFRESH_TOKEN || "",
+        env.OPENAI_API_KEY || "",
+        env.OPENAI_INSIGHTS_MODEL || "gpt-5.5",
+        env.AZURE_EMAIL_SMTP_HOST || "smtp.azurecomm.net",
+        env.AZURE_EMAIL_SMTP_USERNAME || "",
+        env.AZURE_EMAIL_SMTP_PASSWORD || "",
+        env.AZURE_EMAIL_FROM || "",
+        env.AZURE_EMAIL_FROM_NAME || "PW OS",
+        env.APP_BASE_URL || "",
       ),
       VitePWA({
         registerType: "autoUpdate",
@@ -7289,5 +8408,10 @@ export default defineConfig(({ mode }) => {
     ],
     resolve: { alias: { "@": "/apps/web/src" } },
     build: { outDir: "dist" },
+    // Vite blocks unknown Host headers by default. The Azure Container Apps
+    // ingress uses this public hostname when forwarding requests to preview.
+    preview: {
+      allowedHosts: ["pw-os-prod.icybush-feb0e224.brazilsouth.azurecontainerapps.io"],
+    },
   };
 });

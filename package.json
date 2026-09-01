@@ -11,6 +11,7 @@
     "dev": "vite --host 127.0.0.1",
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 127.0.0.1",
+    "start": "vite preview --host 0.0.0.0 --port 8080 --strictPort",
     "test": "vitest run",
     "db:validate": "prisma validate --schema packages/database/prisma/schema.prisma",
     "db:generate": "prisma generate --schema packages/database/prisma/schema.prisma",
@@ -18,6 +19,7 @@
     "db:migrate": "prisma migrate dev --schema packages/database/prisma/schema.prisma",
     "db:deploy": "prisma migrate deploy --schema packages/database/prisma/schema.prisma",
     "db:import-local": "node scripts/migrate-local-data-to-postgres.mjs",
+    "data:backup": "node scripts/backup-local-data.mjs",
     "db:studio": "prisma studio --schema packages/database/prisma/schema.prisma"
   },
   "dependencies": {
@@ -26,7 +28,11 @@
     "@prisma/client": "^6.19.0",
     "@tanstack/react-query": "^5.90.20",
     "@tanstack/react-table": "^8.21.3",
+    "@types/nodemailer": "^8.0.1",
+    "jspdf": "^4.2.1",
     "lucide-react": "^0.468.0",
+    "nodemailer": "^9.0.5",
+    "openai": "^7.7.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "react-hook-form": "^7.71.1",

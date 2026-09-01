@@ -112,6 +112,7 @@
 .token-master-only small {
   font-size: 7px;
 }
+.current-token-master{display:flex;align-items:center;gap:12px;margin-top:12px;padding:11px;border:1px solid #b9d8f3;border-radius:9px;background:#f3f9ff}.current-token-master>div{display:grid;min-width:0;flex:1;gap:4px}.current-token-master b{color:var(--heading);font-size:8px}.current-token-master small{color:var(--subtle);font-size:7px}.current-token-master code{display:block;max-height:70px;overflow:auto;padding:7px 8px;border-radius:6px;background:#fff;color:#244868;font:700 8px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere;user-select:all}.current-token-master .secondary{flex:0 0 auto;white-space:nowrap}.current-token-master .secondary svg{width:14px}
 @media (max-width: 650px) {
   .meta-token-admin form {
     grid-template-columns: 1fr;
@@ -120,4 +121,5 @@
     width: 100%;
     margin: 0;
   }
+  .current-token-master{align-items:flex-start;flex-direction:column}.current-token-master .secondary{width:100%}
 }

@@ -3,6 +3,7 @@ import {
   Check,
   CheckCircle2,
   Clock3,
+  Copy,
   Eye,
   EyeOff,
   KeyRound,
@@ -11,6 +12,7 @@ import {
   Unplug,
 } from "lucide-react";
 import "./ConnectionsToken.css";
+import { systemConfirm } from "./SystemDialog";
 
 type Platform = "GOOGLE_ADS" | "META_ADS";
 type Integration = {
@@ -41,6 +43,7 @@ export function Connections() {
     Partial<Record<Platform, TokenStatus>>
   >({});
   const [tokens, setTokens] = useState<Partial<Record<Platform, string>>>({});
+  const [revealedTokens, setRevealedTokens] = useState<Partial<Record<Platform, string>>>({});
   const [loading, setLoading] = useState(true),
     [saving, setSaving] = useState<Platform | null>(null),
     [revoking, setRevoking] = useState(false),
@@ -73,6 +76,24 @@ export function Connections() {
         ...(metaResponse.ok ? { META_ADS: metaData } : {}),
         ...(googleResponse.ok ? { GOOGLE_ADS: googleData } : {}),
       }));
+      const visibleCredentials = await Promise.all(
+        ([
+          ["META_ADS", "meta", metaData],
+          ["GOOGLE_ADS", "google", googleData],
+        ] as const).map(async ([platform, provider, status]) => {
+          if (!status?.canManage || !status?.configured) return null;
+          const response = await fetch(`/api/media/${provider}/token/reveal`);
+          if (!response.ok) return null;
+          const payload = await response.json();
+          return [platform, payload.token] as const;
+        }),
+      );
+      setRevealedTokens(
+        visibleCredentials.reduce<Partial<Record<Platform, string>>>(
+          (current, item) => (item ? { ...current, [item[0]]: item[1] } : current),
+          {},
+        ),
+      );
     } catch (cause) {
       setError(
         cause instanceof Error
@@ -86,6 +107,28 @@ export function Connections() {
   useEffect(() => {
     void load();
   }, []);
+  const revealToken = async (platform: Platform) => {
+    setError("");
+    setMessage("");
+    try {
+      const provider = platform === "META_ADS" ? "meta" : "google";
+      const response = await fetch(`/api/media/${provider}/token/reveal`), payload = await response.json();
+      if (!response.ok) throw new Error(payload.message || "Não foi possível carregar a credencial.");
+      setRevealedTokens((current) => ({ ...current, [platform]: payload.token }));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Não foi possível carregar a credencial.");
+    }
+  };
+  const copyToken = async (platform: Platform) => {
+    const token = revealedTokens[platform];
+    if (!token) return;
+    try {
+      await navigator.clipboard.writeText(token);
+      setMessage(`${label(platform)} copiado para a área de transferência.`);
+    } catch {
+      setError("Não foi possível copiar automaticamente. Selecione o texto e copie manualmente.");
+    }
+  };
   const saveToken = async (event: FormEvent, platform: Platform) => {
     event.preventDefault();
     setSaving(platform);
@@ -125,14 +168,7 @@ export function Connections() {
   };
   const revokeToken = async (platform: Platform) => {
     const isMeta = platform === "META_ADS";
-    if (
-      !confirm(
-        isMeta
-          ? "Revogar o token atual da Meta no PW OS? As campanhas deixarão de sincronizar até que um novo token seja cadastrado."
-          : "Revogar a chave da API atual do Google Ads? A sincronização ficará indisponível até cadastrar uma nova.",
-      )
-    )
-      return;
+    if (!await systemConfirm({ title: isMeta ? "Revogar conexão com a Meta?" : "Revogar conexão com o Google Ads?", message: isMeta ? "As campanhas deixarão de sincronizar até que um novo token seja cadastrado." : "A sincronização ficará indisponível até que uma nova chave seja cadastrada.", confirmLabel: "Revogar conexão", tone: "danger" })) return;
     setRevoking(true);
     setError("");
     setMessage("");
@@ -276,7 +312,17 @@ export function Connections() {
                   )}
                 </div>
                 {status?.canManage ? (
-                  <form onSubmit={(event) => saveToken(event, platform)}>
+                  <>
+                    {status.configured && (
+                      <div className="current-token-master">
+                        <div>
+                          <b>Credencial atual do Master</b>
+                          {revealedTokens[platform] ? <code>{revealedTokens[platform]}</code> : <small>Exiba a credencial apenas quando precisar utilizá-la.</small>}
+                        </div>
+                        {revealedTokens[platform] ? <button type="button" className="secondary" onClick={() => void copyToken(platform)}><Copy /> Copiar</button> : <button type="button" className="secondary" onClick={() => void revealToken(platform)}><Eye /> Mostrar token</button>}
+                      </div>
+                    )}
+                    <form onSubmit={(event) => saveToken(event, platform)}>
                     <label>
                       {status.configured
                         ? isMeta
@@ -336,7 +382,8 @@ export function Connections() {
                             ? "Salvar e ativar"
                             : "Salvar chave da API"}
                     </button>
-                  </form>
+                    </form>
+                  </>
                 ) : (
                   <div className="token-master-only">
                     <ShieldCheck />

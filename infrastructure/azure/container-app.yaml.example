@@ -1,0 +1,54 @@
+properties:
+  configuration:
+    activeRevisionsMode: Single
+    ingress:
+      external: true
+      targetPort: 8080
+      transport: auto
+    secrets:
+      - name: master-password
+        value: REPLACE_IN_PORTAL
+      - name: session-secret
+        value: REPLACE_IN_PORTAL
+      - name: integration-key
+        value: REPLACE_IN_PORTAL
+      - name: azure-email-password
+        value: REPLACE_IN_PORTAL
+  template:
+    containers:
+      - name: pw-os
+        image: REPLACE_WITH_ACR.azurecr.io/pw-os:REPLACE_WITH_VERSION
+        resources:
+          cpu: 1
+          memory: 2Gi
+        env:
+          - name: PW_OS_MASTER_EMAIL
+            value: REPLACE_WITH_MASTER_EMAIL
+          - name: PW_OS_MASTER_INITIAL_PASSWORD
+            secretRef: master-password
+          - name: SESSION_SECRET
+            secretRef: session-secret
+          - name: INTEGRATION_ENCRYPTION_KEY
+            secretRef: integration-key
+          - name: APP_BASE_URL
+            value: https://REPLACE_WITH_HOSTNAME
+          - name: AZURE_EMAIL_SMTP_HOST
+            value: smtp.azurecomm.net
+          - name: AZURE_EMAIL_SMTP_USERNAME
+            value: REPLACE_WITH_SMTP_USERNAME
+          - name: AZURE_EMAIL_SMTP_PASSWORD
+            secretRef: azure-email-password
+          - name: AZURE_EMAIL_FROM
+            value: nao-responda@REPLACE_WITH_DOMAIN
+          - name: AZURE_EMAIL_FROM_NAME
+            value: PW OS
+        volumeMounts:
+          - volumeName: pw-os-data
+            mountPath: /app/data
+    scale:
+      minReplicas: 1
+      maxReplicas: 1
+    volumes:
+      - name: pw-os-data
+        storageType: AzureFile
+        storageName: pw-os-data

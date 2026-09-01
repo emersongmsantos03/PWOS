@@ -1,0 +1,300 @@
+.campaign-analysis {
+  overflow: hidden;
+}
+
+.campaign-analysis > header {
+  position: relative;
+  top: auto;
+  flex: 0 0 auto;
+}
+
+.campaign-analysis > .campaign-analysis-tabs {
+  flex: 0 0 auto;
+}
+
+.campaign-analysis > main {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scroll-padding-bottom: 24px;
+}
+
+.campaign-analysis > footer {
+  position: relative;
+  bottom: auto;
+  z-index: 5;
+  flex: 0 0 auto;
+}
+
+.campaign-review-history {
+  flex: 0 0 auto;
+  min-height: 150px;
+}
+
+.campaign-review-history > .campaign-extra-empty {
+  min-height: 96px;
+  padding: 18px;
+}
+
+.campaign-review-history > div:not(.campaign-extra-empty) {
+  max-height: none;
+}
+
+/* Action column needs enough room for both horizontal controls. */
+.traffic-page .campaign-report-table table {
+  min-width: 1775px !important;
+}
+
+.traffic-page .campaign-report-table .campaign-column-actions {
+  width: 260px;
+}
+
+.traffic-page .campaign-report-table th:last-child,
+.traffic-page .campaign-report-table td:last-child {
+  width: 260px;
+  min-width: 260px;
+  max-width: 260px;
+  padding-right: 18px;
+  padding-left: 16px;
+  border-left: 1px solid var(--divider);
+}
+
+.traffic-page .campaign-row-actions {
+  gap: 10px;
+  min-width: 0;
+}
+
+.traffic-page .campaign-row-actions .campaign-analyze {
+  flex: 0 0 104px;
+}
+
+.traffic-page .campaign-row-actions .campaign-review {
+  flex: 0 0 108px;
+  justify-content: center;
+}
+
+.campaign-lp-link,
+.campaign-landing-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 5px 11px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+  color: var(--accent);
+  font-size: 8px;
+  font-weight: 800;
+  text-decoration: none;
+  transition: transform .16s ease, border-color .16s ease, background .16s ease, box-shadow .16s ease;
+}
+
+.campaign-lp-link svg,
+.campaign-landing-button svg {
+  box-sizing: content-box;
+  width: 14px;
+  height: 14px;
+  padding: 5px;
+  border-radius: 7px;
+  background: var(--accent);
+  color: #fff;
+}
+
+.campaign-lp-link:hover,
+.campaign-landing-button:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  box-shadow: 0 6px 16px color-mix(in srgb, var(--accent) 16%, transparent);
+  transform: translateY(-1px);
+}
+
+.campaign-landing-button.compact {
+  min-height: 36px;
+  padding: 5px 12px;
+}
+.campaign-landing-button svg {
+  box-sizing: border-box;
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  color: currentColor;
+}
+
+/* Clear metric rhythm: labels and values never visually collide. */
+.campaign-analysis-kpis .report-metric,
+.client-report-metrics .report-metric {
+  display: grid !important;
+  align-items: flex-start !important;
+  justify-content: flex-start !important;
+  grid-template-rows: 26px minmax(19px, auto) 13px;
+  row-gap: 4px !important;
+}
+.campaign-analysis-kpis .report-metric > small,
+.client-report-metrics .report-metric > small {
+  display: block !important;
+  box-sizing: border-box;
+  min-height: 0;
+  height: 26px;
+  margin: 0 !important;
+  line-height: 1.25;
+}
+.campaign-analysis-kpis .report-metric > b,
+.client-report-metrics .report-metric > b {
+  display: block !important;
+  max-width: 100%;
+  margin: 0 !important;
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+  align-self: start;
+}
+.campaign-analysis-kpis .report-metric > b {
+  font-size: clamp(10px, 1vw, 13px);
+  letter-spacing: -.015em;
+}
+.campaign-analysis-kpis .report-metric:nth-child(3) > b {
+  font-size: clamp(9px, .88vw, 12px);
+}
+.campaign-analysis-kpis .report-metric > em,
+.client-report-metrics .report-metric > em { align-self: start; margin: 0 !important; }
+.client-report-metrics .report-metric {
+  box-sizing: border-box;
+  min-height: 92px;
+  padding: 18px 20px !important;
+}
+.client-report-metrics .report-metric > small { font-size: 7px; }
+.client-report-metrics .report-metric > b { font-size: 15px; }
+
+/* One calm, aligned action row. */
+.campaign-analysis > footer { min-height: 66px; }
+.campaign-footer-copy { min-width: 0; }
+.campaign-footer-actions { display: flex; align-items: center; justify-content: flex-end; gap: 12px; flex: 0 0 auto; }
+.campaign-footer-actions .campaign-landing-button,
+.campaign-footer-actions .campaign-verified,
+.campaign-footer-actions .campaign-review-complete { box-sizing: border-box; min-height: 40px; margin: 0; }
+.campaign-footer-actions .campaign-landing-button svg {
+  box-sizing: border-box;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  color: currentColor;
+}
+.campaign-footer-actions .campaign-review-complete { display: flex; align-items: center; flex-direction: row; gap: 8px; padding: 7px 12px; }
+.campaign-footer-actions .campaign-review-complete > svg { flex: 0 0 16px; width: 16px; height: 16px; }
+.campaign-footer-actions .campaign-review-complete > span { display: flex; flex-direction: column; gap: 2px; }
+
+@media (max-width: 700px) {
+  .campaign-analysis > footer { align-items: stretch; }
+  .campaign-footer-actions { width: 100%; }
+  .campaign-footer-actions > * { flex: 1; }
+}
+.campaign-analysis-tabs .report-sent{display:flex;align-items:center;gap:6px;margin-left:auto;border:1px solid color-mix(in srgb,#2f8a6c 38%,var(--border));background:color-mix(in srgb,#2f8a6c 8%,var(--surface));color:#2f8a6c}.campaign-analysis-tabs .report-sent+button.export{margin-left:4px}.campaign-analysis-tabs .report-sent svg{width:13px}.campaign-report-notice{display:flex;align-items:center;gap:7px;padding:10px 12px;border:1px solid #b7d8ca;border-radius:9px;background:#eef7f3;color:#286f59;font-size:8px;font-weight:750}.campaign-report-notice svg{width:14px}.campaign-review-history article>i.report_downloaded{background:#eaf3fc;color:#2875b8}.campaign-review-history article>i.report_sent{background:#e9f5ef;color:#287b61}
+.campaign-analysis-tabs button:disabled{cursor:wait;opacity:.65}
+
+/* Client-facing report: balanced like a presentation, not a spreadsheet. */
+.campaign-analysis-tabs{padding-block:10px}
+.campaign-analysis-tabs .report-sent,.campaign-analysis-tabs .export{min-width:126px;justify-content:center;border-radius:9px;box-shadow:0 3px 10px transparent;transition:transform .16s ease,box-shadow .16s ease,filter .16s ease}
+.campaign-analysis-tabs .report-sent:hover:not(:disabled),.campaign-analysis-tabs .export:hover:not(:disabled){transform:translateY(-1px)}
+.campaign-analysis-tabs .report-sent:hover:not(:disabled){box-shadow:0 5px 14px #2f8a6c24}
+.campaign-analysis-tabs .export:hover:not(:disabled){box-shadow:0 5px 14px color-mix(in srgb,var(--accent) 25%,transparent);filter:brightness(1.04)}
+.campaign-analysis>main.client-report-mode{padding:30px 38px 40px;background:#f7f9fb}
+.client-report-mode .campaign-client-report{width:min(960px,100%);margin:0 auto;border:1px solid #e3e9ef;border-radius:16px;box-shadow:0 10px 30px #17324d0b}
+.campaign-client-report>header{position:relative;min-height:100px;padding:23px 28px;overflow:hidden;border-bottom:1px solid #e8edf2;background:#fff}
+.campaign-client-report>header:before{position:absolute;top:0;right:0;left:0;height:3px;background:linear-gradient(90deg,#2d7fc2,#74b7e8);content:""}
+.campaign-client-report>header>div{position:relative;z-index:1}
+.campaign-client-report>header small{color:#4389bd}
+.campaign-client-report>header h2{margin-top:7px;color:#17324d;font-size:23px;letter-spacing:-.025em}
+.campaign-client-report>header p{color:#75889a;font-size:9px}
+.campaign-client-report>header>span{position:relative;z-index:1;display:grid;grid-template-columns:30px auto;grid-template-rows:auto auto;align-items:center;column-gap:9px;min-width:138px;padding:10px 12px;border:1px solid #dce7ef;border-radius:11px;background:#f8fbfd}
+.campaign-client-report>header>span svg{grid-row:1/3;width:18px;color:#4b91c5}
+.campaign-client-report>header>span b{color:#29455d;font-size:11px}
+.campaign-client-report>header>span small{color:#8294a4;font-size:7px}
+.client-report-metrics{border-bottom:0;background:var(--surface)}
+.client-report-metrics .report-metric{position:relative;min-height:94px!important;padding:19px 22px!important;border-color:#edf1f4!important;background:#fff;transition:background .16s ease}
+.client-report-metrics .report-metric:hover{background:#fbfcfd}
+.client-report-metrics .report-metric:nth-child(n+5){border-top:1px solid var(--divider)!important}
+.client-report-metrics .report-metric>small{color:var(--subtle);font-size:7px;font-weight:700;text-transform:uppercase;letter-spacing:.035em}
+.client-report-metrics .report-metric>b{color:var(--heading);font-size:16px}
+.client-report-metrics .report-metric:nth-child(7)>b,.client-report-metrics .report-metric:nth-child(8)>b{color:#397c68}
+.client-report-highlights{display:grid;grid-template-columns:1fr 1.25fr;gap:0;padding:20px 22px;border-top:1px solid #edf1f4;background:#fbfcfd}
+.client-report-highlights article{display:flex;align-items:flex-start;gap:12px;padding:5px 22px 5px 0;background:transparent}
+.client-report-highlights article+article{padding-right:0;padding-left:22px;border-left:1px solid #e5ebf0}
+.client-report-highlights article>span{display:grid;place-items:center;flex:0 0 34px;width:34px;height:34px;border-radius:50%;background:#eef5fa;color:#4d8dbb}
+.client-report-highlights article:first-child>span{background:#eef6f3;color:#397c68}
+.client-report-highlights svg{width:17px}
+.client-report-highlights div{min-width:0}.client-report-highlights small{color:var(--subtle);font-size:6px;font-weight:850;letter-spacing:.06em}.client-report-highlights b{display:block;margin-top:4px;color:var(--heading);font-size:11px}.client-report-highlights p{margin:4px 0 0;color:var(--subtle);font-size:7px;line-height:1.45}
+.campaign-client-report>footer{display:flex;align-items:center;justify-content:center;gap:8px;padding:12px 18px;border-top:1px solid #edf1f4;background:#fff;text-align:left}
+.campaign-client-report>footer>span{color:#3f789f;font-size:7px;font-weight:900;letter-spacing:.08em}.campaign-client-report>footer p{margin:0;color:#8b9aa7;font-size:7px}
+@media(max-width:700px){.campaign-analysis>main.client-report-mode{padding:14px}.campaign-client-report>header>span{display:none}.client-report-highlights{grid-template-columns:1fr}.campaign-analysis-tabs .report-sent,.campaign-analysis-tabs .export{min-width:0}.campaign-analysis-tabs .report-sent{margin-left:auto}}
+.inactive-report-lock{display:flex;align-items:center;gap:6px;margin-left:auto;padding:7px 10px;border:1px solid #e6c5c8;border-radius:7px;background:#fff2f2;color:#af434b;font-size:7px;font-weight:800}.inactive-report-lock svg{width:13px;height:13px}
+
+/* Calmer success palette for long dashboard sessions. */
+html:not([data-theme="dark"]) .campaign-analysis-review-state.current > svg,
+html:not([data-theme="dark"]) .campaign-review-complete,
+html:not([data-theme="dark"]) .campaign-visual-result > footer b,
+html:not([data-theme="dark"]) .campaign-health-card .lp-text-active,
+html:not([data-theme="dark"]) .campaign-history-list i {
+  color: #287b61;
+}
+
+html:not([data-theme="dark"]) .campaign-review-complete {
+  border-color: #a9cdbf;
+  background: #edf6f2;
+}
+
+html:not([data-theme="dark"]) .campaign-visual-result > svg {
+  background: #e8f3ee;
+  color: #287b61;
+}
+
+html:not([data-theme="dark"]) .campaign-visual-bars p > i u,
+html:not([data-theme="dark"]) .campaign-budget-card > div i {
+  background: linear-gradient(90deg, #3b82c4, #3c9275);
+}
+
+html:not([data-theme="dark"]) .campaign-history-list i {
+  background: #3c9275;
+  box-shadow: 0 0 0 3px #dcece6;
+}
+
+html:not([data-theme="dark"]) .campaign-state.lp-active {
+  background: #e8f3ee;
+  color: #287b61;
+}
+
+/* Progressive filtering: keep frequent actions visible, disclose the rest. */
+.traffic-page .campaign-report-toolbar{display:grid;grid-template-columns:minmax(280px,1.6fr) minmax(220px,1fr) auto auto;align-items:center;gap:9px}
+.traffic-page .campaign-report-toolbar>.campaign-metric-chip{grid-column:1/-1;justify-self:start}
+.campaign-review-filter{display:flex;align-items:center;height:40px;padding:3px;border:1px solid var(--border);border-radius:10px;background:var(--surface-soft);white-space:nowrap}
+.campaign-review-filter button{display:flex;align-items:center;justify-content:center;gap:6px;height:32px;padding:0 11px;border:0;border-radius:7px;background:transparent;color:var(--subtle);font-size:8px;font-weight:800;cursor:pointer}
+.campaign-review-filter button svg{width:13px;height:13px}.campaign-review-filter button>b{display:grid;place-items:center;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--divider);color:var(--subtle);font-size:7px}
+.campaign-review-filter button.active{background:var(--surface);color:var(--accent);box-shadow:0 2px 7px #10233d12}
+.campaign-review-filter button.active.pending{color:#a86a08}.campaign-review-filter button.active.pending>b{background:#fff1d5;color:#9a6107}
+.campaign-more-filters{position:relative;z-index:12}
+.campaign-more-filters>summary{display:flex;align-items:center;justify-content:center;gap:6px;height:40px;padding:0 12px;border:1px solid var(--border);border-radius:9px;background:var(--field);color:var(--subtle);font-size:8px;font-weight:800;list-style:none;cursor:pointer;white-space:nowrap}
+.campaign-more-filters>summary::-webkit-details-marker{display:none}.campaign-more-filters>summary>svg{width:12px;transition:transform .16s}.campaign-more-filters[open]>summary>svg{transform:rotate(180deg)}.campaign-more-filters>summary>b{display:grid;place-items:center;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--accent);color:#fff;font-size:7px}
+.campaign-more-filters-popover{position:absolute;z-index:70;top:47px;right:0;display:grid;grid-template-columns:1fr 1fr;gap:9px;width:470px;padding:13px;border:1px solid var(--border);border-radius:12px;background:var(--surface);box-shadow:0 18px 50px #10233d24}
+.campaign-more-filters-popover>header{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;padding-bottom:10px;border-bottom:1px solid var(--divider)}
+.campaign-more-filters-popover>header span{display:flex;flex-direction:column}.campaign-more-filters-popover>header b{color:var(--heading);font-size:9px}.campaign-more-filters-popover>header small{margin-top:2px;color:var(--subtle);font-size:7px}.campaign-more-filters-popover>header button{border:0;background:transparent;color:var(--accent);font-size:7px;font-weight:800;cursor:pointer}
+.traffic-page .campaign-more-filters-popover .campaign-standard-filter{width:100%;max-width:none}
+.campaign-more-filters-popover>footer{grid-column:1/-1;display:flex;align-items:center;gap:8px;padding-top:2px}.campaign-more-filters-popover>footer .campaign-density,.campaign-more-filters-popover>footer .campaign-columns>summary{height:34px;background:var(--surface-soft)}
+.campaign-more-filters-popover .campaign-columns{position:relative}.campaign-more-filters-popover .campaign-columns>.campaign-columns-popover{top:39px;right:0;left:auto}
+@media(max-width:900px){.traffic-page .campaign-report-toolbar{grid-template-columns:1fr 1fr}.campaign-review-filter{justify-self:stretch}.campaign-more-filters>summary{width:100%}.campaign-more-filters-popover{right:0;width:min(470px,calc(100vw - 40px))}}
+@media(max-width:600px){.traffic-page .campaign-report-toolbar{grid-template-columns:1fr}.campaign-review-filter{width:100%;box-sizing:border-box}.campaign-review-filter button{flex:1}.campaign-more-filters-popover{grid-template-columns:1fr}.campaign-more-filters-popover>header,.campaign-more-filters-popover>footer{grid-column:1}.campaign-more-filters-popover>footer{align-items:stretch;flex-direction:column}.campaign-more-filters-popover>footer>*{width:100%}}
+
+/* One compact platform selector across the paid-media workspace. */
+.traffic-page .traffic-platform-switch{gap:7px;margin-bottom:9px}
+.traffic-page .traffic-platform-switch>button{min-width:140px;min-height:42px;padding:6px 10px;border-radius:9px;gap:8px}
+.traffic-page .traffic-platform-switch :is(.all-ads-symbol,.meta-ads-symbol,.google-ads-symbol){width:27px;height:27px;flex-basis:27px;border-radius:7px}
+.traffic-page .traffic-platform-switch .meta-ads-symbol{font-size:17px}
+.traffic-page .traffic-platform-switch .all-ads-symbol b{font-size:9px}
+.traffic-page .traffic-platform-switch .google-ads-symbol i:nth-child(1){width:6px;height:17px;left:6px;top:3px}.traffic-page .traffic-platform-switch .google-ads-symbol i:nth-child(2){width:6px;height:16px;right:5px;top:4px}.traffic-page .traffic-platform-switch .google-ads-symbol i:nth-child(3){width:7px;height:7px;left:4px;bottom:3px}
+.traffic-page .traffic-platform-switch>button>span:last-child>b{font-size:9px}.traffic-page .traffic-platform-switch>button>span:last-child>small{margin-top:1px;font-size:6px}
+.traffic-page .traffic-period>.traffic-sync{border-color:color-mix(in srgb,var(--accent) 35%,var(--border));color:var(--accent)}.traffic-page .traffic-period>.traffic-sync:disabled{border-color:var(--border);color:var(--subtle);opacity:.58;cursor:not-allowed}
+@media(max-width:700px){.traffic-page .traffic-platform-switch>button{min-width:125px}.traffic-page .traffic-period>.traffic-sync{flex:1}}
