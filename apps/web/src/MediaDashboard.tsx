@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
   Activity,
@@ -182,6 +182,16 @@ const savedMediaContext = () => {
   try { return JSON.parse(localStorage.getItem("pw-os-media-context") || "{}") as { platform?: MediaView; since?: string; until?: string; client?: string; responsible?: string }; }
   catch { return {}; }
 };
+const safeSavedMediaPeriod = () => {
+  const saved = savedMediaContext(), today = iso(new Date());
+  const until = /^\d{4}-\d{2}-\d{2}$/.test(saved.until || "") && saved.until! <= today
+    ? saved.until!
+    : today;
+  const since = /^\d{4}-\d{2}-\d{2}$/.test(saved.since || "") && saved.since! <= until
+    ? saved.since!
+    : initialSince();
+  return { since, until };
+};
 const savedCampaignFilters = () => {
   try { return JSON.parse(localStorage.getItem("pw-os-campaign-filters") || "{}") as Record<string, string>; }
   catch { return {}; }
@@ -214,11 +224,12 @@ const statusLabel: Record<string, string> = {
   CAMPAIGN_PAUSED: "Pausada",
 };
 const objectiveLabel = (value: string) =>
-  value
+  (value.toUpperCase() === "SMART" ? "SEARCH" : value)
     .replace(/^OUTCOME_/, "")
     .replaceAll("_", " ")
     .toLowerCase()
-    .replace(/^./, (letter) => letter.toUpperCase());
+    .replace(/^./, (letter) => letter.toUpperCase())
+    .replace(/^Search$/, "Pesquisa");
 const emptyTotals = (): Totals => ({
   spend: 0,
   reach: 0,
@@ -445,16 +456,20 @@ function CampaignAds({ campaign }: { campaign: Campaign }) {
         <div><b>Anúncios e criativos</b><span>{ads.length} anúncio(s) nesta campanha</span></div>
       </header>
       <div className="campaign-ad-grid">
-        {ads.map((ad) => (
+        {ads.map((ad) => {
+          const preview = ad.creatives.find((creative) => creative.thumbnailUrl || (creative.type === "IMAGE" && creative.url)),
+            previewUrl = preview?.thumbnailUrl || (preview?.type === "IMAGE" ? preview.url : null) || null;
+          return (
           <article className="campaign-ad-card" key={ad.id}>
             <div className="campaign-ad-preview">
-              {ad.creatives.find((creative) => creative.thumbnailUrl || (creative.type === "IMAGE" && creative.url)) ? (
+              {previewUrl ? (
                 <img
-                  src={ad.creatives.find((creative) => creative.thumbnailUrl || (creative.type === "IMAGE" && creative.url))?.thumbnailUrl || ad.creatives.find((creative) => creative.type === "IMAGE" && creative.url)?.url || ""}
+                  src={previewUrl}
                   alt={`Criativo de ${ad.name}`}
                   loading="lazy"
+                  onError={(event) => { event.currentTarget.hidden = true; const fallback = event.currentTarget.nextElementSibling as SVGSVGElement | null; if (fallback) fallback.style.display = ""; }}
                 />
-              ) : <Megaphone />}
+              ) : null}<Megaphone style={previewUrl ? { display: "none" } : undefined} />
               <span>{ad.format || "ANÚNCIO"}</span>
             </div>
             <div className="campaign-ad-content">
@@ -485,7 +500,7 @@ function CampaignAds({ campaign }: { campaign: Campaign }) {
               )}
             </div>
           </article>
-        ))}
+        );})}
       </div>
     </section>
   );
@@ -608,6 +623,7 @@ function ClientCampaignGroup({
             score={portfolioScore}
             label="Score do portfólio"
             compact
+            portfolioCampaigns={group.campaigns}
           />
         </div>
         {showPlatform && (
@@ -739,9 +755,6 @@ function ClientCampaignGroup({
                 </div>
                 {!users.length && (
                   <small>Nenhum usuário disponível para atribuição.</small>
-                )}
-                {!!users.length && (
-                  <small>Somente funcionários do PW OS podem ser atribuídos.</small>
                 )}
               </label>
             </div>
@@ -1221,11 +1234,12 @@ const normalizeCachedPayload = (payload: Payload): Payload => ({
 
 export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "CLIENTS" | "CAMPAIGNS" | "COMPILED" | "REPORTS" | "HISTORY" }) {
   const pageRef = useRef<HTMLDivElement>(null);
+  const todayIso = iso(new Date());
   const urlParams = new URLSearchParams(window.location.search);
   const reportClientFromUrl = urlParams.get("reportClient") || "";
   const contextClientFromUrl = urlParams.get("client") || "";
   const [platform, setPlatform] = useState<MediaView>(() => {
-    if (section === "CLIENTS" || section === "COMPILED" || section === "REPORTS" || section === "HISTORY") return "ALL";
+    if (section === "COMPILED" || section === "REPORTS" || section === "HISTORY") return "ALL";
     const savedPlatform = savedMediaContext().platform;
     return savedPlatform === "GOOGLE_ADS" ? "GOOGLE_ADS" : "META_ADS";
   });
@@ -1263,8 +1277,8 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
     [canManageAssignments, setCanManageAssignments] = useState(false),
     [canSync, setCanSync] = useState(false),
     [comparisonCampaigns, setComparisonCampaigns] = useState<Campaign[]>([]);
-  const [since, setSince] = useState(() => reportClientFromUrl ? initialReportPeriod().since : savedMediaContext().since || initialSince()),
-    [until, setUntil] = useState(() => reportClientFromUrl ? initialReportPeriod().until : savedMediaContext().until || iso(new Date()));
+  const [since, setSince] = useState(() => reportClientFromUrl ? initialReportPeriod().since : safeSavedMediaPeriod().since),
+    [until, setUntil] = useState(() => reportClientFromUrl ? initialReportPeriod().until : safeSavedMediaPeriod().until);
   const [query, setQuery] = useState(""),
     [status, setStatus] = useState(section === "TODAY" ? "ALL" : "ACTIVE"),
     [delivery, setDelivery] = useState("ALL"),
@@ -1811,7 +1825,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
             <input
               type="date"
               value={since}
-              max={until}
+              max={until < todayIso ? until : todayIso}
               onChange={(event) => setSince(event.target.value)}
             />
             <span>até</span>
@@ -1819,6 +1833,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
               type="date"
               value={until}
               min={since}
+              max={todayIso}
               onChange={(event) => setUntil(event.target.value)}
             />
           </label>
@@ -1864,7 +1879,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
         {(contextClient !== "ALL" || contextResponsible !== "ALL") && <button className="media-context-clear" onClick={() => { setContextClient("ALL"); setContextResponsible("ALL"); }}>Limpar filtros</button>}
         <div className="media-filter-chips">{contextClient !== "ALL" && <button onClick={() => setContextClient("ALL")}>{clients.find((item) => item.id === contextClient)?.name || "Cliente"}<X/></button>}{contextResponsible !== "ALL" && <button onClick={() => setContextResponsible("ALL")}>{users.find((item) => item.id === contextResponsible)?.name || "Responsável"}<X/></button>}</div>
       </section>}
-      {section === "CAMPAIGNS" && <nav
+      {(section === "CLIENTS" || section === "CAMPAIGNS") && <nav
         className="traffic-platform-switch"
         aria-label="Plataforma de anúncios"
       >
@@ -2268,6 +2283,23 @@ function campaignScoreBreakdown(item: Campaign) {
     summary: `A nota parte de 30 pontos e soma CTR (+${Math.round(ctrPoints)}), conversão (+${Math.round(conversionPoints)}) e ritmo do orçamento (+${Math.round(budgetPoints)})${statusPoints ? `, com ${statusPoints} pelo status` : ""}.`,
     factors, strengths, improvements,
   };
+}
+
+function portfolioScoreBreakdown(campaigns: Campaign[]) {
+  const evaluated = campaigns.filter(hasDelivery);
+  if (!evaluated.length) return {
+    score: -1, summary: "Nenhuma campanha teve entrega suficiente no período para compor a nota do portfólio.",
+    factors: [] as Array<{ label: string; value: string; points: number; max: number; tone: "good" | "warning" | "bad" }>, strengths: [] as string[],
+    improvements: ["Aguarde a entrega ou revise a veiculação das campanhas para gerar uma avaliação."],
+  };
+  const details = evaluated.map(campaignScoreBreakdown), average = (values: number[]) => values.reduce((sum, value) => sum + value, 0) / values.length,
+    score = Math.round(average(details.map((detail) => detail.score))), factorAt = (index: number) => details.map((detail) => detail.factors[index]),
+    factors = factorAt(0).map((_, index) => { const entries = factorAt(index), points = average(entries.map((entry) => entry.points)), first = entries[0], ratio = first.max > 0 ? points / first.max : points < 0 ? 0 : 1; return { label: first.label, value: `média de ${Math.round(points)} pts`, points, max: first.max, tone: (ratio >= .7 ? "good" : ratio >= .4 ? "warning" : "bad") as "good" | "warning" | "bad" }; }),
+    strongest = [...factors].filter((factor) => factor.max > 0).sort((a,b) => (b.points / b.max) - (a.points / a.max))[0],
+    weakest = [...factors].filter((factor) => factor.max > 0).sort((a,b) => (a.points / a.max) - (b.points / b.max))[0];
+  return { score, summary: `Média de ${evaluated.length} campanha${evaluated.length === 1 ? "" : "s"} com entrega no período. Cada nota usa a mesma base de CTR, conversão, orçamento e status.`, factors,
+    strengths: strongest ? [`${strongest.label} é o fator que mais sustenta a média (${Math.round(strongest.points)}/${strongest.max} pts).`] : [],
+    improvements: weakest ? [`${weakest.label} é o principal limitador da média (${Math.round(weakest.points)}/${weakest.max} pts).`] : [] };
 }
 
 type CompiledCampaign = Campaign & { groupName: string };
@@ -2749,6 +2781,7 @@ function CampaignReport({
           : -1,
         campaigns: scores.length,
         total: group.campaigns.length,
+        campaignItems: group.campaigns,
       };
     })
     .sort((a, b) => b.score - a.score);
@@ -2802,7 +2835,7 @@ function CampaignReport({
           {portfolioScores.slice(0, 6).map((item) => (
             <article key={item.name} className={item.score < 70 && item.score >= 0 ? "critical" : item.score < 90 && item.score >= 0 ? "warning" : "healthy"}>
               <span><b>{item.name}</b><small>{item.campaigns} campanhas avaliadas</small></span>
-              <strong>{item.score >= 0 ? item.score : "—"}<small>/100</small></strong>
+              <ScoreReasonPopover score={item.score} label={`Score do portfólio ${item.name}`} explanation={portfolioScoreBreakdown(item.campaignItems)}><strong>{item.score >= 0 ? item.score : "—"}<small>/100</small></strong></ScoreReasonPopover>
             </article>
           ))}
         </div>
@@ -3021,7 +3054,7 @@ function MediaTrendChart({ campaigns, since, until }: { campaigns: Array<Campaig
     if (granularity === "MONTHLY") { for (let offset = 5; offset >= 0; offset--) { const start = new Date(end.getFullYear(), end.getMonth() - offset, 1), rangeEnd = new Date(end.getFullYear(), end.getMonth() - offset + 1, 0); ranges.push({ start, end: rangeEnd > end ? end : rangeEnd, label: start.toLocaleDateString("pt-BR", { month: "short" }).replace(".", "") }); } }
     else { const step = granularity === "DAILY" ? 1 : 7, max = granularity === "DAILY" ? 14 : 8; let cursor = new Date(end); while (cursor >= startLimit && ranges.length < max) { const rangeEnd = new Date(cursor), start = new Date(cursor); start.setDate(start.getDate() - step + 1); if (start < startLimit) start.setTime(startLimit.getTime()); ranges.unshift({ start, end: rangeEnd, label: granularity === "DAILY" ? start.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" }) : `${start.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })}` }); cursor = new Date(start); cursor.setDate(cursor.getDate() - 1); } }
     const providers = [...new Set(campaigns.map((item) => item.platform || "META_ADS"))], keys = new Set(campaigns.map((item) => `${item.platform || "META_ADS"}:${item.accountId}:${item.id}`));
-    void Promise.all(ranges.map(async (range) => { const payloads = await Promise.all(providers.map(async (source) => { const response = await fetch(`/api/media/${source === "META_ADS" ? "meta" : "google"}/campaigns?since=${iso(range.start)}&until=${iso(range.end)}`), payload = await response.json(); return response.ok ? (payload.campaigns || []).filter((item: Campaign) => keys.has(`${source}:${item.accountId}:${item.id}`)) : []; })); const rows = payloads.flat() as Campaign[]; return { label: range.label, spend: rows.reduce((sum, item) => sum + item.spend, 0), leads: rows.reduce((sum, item) => sum + item.leads, 0) }; })).then((result) => { if (!cancelled) { setPoints(result); setLoading(false); try { sessionStorage.setItem(cacheKey, JSON.stringify({ savedAt: Date.now(), points: result })); } catch { /* storage cheio não impede o gráfico */ } } });
+    void Promise.all(ranges.map(async (range) => { const payloads = await Promise.all(providers.map(async (source) => { const response = await fetch(`/api/media/${source === "META_ADS" ? "meta" : "google"}/campaigns?since=${iso(range.start)}&until=${iso(range.end)}&comparison=1`), payload = await response.json(); return response.ok ? (payload.campaigns || []).filter((item: Campaign) => keys.has(`${source}:${item.accountId}:${item.id}`)) : []; })); const rows = payloads.flat() as Campaign[]; return { label: range.label, spend: rows.reduce((sum, item) => sum + item.spend, 0), leads: rows.reduce((sum, item) => sum + item.leads, 0) }; })).then((result) => { if (!cancelled) { setPoints(result); setLoading(false); try { sessionStorage.setItem(cacheKey, JSON.stringify({ savedAt: Date.now(), points: result })); } catch { /* storage cheio não impede o gráfico */ } } });
     return () => { cancelled = true; };
   }, [granularity, signature, since, until]);
   const max = Math.max(1, ...points.map((item) => item[metric]));
@@ -3286,33 +3319,45 @@ function ScoreGauge({
   label,
   compact = false,
   campaign,
+  portfolioCampaigns,
 }: {
   score: number;
   label: string;
   compact?: boolean;
   campaign?: Campaign;
+  portfolioCampaigns?: Campaign[];
 }) {
   const tone =
     score < 0 ? "empty" : score >= 90 ? "good" : score >= 70 ? "warn" : "bad";
-  const explanation = campaign ? campaignScoreBreakdown(campaign) : null;
+  const explanation = campaign ? campaignScoreBreakdown(campaign) : portfolioCampaigns ? portfolioScoreBreakdown(portfolioCampaigns) : null;
   return (
-    <div className={`score-gauge score-${tone} ${compact ? "compact" : ""}`} title={explanation?.summary}>
-      <small>{label}</small>
-      <div className="score-gauge-number">
-        <b>{score >= 0 ? score : "—"}</b>
-        <em>/ 100</em>
+    <ScoreReasonPopover score={score} label={label} explanation={explanation}>
+      <div className={`score-gauge score-${tone} ${compact ? "compact" : ""}`}>
+        <small>{label}</small>
+        <div className="score-gauge-number"><b>{score >= 0 ? score : "—"}</b><em>/ 100</em></div>
+        <strong>{score < 0 ? "Sem dados" : score >= 90 ? "Saudável" : score >= 70 ? "Atenção" : "Abaixo do esperado"}</strong>
       </div>
-      <strong>
-        {score < 0
-          ? "Sem dados"
-          : score >= 90
-            ? "Saudável"
-            : score >= 70
-              ? "Atenção"
-              : "Abaixo do esperado"}
-      </strong>
-    </div>
+    </ScoreReasonPopover>
   );
+}
+
+type ScoreExplanation = ReturnType<typeof campaignScoreBreakdown>;
+function ScoreReasonPopover({ score, label, explanation, children }: { score: number; label: string; explanation: ScoreExplanation | null; children: ReactNode }) {
+  const [open,setOpen] = useState(false), [hovered,setHovered] = useState(false), [position,setPosition] = useState({ left: 12, top: 12, above: true });
+  const closeTimer = useRef<number | null>(null), visible = open || hovered;
+  if (!explanation) return <>{children}</>;
+  const tone = score < 0 ? "empty" : score >= 90 ? "good" : score >= 70 ? "warning" : "bad";
+  const place = (anchor: HTMLElement) => { const rect = anchor.getBoundingClientRect(), width = Math.min(310, window.innerWidth - 24); setPosition({ left: Math.max(12, Math.min(window.innerWidth - width - 12, rect.right - width)), top: rect.top > 300 ? rect.top - 10 : rect.bottom + 10, above: rect.top > 300 }); };
+  const enter = (anchor?: HTMLElement) => { if (closeTimer.current) window.clearTimeout(closeTimer.current); if (anchor) place(anchor); setHovered(true); };
+  const leave = () => { closeTimer.current = window.setTimeout(() => setHovered(false), 120); };
+  const popover = visible ? createPortal(<div className={`score-reason-popover score-reason-floating ${tone}`} style={{ left: position.left, top: position.top, transform: position.above ? "translateY(-100%)" : undefined }} role="tooltip" onMouseEnter={() => enter()} onMouseLeave={leave} onClick={(event) => event.stopPropagation()}>
+      <div className="score-reason-heading"><span><small>POR QUE ESTA NOTA?</small><b>{label}</b></span><strong>{score >= 0 ? score : "—"}<small>/100</small></strong></div>
+      <p>{explanation.summary}</p>
+      {!!explanation.factors.length && <div className="score-reason-factors">{explanation.factors.map((factor) => <div key={factor.label} className={factor.tone}><span><b>{factor.label}</b><small>{factor.value}</small></span><strong>{factor.points >= 0 ? "+" : ""}{Math.round(factor.points)}{factor.max > 0 ? `/${factor.max}` : ""}</strong></div>)}</div>}
+      <div className="score-reason-conclusion"><b>{score >= 90 ? "O que mantém alto" : "Principal leitura"}</b><span>{score >= 90 ? explanation.strengths[0] : explanation.improvements[0] || explanation.strengths[0]}</span></div>
+      <small className="score-reason-hint">Clique novamente ou pressione Esc para fechar</small>
+    </div>, document.body) : null;
+  return <><span className={`score-reason-trigger ${open ? "open" : ""}`} onMouseEnter={(event) => enter(event.currentTarget)} onMouseLeave={leave} onClick={(event) => { event.stopPropagation(); place(event.currentTarget); setOpen((value) => !value); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); place(event.currentTarget); setOpen((value) => !value); } if (event.key === "Escape") { setOpen(false); setHovered(false); } }} role="button" tabIndex={0} aria-expanded={open} aria-label={`${label}: ${score >= 0 ? `${score} de 100` : "sem dados"}. Ver explicação`}>{children}</span>{popover}</>;
 }
 
 function AnalysisList({

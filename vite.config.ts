@@ -789,6 +789,7 @@ function localApi(
   azureEmailFromName: string,
   appBaseUrl: string,
   sessionSecret: string,
+  integrationEncryptionSecret: string,
 ): Plugin {
   const sessionLifetimeMs = 30 * 24 * 60 * 60 * 1000;
   const signSession = (payload: string, passwordHash: string) =>
@@ -861,12 +862,21 @@ function localApi(
   let runtimeGoogleClientSecret = googleClientSecret;
   let runtimeGoogleDeveloperToken = googleDeveloperToken;
   let runtimeGoogleRefreshToken = googleRefreshToken;
-  const integrationKey = () => {
+  const localIntegrationKey = () => {
     mkdirSync("data", { recursive: true });
     if (!existsSync(localIntegrationKeyPath))
       writeFileSync(localIntegrationKeyPath, randomBytes(32), { mode: 0o600 });
     return readFileSync(localIntegrationKeyPath);
   };
+  // Containers and Firebase hydration cannot rely on a machine-local key file:
+  // a fresh revision would generate a different key and make every persisted
+  // integration credential unreadable. New writes therefore use a stable
+  // environment secret, while the local key remains a migration fallback for
+  // credentials encrypted by older releases.
+  const stableIntegrationKey = createHash("sha256")
+    .update(integrationEncryptionSecret)
+    .digest();
+  const integrationKey = () => stableIntegrationKey;
   const encryptIntegrationToken = (token: string) => {
     const iv = randomBytes(12),
       cipher = createCipheriv("aes-256-gcm", integrationKey(), iv),
@@ -879,14 +889,14 @@ function localApi(
       updatedAt: new Date().toISOString(),
     };
   };
-  const decryptIntegrationToken = (payload: {
+  const decryptIntegrationTokenWithKey = (payload: {
     iv: string;
     tag: string;
     ciphertext: string;
-  }) => {
+  }, key: Buffer) => {
     const decipher = createDecipheriv(
       "aes-256-gcm",
-      integrationKey(),
+      key,
       Buffer.from(payload.iv, "base64"),
     );
     decipher.setAuthTag(Buffer.from(payload.tag, "base64"));
@@ -894,6 +904,21 @@ function localApi(
       decipher.update(Buffer.from(payload.ciphertext, "base64")),
       decipher.final(),
     ]).toString("utf8");
+  };
+  const decryptIntegrationToken = (payload: {
+    iv: string;
+    tag: string;
+    ciphertext: string;
+  }) => {
+    try {
+      return decryptIntegrationTokenWithKey(payload, stableIntegrationKey);
+    } catch (stableKeyError) {
+      try {
+        return decryptIntegrationTokenWithKey(payload, localIntegrationKey());
+      } catch {
+        throw stableKeyError;
+      }
+    }
   };
   type OpenAiSettings = { secret: ReturnType<typeof encryptIntegrationToken>; model: string; lastFour: string; verifiedAt: string; updatedAt: string; updatedById: string; updatedByName: string };
   let openAiSettings: OpenAiSettings | null = null;
@@ -1043,7 +1068,8 @@ function localApi(
   const localGoogleDashboardCachePath = "data/google-dashboard-cache.local.json";
   const localCampaignVerificationsPath = "data/campaign-verifications.local.json";
   const localCampaignOptimizationHistoryPath = "data/campaign-optimization-history.local.json";
-  const mediaSyncIntervalMs = 60 * 60 * 1000;
+  const mediaSyncIntervalMs = 4 * 60 * 60 * 1000;
+  const mediaManualRefreshCooldownMs = 5 * 60 * 1000;
   type CampaignReviewEntry = {
     action: "ANALYSIS" | "REVIEW" | "REPORT_DOWNLOADED" | "REPORT_SENT";
     createdAt: string;
@@ -7180,16 +7206,22 @@ function localApi(
               : today,
             forceRefresh = requestUrl.searchParams.get("refresh") === "1",
             comparisonRequest = requestUrl.searchParams.get("comparison") === "1";
-          if (!forceRefresh && existsSync(localGoogleDashboardCachePath))
+          if (existsSync(localGoogleDashboardCachePath))
             try {
               const cached = JSON.parse(
                 readFileSync(localGoogleDashboardCachePath, "utf8"),
               ) as Record<string, any>;
-              if (cached.schemaVersion === 7 && cached.since === since && cached.until === until)
+              const cacheAge = Date.now() - new Date(cached.syncedAt || 0).getTime();
+              if (
+                cached.schemaVersion === 8 &&
+                cached.since === since &&
+                cached.until === until &&
+                (!forceRefresh || cacheAge < mediaManualRefreshCooldownMs)
+              )
                 return json(response, 200, withCampaignVerifications({
                   ...cached,
                   cache: {
-                    status: "stored",
+                    status: forceRefresh ? "rate_limited" : "stored",
                     cachedAt: cached.syncedAt,
                     nextSyncAt: new Date(
                       new Date(cached.syncedAt).getTime() + mediaSyncIntervalMs,
@@ -7201,6 +7233,13 @@ function localApi(
             return json(response, 403, {
               message: "Você não possui permissão para sincronizar campanhas.",
             });
+          const cachedGoogleCampaigns = new Map<string, Record<string, any>>();
+          if (existsSync(localGoogleDashboardCachePath)) try {
+            const previous = JSON.parse(readFileSync(localGoogleDashboardCachePath, "utf8")) as { campaigns?: Record<string, any>[] };
+            (previous.campaigns || []).forEach((campaign) =>
+              cachedGoogleCampaigns.set(`${campaign.accountId}:${campaign.id}`, campaign),
+            );
+          } catch { /* cache opcional; a sincronização oficial continua */ }
           const missing = [
             !runtimeGoogleClientId && "OAuth Client ID",
             !runtimeGoogleClientSecret && "OAuth Client Secret",
@@ -7350,9 +7389,14 @@ function localApi(
                   `SELECT ${baseGoogleFields} FROM campaign WHERE segments.date BETWEEN '${since}' AND '${until}'`,
                 );
               }
+              // Comparações e o botão de atualização precisam renovar as
+              // métricas, não baixar novamente criativos, URLs, termos e
+              // geografia de dezenas de contas. Esses detalhes permanecem no
+              // cache e são renovados numa consulta normal de um novo período.
+              const loadGoogleDetails = !comparisonRequest && !forceRefresh;
               const landingPages = new Map<string, string>();
               const adsByCampaign = new Map<string, Record<string, any>[]>();
-              try {
+              if (loadGoogleDetails) try {
                 const adRows = await search(
                   account.id,
                   account.loginCustomerId,
@@ -7381,7 +7425,50 @@ function localApi(
               } catch (cause) {
                 console.warn(`[Google Ads] Anúncios/criativos indisponíveis para ${account.id}:`, cause instanceof Error ? cause.message : cause);
               }
-              try {
+              if (loadGoogleDetails) try {
+                const responsiveImageRows = await search(
+                  account.id,
+                  account.loginCustomerId,
+                  "SELECT campaign.id, ad_group_ad.ad.id, asset.id, asset.name, asset.type, asset.image_asset.full_size.url FROM ad_group_ad_asset WHERE campaign.status = 'ENABLED'",
+                );
+                responsiveImageRows.forEach((assetRow) => {
+                  const campaignId = String(assetRow.campaign?.id || ""), adId = String(assetRow.adGroupAd?.ad?.id || ""), asset = assetRow.asset || {}, imageUrl = asset.imageAsset?.fullSize?.url;
+                  if (!campaignId || !adId || asset.type !== "IMAGE" || !imageUrl) return;
+                  const ad = (adsByCampaign.get(campaignId) || []).find((item) => item.id === adId);
+                  if (!ad) return;
+                  const creativeId = String(asset.id || imageUrl);
+                  if (!ad.creatives.some((creative: any) => creative.id === creativeId || creative.url === imageUrl))
+                    ad.creatives.unshift({ id: creativeId, name: asset.name || null, type: "IMAGE", url: imageUrl, thumbnailUrl: imageUrl });
+                });
+              } catch (cause) {
+                console.warn(`[Google Ads] Imagens de anúncios responsivos indisponíveis para ${account.id}:`, cause instanceof Error ? cause.message : cause);
+              }
+              if (loadGoogleDetails) try {
+                const assetGroupImageRows = await search(
+                  account.id,
+                  account.loginCustomerId,
+                  "SELECT campaign.id, asset_group.id, asset_group.name, asset.id, asset.name, asset.type, asset.image_asset.full_size.url FROM asset_group_asset WHERE campaign.status = 'ENABLED'",
+                );
+                const performanceMaxAds = new Map<string, Record<string, any>>();
+                assetGroupImageRows.forEach((assetRow) => {
+                  const campaignId = String(assetRow.campaign?.id || ""), assetGroup = assetRow.assetGroup || {}, asset = assetRow.asset || {}, imageUrl = asset.imageAsset?.fullSize?.url;
+                  if (!campaignId || !assetGroup.id || asset.type !== "IMAGE" || !imageUrl) return;
+                  const key = `${campaignId}:${assetGroup.id}`, current = performanceMaxAds.get(key) || {
+                    id: `asset-group-${assetGroup.id}`, name: assetGroup.name || `Grupo de recursos ${assetGroup.id}`, status: "ACTIVE", groupName: assetGroup.name || null, format: "PERFORMANCE MAX",
+                    landingPageUrl: null, previewUrl: imageUrl, headline: null, body: null, spend: 0, impressions: 0, clicks: 0, results: 0, creatives: [],
+                  }, creativeId = String(asset.id || imageUrl);
+                  if (!current.creatives.some((creative: any) => creative.id === creativeId || creative.url === imageUrl))
+                    current.creatives.push({ id: creativeId, name: asset.name || null, type: "IMAGE", url: imageUrl, thumbnailUrl: imageUrl });
+                  performanceMaxAds.set(key, current);
+                });
+                performanceMaxAds.forEach((ad, key) => {
+                  const campaignId = key.split(":")[0], existing = adsByCampaign.get(campaignId) || [];
+                  if (!existing.some((item) => item.id === ad.id)) adsByCampaign.set(campaignId, [...existing, ad]);
+                });
+              } catch (cause) {
+                console.warn(`[Google Ads] Imagens de Performance Max indisponíveis para ${account.id}:`, cause instanceof Error ? cause.message : cause);
+              }
+              if (loadGoogleDetails) try {
                 const landingRows = await search(
                   account.id,
                   account.loginCustomerId,
@@ -7396,7 +7483,7 @@ function localApi(
               } catch {
                 /* Alguns formatos de campanha não expõem URLs no nível do anúncio. */
               }
-              try {
+              if (loadGoogleDetails) try {
                 const assetGroupRows = await search(
                   account.id,
                   account.loginCustomerId,
@@ -7423,7 +7510,7 @@ function localApi(
                 checks.forEach(([campaignId, result]) => landingPageStatuses.set(campaignId, result));
               }
               const searchTermsByCampaign = new Map<string, Array<{ term: string; clicks: number; impressions: number; leads: number; spend: number }>>();
-              try {
+              if (loadGoogleDetails) try {
                 const termRows = await search(account.id, account.loginCustomerId, `SELECT campaign.id, search_term_view.search_term, metrics.impressions, metrics.clicks, metrics.conversions, metrics.cost_micros FROM search_term_view WHERE segments.date BETWEEN '${since}' AND '${until}'`);
                 termRows.forEach((termRow) => {
                   const campaignId = String(termRow.campaign?.id || ""), term = String(termRow.searchTermView?.searchTerm || "").trim();
@@ -7437,7 +7524,7 @@ function localApi(
                 /* Termos existem apenas para campanhas Google compatíveis com pesquisa. */
               }
               const geographyByCampaign = new Map<string, Array<{ name: string; level: "REGION" | "CITY" | "NEIGHBORHOOD"; leads: number; clicks: number; spend: number }>>();
-              try {
+              if (loadGoogleDetails) try {
                 const geoRows = await search(
                     account.id,
                     account.loginCustomerId,
@@ -7508,7 +7595,8 @@ function localApi(
                   metrics = row.metrics || {},
                   budget = row.campaignBudget || {},
                   spend = Number(metrics.costMicros || 0) / 1_000_000,
-                  conversions = Number(metrics.conversions || 0);
+                  conversions = Number(metrics.conversions || 0),
+                  previousCampaign = cachedGoogleCampaigns.get(`google_${account.id}:${String(campaign.id || "")}`);
                 campaigns.push({
                   id: String(campaign.id || ""),
                   accountId: `google_${account.id}`,
@@ -7549,18 +7637,18 @@ function localApi(
                   optimizationStatus: campaign.optimizationScore == null
                     ? null
                     : `${Math.round(Number(campaign.optimizationScore) * 100)}% otimizada`,
-                  landingPageStatus: landingPageStatuses.get(String(campaign.id || "")) || "UNKNOWN",
-                  landingPageUrl: landingPages.get(String(campaign.id || "")) || null,
-                  geography: geographyByCampaign.get(String(campaign.id || "")) || [],
-                  searchTerms: searchTermsByCampaign.get(String(campaign.id || "")) || [],
-                  ads: adsByCampaign.get(String(campaign.id || "")) || [],
+                  landingPageStatus: landingPageStatuses.get(String(campaign.id || "")) || previousCampaign?.landingPageStatus || "UNKNOWN",
+                  landingPageUrl: landingPages.get(String(campaign.id || "")) || previousCampaign?.landingPageUrl || null,
+                  geography: geographyByCampaign.get(String(campaign.id || "")) || previousCampaign?.geography || [],
+                  searchTerms: searchTermsByCampaign.get(String(campaign.id || "")) || previousCampaign?.searchTerms || [],
+                  ads: adsByCampaign.get(String(campaign.id || "")) || previousCampaign?.ads || [],
                 });
               });
             }
             const googleSyncedAt = new Date().toISOString(),
               googleCampaigns = withOptimizationHistory(campaigns, "GOOGLE_ADS", googleSyncedAt),
               googlePayload = {
-              schemaVersion: 7,
+              schemaVersion: 8,
               since,
               until,
               syncedAt: googleSyncedAt,
@@ -7625,8 +7713,9 @@ function localApi(
           )
             ? requestUrl.searchParams.get("until")!
             : today;
-          const forceRefresh = requestUrl.searchParams.get("refresh") === "1";
-          if (!forceRefresh && existsSync(localMetaDashboardCachePath))
+          const forceRefresh = requestUrl.searchParams.get("refresh") === "1",
+            comparisonRequest = requestUrl.searchParams.get("comparison") === "1";
+          if (existsSync(localMetaDashboardCachePath))
             try {
               const cached = JSON.parse(
                 readFileSync(localMetaDashboardCachePath, "utf8"),
@@ -7641,7 +7730,8 @@ function localApi(
               if (
                 cached.schemaVersion === 7 &&
                 cached.since === since &&
-                cached.until === until
+                cached.until === until &&
+                (!forceRefresh || Date.now() - new Date(cached.cachedAt).getTime() < mediaManualRefreshCooldownMs)
               ) {
                 Object.entries(cached.pictures || {}).forEach(([id, picture]) =>
                   metaAccountPictures.set(id, picture),
@@ -7649,7 +7739,7 @@ function localApi(
                 return json(response, 200, withCampaignVerifications({
                   ...cached.payload,
                   cache: {
-                    status: "fresh",
+                    status: forceRefresh ? "rate_limited" : "fresh",
                     cachedAt: cached.cachedAt,
                     nextSyncAt: new Date(
                       new Date(cached.cachedAt).getTime() + mediaSyncIntervalMs,
@@ -8095,24 +8185,26 @@ function localApi(
                 })),
                 campaigns: campaignsWithHistory,
               };
-            mkdirSync("data", { recursive: true });
-            writeFileSync(
-              localMetaDashboardCachePath,
-              JSON.stringify(
-                {
-                  schemaVersion: 7,
-                  since,
-                  until,
-                  cachedAt: syncedAt,
-                  payload,
-                  pictures: Object.fromEntries(metaAccountPictures),
-                },
-                null,
-                2,
-              ),
-              { mode: 0o600 },
-            );
-            scheduleDatabaseMirror();
+            if (!comparisonRequest) {
+              mkdirSync("data", { recursive: true });
+              writeFileSync(
+                localMetaDashboardCachePath,
+                JSON.stringify(
+                  {
+                    schemaVersion: 7,
+                    since,
+                    until,
+                    cachedAt: syncedAt,
+                    payload,
+                    pictures: Object.fromEntries(metaAccountPictures),
+                  },
+                  null,
+                  2,
+                ),
+                { mode: 0o600 },
+              );
+              scheduleDatabaseMirror();
+            }
             return json(response, 200, withCampaignVerifications({
               ...payload,
               cache: {
@@ -8529,6 +8621,7 @@ export default defineConfig(async ({ mode, command }) => {
         env.AZURE_EMAIL_FROM_NAME || "PW OS",
         env.APP_BASE_URL || "",
         sessionSecret,
+        env.INTEGRATION_ENCRYPTION_KEY || sessionSecret,
       ),
       {
         name: "pw-os-firebase-persistence",
