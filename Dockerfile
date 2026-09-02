@@ -19,7 +19,8 @@ COPY --from=build /app/metaInsights.ts ./metaInsights.ts
 COPY --from=build /app/packages ./packages
 COPY --from=build /app/public ./public
 COPY --from=build /app/apps ./apps
+COPY --from=build /app/scripts ./scripts
 RUN mkdir -p /app/data && chown -R node:node /app
 USER node
 EXPOSE 8080
-CMD ["npm", "start"]
+CMD ["sh", "-c", "node scripts/validate-production-data.mjs && npm start"]

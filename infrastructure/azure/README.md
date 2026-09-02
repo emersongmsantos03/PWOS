@@ -19,6 +19,29 @@ Crie um Resource Group, Azure Container Registry, Container Apps Environment, St
 
 Antes de iniciar a aplicação, envie para a raiz do compartilhamento o conteúdo de `backups/pw-os-data-.../data/`. Confira quantidade, tamanho e hashes do manifesto. O contêiner deliberadamente não inclui `data/`, evitando publicar dados e segredos dentro da imagem.
 
+O exemplo também define `PW_OS_REQUIRE_DATA=true`. Com essa proteção, uma revisão sem os
+arquivos operacionais mínimos não fica saudável e não substitui silenciosamente a revisão
+anterior mostrando dashboards vazios.
+
+Para recuperar uma implantação que subiu vazia, envie novamente o último backup ao File
+Share (sem incluir a pasta intermediária `data`) e reinicie a revisão:
+
+```bash
+az storage file upload-batch \
+  --account-name SEU_STORAGE_ACCOUNT \
+  --source backups/pw-os-data-AAAA-MM-DDTHH-MM-SS-sssZ/data \
+  --destination SEU_FILE_SHARE \
+  --auth-mode login
+
+az containerapp revision restart \
+  --name pw-os-prod \
+  --resource-group SEU_RESOURCE_GROUP \
+  --revision NOME_DA_REVISAO
+```
+
+Depois da reinicialização, valide no mínimo as contagens de usuários, cargos, setores,
+clientes e campanhas antes de direcionar tráfego para a revisão.
+
 Construa uma imagem imutável e versionada:
 
 ```bash

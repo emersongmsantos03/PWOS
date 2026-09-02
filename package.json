@@ -20,6 +20,8 @@
     "db:deploy": "prisma migrate deploy --schema packages/database/prisma/schema.prisma",
     "db:import-local": "node scripts/migrate-local-data-to-postgres.mjs",
     "data:backup": "node scripts/backup-local-data.mjs",
+    "firebase:deploy:rules": "firebase deploy --only firestore:rules,storage",
+    "firebase:migrate": "node --experimental-strip-types scripts/migrate-data-to-firebase.ts",
     "db:studio": "prisma studio --schema packages/database/prisma/schema.prisma"
   },
   "dependencies": {
@@ -29,6 +31,9 @@
     "@tanstack/react-query": "^5.90.20",
     "@tanstack/react-table": "^8.21.3",
     "@types/nodemailer": "^8.0.1",
+    "chokidar": "^5.0.0",
+    "firebase": "^12.18.0",
+    "firebase-admin": "^14.3.0",
     "jspdf": "^4.2.1",
     "lucide-react": "^0.468.0",
     "nodemailer": "^9.0.5",
@@ -46,6 +51,7 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.2",
     "embedded-postgres": "^18.4.0-beta.17",
+    "firebase-tools": "^15.28.2",
     "prisma": "^6.19.0",
     "typescript": "^5.9.3",
     "vite": "^8.0.13",

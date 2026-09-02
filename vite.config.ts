@@ -1,5 +1,6 @@
 import {
   createHash,
+  createHmac,
   createCipheriv,
   createDecipheriv,
   randomBytes,
@@ -28,6 +29,12 @@ import OpenAI from "openai";
 import { extractMetaLeads, type MetaAction } from "./metaInsights";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
+import {
+  firebaseBackendConfig,
+  hydrateAttachments,
+  hydrateDataDirectory,
+  startFirebaseMirror,
+} from "./packages/firebase/src/admin";
 import {
   allPermissions,
   permissionCatalog,
@@ -725,7 +732,8 @@ const safeEqual = (a: string, b: string) => {
   const right = Buffer.from(b);
   return left.length === right.length && timingSafeEqual(left, right);
 };
-const hasPermission = (user: User, permission: string) => {
+const hasPermission = (user: User | undefined, permission: string) => {
+  if (!user) return false;
   if (user.profile === "MASTER") return true;
   const override = user.permissionOverrides?.[permission];
   if (override) return override === "ALLOW";
@@ -780,7 +788,59 @@ function localApi(
   azureEmailFrom: string,
   azureEmailFromName: string,
   appBaseUrl: string,
+  sessionSecret: string,
 ): Plugin {
+  const sessionLifetimeMs = 30 * 24 * 60 * 60 * 1000;
+  const signSession = (payload: string, passwordHash: string) =>
+    createHmac("sha256", `${sessionSecret}:${passwordHash}`)
+      .update(payload)
+      .digest("base64url");
+  const createSessionToken = (user: User, portal: boolean) => {
+    const payload = Buffer.from(
+      JSON.stringify({
+        userId: user.id,
+        portal,
+        issuedAt: Date.now(),
+        nonce: randomBytes(16).toString("base64url"),
+      }),
+    ).toString("base64url");
+    return `${payload}.${signSession(payload, user.passwordHash)}`;
+  };
+  const resolveSession = (token: string | undefined, portal: boolean) => {
+    if (!token) return undefined;
+    // Accept sessions created before signed cookies were introduced until the
+    // current process is restarted, avoiding a forced logout during rollout.
+    const legacyUserId = (portal ? clientSessions : sessions).get(token);
+    if (legacyUserId) return legacyUserId;
+    const [payload, signature, extra] = token.split(".");
+    if (!payload || !signature || extra) return undefined;
+    try {
+      const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as {
+        userId?: string;
+        portal?: boolean;
+        issuedAt?: number;
+      };
+      if (
+        typeof parsed.userId !== "string" ||
+        parsed.portal !== portal ||
+        typeof parsed.issuedAt !== "number" ||
+        parsed.issuedAt > Date.now() + 60_000 ||
+        Date.now() - parsed.issuedAt > sessionLifetimeMs
+      ) return undefined;
+      const user = users.get(parsed.userId);
+      if (!user) return undefined;
+      const expected = signSession(payload, user.passwordHash);
+      const actualBuffer = Buffer.from(signature);
+      const expectedBuffer = Buffer.from(expected);
+      if (
+        actualBuffer.length !== expectedBuffer.length ||
+        !timingSafeEqual(actualBuffer, expectedBuffer)
+      ) return undefined;
+      return user.id;
+    } catch {
+      return undefined;
+    }
+  };
   const localMetaTokenPath = "data/meta-token.local.json";
   const localGoogleDeveloperTokenPath =
     "data/google-developer-token.local.json";
@@ -1968,8 +2028,8 @@ function localApi(
         const clientSessionId = cookies(request).pw_client_session;
         const isClientAuthRoute = url.startsWith("/client-auth/") || url === "/client-portal/data";
         const userId = isClientAuthRoute
-          ? clientSessionId && clientSessions.get(clientSessionId)
-          : sessionId && sessions.get(sessionId);
+          ? resolveSession(clientSessionId, true)
+          : resolveSession(sessionId, false);
         const currentUser = (userId && users.get(userId)) ||
           (request.headers["x-pw-media-background"] === mediaInternalSyncToken && /^\/media\/(meta|google)\/campaigns/.test(url)
             ? master
@@ -2034,11 +2094,10 @@ function localApi(
                 ? "Este acesso é exclusivo para usuários de clientes."
                 : "Use o Portal do Cliente para entrar com esta conta.",
             });
-          const token = randomBytes(32).toString("hex");
-          (portal ? clientSessions : sessions).set(token, user.id);
+          const token = createSessionToken(user, portal);
           response.setHeader(
             "Set-Cookie",
-            `${portal ? "pw_client_session" : "pw_os_session"}=${token}; HttpOnly; SameSite=Strict; Path=/${String(request.headers["x-forwarded-proto"] || "").includes("https") ? "; Secure" : ""}`,
+            `${portal ? "pw_client_session" : "pw_os_session"}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${Math.floor(sessionLifetimeMs / 1000)}${String(request.headers["x-forwarded-proto"] || "").includes("https") ? "; Secure" : ""}`,
           );
           return json(response, 200, { user: publicUser(user) });
         }
@@ -2109,7 +2168,7 @@ function localApi(
           return json(response, 200, { configured, source: openAiSettings ? "SETTINGS" : openAiApiKey ? "ENVIRONMENT" : "NONE", lastFour: openAiSettings?.lastFour || (openAiApiKey ? openAiApiKey.slice(-4) : ""), model: activeOpenAiModel(), verifiedAt: openAiSettings?.verifiedAt || null, updatedByName: openAiSettings?.updatedByName || null });
         }
         if (url === "/openai-settings" && request.method === "PUT") {
-          if (!hasPermission(currentUser, "settings.edit")) return json(response, 403, { message: "Você não possui permissão para alterar integrações." });
+          if (!currentUser || !hasPermission(currentUser, "settings.edit")) return json(response, 403, { message: "Você não possui permissão para alterar integrações." });
           const input = await body(request), apiKey = String(input.apiKey || "").trim(), model = String(input.model || "gpt-5.5").trim().slice(0, 80);
           if (!apiKey.startsWith("sk-") || apiKey.length < 30) return json(response, 400, { message: "Informe uma chave de API válida da OpenAI." });
           try {
@@ -7292,6 +7351,36 @@ function localApi(
                 );
               }
               const landingPages = new Map<string, string>();
+              const adsByCampaign = new Map<string, Record<string, any>[]>();
+              try {
+                const adRows = await search(
+                  account.id,
+                  account.loginCustomerId,
+                  `SELECT campaign.id, ad_group.name, ad_group_ad.status, ad_group_ad.ad.id, ad_group_ad.ad.name, ad_group_ad.ad.type, ad_group_ad.ad.final_urls, ad_group_ad.ad.image_ad.image_url, ad_group_ad.ad.image_ad.preview_image_url, ad_group_ad.ad.responsive_search_ad.headlines, ad_group_ad.ad.responsive_search_ad.descriptions, ad_group_ad.ad.responsive_display_ad.headlines, ad_group_ad.ad.responsive_display_ad.long_headline, ad_group_ad.ad.responsive_display_ad.descriptions, metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions FROM ad_group_ad WHERE segments.date BETWEEN '${since}' AND '${until}'`,
+                );
+                adRows.forEach((adRow) => {
+                  const campaignId = String(adRow.campaign?.id || ""), wrapper = adRow.adGroupAd || {}, ad = wrapper.ad || {}, metrics = adRow.metrics || {};
+                  if (!campaignId || !ad.id) return;
+                  const rsa = ad.responsiveSearchAd || {}, rda = ad.responsiveDisplayAd || {}, image = ad.imageAd || {},
+                    textAssets = [...(rsa.headlines || []), ...(rsa.descriptions || []), ...(rda.headlines || []), ...(rda.descriptions || []), ...(rda.longHeadline ? [rda.longHeadline] : [])]
+                      .map((asset: any) => asset?.text).filter(Boolean),
+                    creatives = [
+                      ...(image.imageUrl || image.previewImageUrl ? [{ type: "IMAGE", url: image.imageUrl || null, thumbnailUrl: image.previewImageUrl || image.imageUrl || null }] : []),
+                      ...textAssets.map((value: string) => ({ type: "TEXT", text: value })),
+                    ],
+                    normalized = {
+                      id: String(ad.id), name: ad.name || `Anúncio ${ad.id}`, status: wrapper.status || "UNKNOWN",
+                      groupName: adRow.adGroup?.name || null, format: ad.type || null,
+                      landingPageUrl: ad.finalUrls?.[0] || null, previewUrl: image.previewImageUrl || null,
+                      headline: textAssets[0] || null, body: textAssets[1] || null,
+                      spend: Number(metrics.costMicros || 0) / 1_000_000,
+                      impressions: Number(metrics.impressions || 0), clicks: Number(metrics.clicks || 0), results: Number(metrics.conversions || 0), creatives,
+                    };
+                  adsByCampaign.set(campaignId, [...(adsByCampaign.get(campaignId) || []), normalized]);
+                });
+              } catch (cause) {
+                console.warn(`[Google Ads] Anúncios/criativos indisponíveis para ${account.id}:`, cause instanceof Error ? cause.message : cause);
+              }
               try {
                 const landingRows = await search(
                   account.id,
@@ -7464,6 +7553,7 @@ function localApi(
                   landingPageUrl: landingPages.get(String(campaign.id || "")) || null,
                   geography: geographyByCampaign.get(String(campaign.id || "")) || [],
                   searchTerms: searchTermsByCampaign.get(String(campaign.id || "")) || [],
+                  ads: adsByCampaign.get(String(campaign.id || "")) || [],
                 });
               });
             }
@@ -7649,6 +7739,7 @@ function localApi(
             const accounts: MetaAccountPayload[] = [];
             const accountCampaigns = new Map<string, MetaCampaignPayload[]>();
             const accountInsights = new Map<string, Map<string, MetaInsight>>();
+            const accountAds = new Map<string, Map<string, Record<string, any>[]>>();
             const accountGeographies = new Map<string, Map<string, Array<{ name: string; level: "REGION" | "CITY" | "NEIGHBORHOOD"; leads: number; clicks: number; spend: number }>>>();
             const campaignLandingPages = new Map<string, string>();
             for (const item of accountRefs) {
@@ -7693,8 +7784,19 @@ function localApi(
                 promoted_object?: { page_id?: string; instagram_actor_id?: string };
               }>(`${item.id}/adsets?fields=promoted_object&limit=500`);
               const adRows = await listAll<{
+                id?: string;
+                name?: string;
+                status?: string;
+                effective_status?: string;
                 campaign_id?: string;
+                adset?: { id?: string; name?: string };
                 creative?: {
+                  id?: string;
+                  name?: string;
+                  title?: string;
+                  body?: string;
+                  image_url?: string;
+                  video_id?: string;
                   effective_object_story_id?: string;
                   object_story_id?: string;
                   instagram_actor_id?: string;
@@ -7702,13 +7804,44 @@ function localApi(
                   object_story_spec?: {
                     page_id?: string;
                     instagram_actor_id?: string;
-                    link_data?: { link?: string };
-                    video_data?: { call_to_action?: { value?: { link?: string } } };
+                    link_data?: { link?: string; message?: string; name?: string; picture?: string };
+                    video_data?: { image_url?: string; message?: string; title?: string; video_id?: string; call_to_action?: { value?: { link?: string } } };
                   };
                 };
               }>(
-                `${item.id}/ads?fields=campaign_id,creative{effective_object_story_id,object_story_id,instagram_actor_id,thumbnail_url,object_story_spec{page_id,instagram_actor_id,link_data{link},video_data{call_to_action{value}}}}&limit=500`,
+                `${item.id}/ads?fields=id,name,status,effective_status,campaign_id,adset{id,name},creative{id,name,title,body,image_url,video_id,effective_object_story_id,object_story_id,instagram_actor_id,thumbnail_url,object_story_spec{page_id,instagram_actor_id,link_data{link,message,name,picture},video_data{image_url,message,title,video_id,call_to_action{value}}}}&limit=500`,
               ).catch(() => []);
+              const adInsightRows = await listAll<MetaInsight & { ad_id?: string }>(
+                `${item.id}/insights?fields=ad_id,spend,impressions,clicks,actions&level=ad&time_range=${encodeURIComponent(JSON.stringify({ since, until }))}&action_report_time=conversion&use_account_attribution_setting=true&limit=500`,
+              ).catch(() => []);
+              const insightByAd = new Map(adInsightRows.filter((row) => row.ad_id).map((row) => [row.ad_id!, row]));
+              const adsByCampaign = new Map<string, Record<string, any>[]>();
+              adRows.forEach((ad) => {
+                if (!ad.id || !ad.campaign_id) return;
+                const creative = ad.creative || {}, spec = creative.object_story_spec || {},
+                  link = spec.link_data, video = spec.video_data,
+                  metrics = insightByAd.get(ad.id), leadResult = extractMetaLeads(metrics?.actions),
+                  previewUrl = creative.effective_object_story_id
+                    ? `https://www.facebook.com/${creative.effective_object_story_id.replace("_", "/posts/")}`
+                    : null,
+                  creatives = [
+                    ...(creative.image_url || creative.thumbnail_url || link?.picture || video?.image_url ? [{ id: creative.id, name: creative.name, type: video?.video_id || creative.video_id ? "VIDEO" : "IMAGE", url: creative.image_url || link?.picture || null, thumbnailUrl: creative.thumbnail_url || video?.image_url || null }] : []),
+                    ...(link?.message || creative.body ? [{ type: "TEXT", text: link?.message || creative.body }] : []),
+                    ...(link?.name || video?.title || creative.title ? [{ type: "TEXT", text: link?.name || video?.title || creative.title }] : []),
+                  ];
+                const normalized = {
+                  id: ad.id, name: ad.name || creative.name || `Anúncio ${ad.id}`,
+                  status: ad.effective_status || ad.status || "UNKNOWN", groupName: ad.adset?.name || null,
+                  format: video?.video_id || creative.video_id ? "VÍDEO" : "IMAGEM / PUBLICAÇÃO",
+                  landingPageUrl: landingPageFromCreative(creative) || null, previewUrl,
+                  headline: link?.name || video?.title || creative.title || null,
+                  body: link?.message || video?.message || creative.body || null,
+                  spend: Number(metrics?.spend || 0), impressions: Number(metrics?.impressions || 0), clicks: Number(metrics?.clicks || 0),
+                  results: leadResult.leads, creatives,
+                };
+                adsByCampaign.set(ad.campaign_id, [...(adsByCampaign.get(ad.campaign_id) || []), normalized]);
+              });
+              accountAds.set(item.id, adsByCampaign);
               adRows.forEach((ad) => {
                 const landingPage = landingPageFromCreative(ad.creative);
                 if (ad.campaign_id && landingPage && !campaignLandingPages.has(ad.campaign_id))
@@ -7939,6 +8072,7 @@ function localApi(
                   landingPageStatus: campaignLandingPages.has(campaign.id) ? "ACTIVE" : "UNKNOWN",
                   landingPageUrl: campaignLandingPages.get(campaign.id) || null,
                   geography: accountGeographies.get(account.id)?.get(campaign.id) || [],
+                  ads: accountAds.get(account.id)?.get(campaign.id) || [],
                 };
               }),
             );
@@ -8346,13 +8480,28 @@ function localApi(
   };
 }
 
-export default defineConfig(({ mode, command }) => {
+export default defineConfig(async ({ mode, command }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const isBuild = command === "build";
+  const firebaseConfig = firebaseBackendConfig(env);
+  if (!isBuild && firebaseConfig.enabled) {
+    const [datasets, attachments] = await Promise.all([
+      hydrateDataDirectory(firebaseConfig),
+      hydrateAttachments(firebaseConfig),
+    ]);
+    console.info(`[Firebase] ${datasets.length} datasets e ${attachments.length} anexos carregados.`);
+  }
+  const configureFirebaseMirror = (server: ViteDevServer | PreviewServer) => {
+    const watcher = startFirebaseMirror(firebaseConfig);
+    server.httpServer?.once("close", () => void watcher.close());
+  };
   // Build-time placeholders keep credentials out of the image. The real values
   // are injected by Azure when `vite preview` starts the application.
   const masterEmail = env.PW_OS_MASTER_EMAIL || (isBuild ? "build@invalid.local" : "");
   const masterPassword = env.PW_OS_MASTER_INITIAL_PASSWORD || (isBuild ? "build-only-placeholder" : "");
+  const sessionSecret = env.SESSION_SECRET || createHash("sha256")
+    .update(`pw-os-session:${masterPassword}`)
+    .digest("hex");
   // A imagem é compilada sem segredos. Eles são fornecidos ao `vite preview`
   // somente quando o contêiner inicia no Azure.
   if (!isBuild && (!masterEmail || !masterPassword))
@@ -8379,7 +8528,13 @@ export default defineConfig(({ mode, command }) => {
         env.AZURE_EMAIL_FROM || "",
         env.AZURE_EMAIL_FROM_NAME || "PW OS",
         env.APP_BASE_URL || "",
+        sessionSecret,
       ),
+      {
+        name: "pw-os-firebase-persistence",
+        configureServer: configureFirebaseMirror,
+        configurePreviewServer: configureFirebaseMirror,
+      },
       VitePWA({
         registerType: "autoUpdate",
         manifest: {

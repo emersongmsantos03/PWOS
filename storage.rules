@@ -1,0 +1,10 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Attachments are streamed through the authenticated PW OS API.
+    match /{object=**} {
+      allow read, write: if false;
+    }
+  }
+}

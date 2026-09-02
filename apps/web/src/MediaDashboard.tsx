@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent } from "react";
 import { createPortal } from "react-dom";
 import {
   Activity,
@@ -85,6 +85,31 @@ type Campaign = {
   optimizationHistory?: Array<{ value: string; capturedAt: string }>;
   verificationHistory?: Array<{ action: "ANALYSIS" | "REVIEW" | "REPORT_DOWNLOADED" | "REPORT_SENT"; createdAt: string; userId: string; userName: string; score?: number; spend?: number; leads?: number; cpl?: number | null; periodDays?: number; recipientCount?: number }>;
   geography?: Array<{ name: string; level: "REGION" | "CITY" | "NEIGHBORHOOD"; leads: number; clicks: number; spend: number; source?: "PERFORMANCE" | "TARGETING" }>;
+  ads?: CampaignAd[];
+};
+type CampaignCreative = {
+  id?: string;
+  name?: string;
+  type: "IMAGE" | "VIDEO" | "TEXT" | "LINK" | "UNKNOWN";
+  url?: string | null;
+  thumbnailUrl?: string | null;
+  text?: string | null;
+};
+type CampaignAd = {
+  id: string;
+  name: string;
+  status: string;
+  groupName?: string | null;
+  format?: string | null;
+  landingPageUrl?: string | null;
+  previewUrl?: string | null;
+  headline?: string | null;
+  body?: string | null;
+  spend?: number;
+  impressions?: number;
+  clicks?: number;
+  results?: number;
+  creatives: CampaignCreative[];
 };
 type Account = {
   platform?: "META_ADS" | "GOOGLE_ADS";
@@ -402,6 +427,69 @@ function CampaignClientCode({
 }
 
 const META_PORTFOLIO = "__META_PORTFOLIO__";
+function CampaignAds({ campaign }: { campaign: Campaign }) {
+  const ads = campaign.ads || [];
+  if (!ads.length)
+    return (
+      <div className="campaign-assets-empty">
+        <Eye />
+        <div>
+          <b>Anúncios ainda não sincronizados</b>
+          <span>Atualize os dados da plataforma para carregar anúncios e criativos desta campanha.</span>
+        </div>
+      </div>
+    );
+  return (
+    <section className="campaign-assets-panel">
+      <header>
+        <div><b>Anúncios e criativos</b><span>{ads.length} anúncio(s) nesta campanha</span></div>
+      </header>
+      <div className="campaign-ad-grid">
+        {ads.map((ad) => (
+          <article className="campaign-ad-card" key={ad.id}>
+            <div className="campaign-ad-preview">
+              {ad.creatives.find((creative) => creative.thumbnailUrl || (creative.type === "IMAGE" && creative.url)) ? (
+                <img
+                  src={ad.creatives.find((creative) => creative.thumbnailUrl || (creative.type === "IMAGE" && creative.url))?.thumbnailUrl || ad.creatives.find((creative) => creative.type === "IMAGE" && creative.url)?.url || ""}
+                  alt={`Criativo de ${ad.name}`}
+                  loading="lazy"
+                />
+              ) : <Megaphone />}
+              <span>{ad.format || "ANÚNCIO"}</span>
+            </div>
+            <div className="campaign-ad-content">
+              <div className="campaign-ad-title"><b>{ad.name}</b><i className={`campaign-state ${ad.status.toLowerCase()}`}>{statusLabel[ad.status] || ad.status}</i></div>
+              {ad.groupName && <small>{ad.groupName}</small>}
+              {ad.headline && <h4>{ad.headline}</h4>}
+              {ad.body && <p>{ad.body}</p>}
+              <div className="campaign-ad-metrics">
+                <span><small>Investimento</small><b>{money(ad.spend || 0, campaign.currency)}</b></span>
+                <span><small>Impressões</small><b>{number(ad.impressions || 0)}</b></span>
+                <span><small>Cliques</small><b>{number(ad.clicks || 0)}</b></span>
+                <span><small>Resultados</small><b>{number(ad.results || 0)}</b></span>
+              </div>
+              {!!ad.creatives.length && (
+                <div className="campaign-creative-list">
+                  {ad.creatives.map((creative, index) => (
+                    <span key={`${creative.id || creative.type}-${index}`} title={creative.text || creative.name || creative.type}>
+                      {creative.type}{creative.name ? ` · ${creative.name}` : ""}
+                    </span>
+                  ))}
+                </div>
+              )}
+              {(ad.previewUrl || ad.landingPageUrl) && (
+                <footer>
+                  {ad.previewUrl && <a href={ad.previewUrl} target="_blank" rel="noreferrer"><Eye /> Visualizar</a>}
+                  {ad.landingPageUrl && <a href={ad.landingPageUrl} target="_blank" rel="noreferrer"><ExternalLink /> Destino</a>}
+                </footer>
+              )}
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
 function ClientCampaignGroup({
   group,
   initialOpen,
@@ -412,6 +500,8 @@ function ClientCampaignGroup({
   showPlatform,
   canManage,
   periodDays,
+  onAnalyze,
+  onVerify,
 }: {
   group: ClientGroup;
   initialOpen: boolean;
@@ -421,6 +511,8 @@ function ClientCampaignGroup({
   showPlatform: boolean;
   canManage: boolean;
   periodDays: number;
+  onAnalyze: (campaign: Campaign) => void;
+  onVerify: (campaign: Campaign) => Promise<void>;
   onAssign: (
     platform: "META_ADS" | "GOOGLE_ADS",
     accountIds: string[],
@@ -430,6 +522,7 @@ function ClientCampaignGroup({
   ) => Promise<void>;
 }) {
   const [open, setOpen] = useState(initialOpen);
+  const [openCampaignId, setOpenCampaignId] = useState("");
   const [linkOpen, setLinkOpen] = useState(false);
   const [clientId, setClientId] = useState(
       group.assignment?.identitySource === "META_PORTFOLIO"
@@ -441,7 +534,8 @@ function ClientCampaignGroup({
     ),
     [saving, setSaving] = useState(false),
     [saved, setSaved] = useState(false),
-    [linkError, setLinkError] = useState("");
+    [linkError, setLinkError] = useState(""),
+    [verifyingId, setVerifyingId] = useState("");
   const selectedClient = clients.find((item) => item.id === clientId),
     selectedResponsible = users.find((item) => item.id === responsibleId),
     linkedClientId = selectedClient?.id || group.client?.id || "",
@@ -452,6 +546,7 @@ function ClientCampaignGroup({
           ? "Nome do portfólio indisponível"
           : portfolioName
         : selectedClient?.name || group.client?.name || portfolioName;
+  const groupPlatforms = [...new Set(group.campaigns.map((campaign) => campaign.platform || "META_ADS"))];
   const cpl = group.totals.leads
     ? group.totals.spend / group.totals.leads
     : null;
@@ -678,13 +773,13 @@ function ClientCampaignGroup({
                         : clientId
                           ? "CLIENT"
                           : "UNLINKED";
-                    await onAssign(
-                      platform,
-                      group.accounts.map((account) => account.id),
+                    await Promise.all(groupPlatforms.map((source) => onAssign(
+                      source,
+                      [...new Set(group.campaigns.filter((campaign) => (campaign.platform || "META_ADS") === source).map((campaign) => campaign.accountId))],
                       clientId === META_PORTFOLIO ? "" : clientId,
                       responsibleId,
                       identitySource,
-                    );
+                    )));
                     setSaved(true);
                     setLinkOpen(false);
                   } catch (cause) {
@@ -721,7 +816,7 @@ function ClientCampaignGroup({
           <section className="client-account-overview">
             <article>
               <span className="account-overview-icon"><WalletCards /></span>
-              <div><small>Contas conectadas</small><b>{group.accounts.length}</b><em>{platform === "META_ADS" ? "Meta Ads" : "Google Ads"}</em></div>
+              <div><small>Contas conectadas</small><b>{group.accounts.length}</b><em>{groupPlatforms.length > 1 ? "Meta Ads + Google Ads" : groupPlatforms[0] === "META_ADS" ? "Meta Ads" : "Google Ads"}</em></div>
             </article>
             <article>
               <span className="account-overview-icon"><Megaphone /></span>
@@ -791,21 +886,30 @@ function ClientCampaignGroup({
                   <th>Cliques</th>
                   <th>Landing page</th>
                   <th>Score da campanha</th>
+                  <th>Revisão e análise</th>
                 </tr>
               </thead>
               <tbody>
                 {group.campaigns.map((item) => (
+                  <Fragment key={item.id}>
                   <tr
-                    key={item.id}
                     className={`${hasDelivery(item) ? "" : "no-delivery"} performance-row ${scoreTone(campaignScore(item))}`}
                   >
                     <td>
                       <b>{item.name}</b>
                       <small>
                         {hasDelivery(item)
-                          ? `Campanha ${item.id}`
+                          ? `${item.platform === "GOOGLE_ADS" ? "Google Ads" : "Meta Ads"} · Campanha ${item.id}`
                           : "Sem veiculação no período"}
                       </small>
+                      <button
+                        type="button"
+                        className="campaign-assets-trigger"
+                        aria-expanded={openCampaignId === item.id}
+                        onClick={() => setOpenCampaignId((current) => current === item.id ? "" : item.id)}
+                      >
+                        <Eye /> {openCampaignId === item.id ? "Fechar anúncios" : `Ver anúncios e criativos (${item.ads?.length || 0})`}
+                      </button>
                     </td>
                     <td>
                       <span
@@ -879,9 +983,39 @@ function ClientCampaignGroup({
                         score={campaignScore(item)}
                         label="Campanha"
                         compact
+                        campaign={item}
                       />
                     </td>
+                    <td>
+                      <div className="portfolio-campaign-actions">
+                        <button type="button" className="campaign-analyze" onClick={() => onAnalyze(item)}><BarChart3 /> Analisar</button>
+                        {verificationDue(item) ? (
+                          <button
+                            type="button"
+                            className="campaign-mark-analyzed"
+                            disabled={verifyingId === item.id}
+                            onClick={async () => {
+                              setVerifyingId(item.id);
+                              try { await onVerify(item); } finally { setVerifyingId(""); }
+                            }}
+                          >
+                            {verifyingId === item.id ? <RefreshCw className="spin" /> : <CheckCircle2 />}
+                            {verifyingId === item.id ? "Salvando…" : "Marcar analisada"}
+                          </button>
+                        ) : (
+                          <span className="campaign-analyzed-state"><CheckCircle2 /> Analisada <small>fica pendente novamente em 7 dias</small></span>
+                        )}
+                      </div>
+                    </td>
                   </tr>
+                  {openCampaignId === item.id && (
+                    <tr className="campaign-assets-row">
+                      <td colSpan={13}>
+                        <CampaignAds campaign={item} />
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
@@ -1090,8 +1224,17 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
   const urlParams = new URLSearchParams(window.location.search);
   const reportClientFromUrl = urlParams.get("reportClient") || "";
   const contextClientFromUrl = urlParams.get("client") || "";
-  const [platform, setPlatform] = useState<MediaView>(section === "REPORTS" || section === "HISTORY" || reportClientFromUrl || contextClientFromUrl ? "ALL" : savedMediaContext().platform || "ALL");
+  const [platform, setPlatform] = useState<MediaView>(() => {
+    if (section === "CLIENTS" || section === "COMPILED" || section === "REPORTS" || section === "HISTORY") return "ALL";
+    const savedPlatform = savedMediaContext().platform;
+    return savedPlatform === "GOOGLE_ADS" ? "GOOGLE_ADS" : "META_ADS";
+  });
   const mediaMode = section;
+  const [managementView, setManagementView] = useState<"PORTFOLIOS" | "CAMPAIGNS">(
+    urlParams.get("campaign") || window.location.pathname.endsWith("/campanhas")
+      ? "CAMPAIGNS"
+      : "PORTFOLIOS",
+  );
   const [reportClientSelection, setReportClientSelection] = useState(reportClientFromUrl);
   const [reportIncludeThirtyDays, setReportIncludeThirtyDays] = useState(false);
   const [reportWindows, setReportWindows] = useState<{ primary: { since: string; until: string }; thirty?: { since: string; until: string } } | null>(null);
@@ -1464,9 +1607,12 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
     filtered.forEach((item) => {
       const account = accountsById.get(item.accountId),
         source = item.platform || account?.platform || "META_ADS",
-        key = account?.businessPortfolioId
-          ? `${source}:portfolio:${account.businessPortfolioId}`
-          : `${source}:account:${item.accountId}`;
+        assignment = assignments.find((value) => value.platform === source && value.accountId === item.accountId),
+        key = assignment?.clientId
+          ? `client:${assignment.clientId}`
+          : account?.businessPortfolioId
+            ? `unlinked:${source}:portfolio:${account.businessPortfolioId}`
+            : `unlinked:${source}:account:${item.accountId}`;
       byPortfolio.set(key, [...(byPortfolio.get(key) || []), item]);
     });
     return [...byPortfolio]
@@ -1492,9 +1638,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
           groupPlatform =
             campaigns[0]?.platform || account.platform || "META_ADS";
         const assignment = assignments.find(
-          (item) =>
-            item.platform === groupPlatform &&
-            accountIds.includes(item.accountId),
+          (item) => campaigns.some((campaign) => campaign.accountId === item.accountId && (campaign.platform || "META_ADS") === item.platform),
         );
         const assignedClient = clients.find(
             (item) => item.id === assignment?.clientId,
@@ -1518,7 +1662,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
         };
       })
       .sort((a, b) => b.totals.spend - a.totals.spend);
-  }, [filtered, data, clients, users, assignments, platform]);
+  }, [filtered, data, clients, users, assignments]);
   const statuses = [
     ...new Set((data?.campaigns || []).map((item) => item.status)),
   ];
@@ -1597,6 +1741,25 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
   }).filter((item) => item.issue).sort((a, b) => (a.status === "WITH_ISSUES" ? 0 : a.score < 70 ? 1 : 2) - (b.status === "WITH_ISSUES" ? 0 : b.score < 70 ? 1 : 2));
   const previousToday = previousFiltered.map((item) => { const score = campaignScore(item), balance = item.remainingBudget == null ? null : Math.max(0, item.remainingBudget), due = campaignAnalysisDue(item); return { critical: due && (item.status === "WITH_ISSUES" || score < 70), lowBalance: due && item.status === "ACTIVE" && item.dailyBudget > 0 && balance != null && balance <= item.dailyBudget * 2, pending: due }; });
   const recordTodayAnalysis = (item: Campaign) => fetch("/api/media/campaigns/verification", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ platform: item.platform, accountId: item.accountId, campaignId: item.id, action: "ANALYSIS", score: campaignScore(item), spend: item.spend, leads: item.leads, cpl: item.cpl }) });
+  const openCampaignAnalysis = (campaign: Campaign) => {
+    const params = new URLSearchParams(window.location.search);
+    params.set("campaign", `${campaign.platform || "META_ADS"}:${campaign.accountId}:${campaign.id}`);
+    window.history.replaceState({}, "", `${window.location.pathname}?${params}`);
+    setManagementView("CAMPAIGNS");
+  };
+  const markCampaignAnalyzed = async (campaign: Campaign) => {
+    const response = await fetch("/api/media/campaigns/verification", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ platform: campaign.platform, accountId: campaign.accountId, campaignId: campaign.id, verified: true, action: "REVIEW", score: campaignScore(campaign), spend: campaign.spend, leads: campaign.leads, cpl: campaign.cpl }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.message || "Não foi possível concluir a análise.");
+    campaign.verified = true;
+    campaign.verifiedAt = result.verifiedAt || new Date().toISOString();
+    campaign.verificationHistory = result.history || campaign.verificationHistory;
+    setData((current) => current ? { ...current, campaigns: [...current.campaigns] } : current);
+  };
   const todayTotalPages = Math.max(1, Math.ceil(todayRows.length / 20)), todaySafePage = Math.min(todayPage, todayTotalPages), todayVisible = todayRows.slice((todaySafePage - 1) * 20, todaySafePage * 20);
   const accountsTotalPages = Math.max(1, Math.ceil(groups.length / 20)), accountsSafePage = Math.min(accountsPage, accountsTotalPages), visibleGroups = groups.slice((accountsSafePage - 1) * 20, accountsSafePage * 20);
   return (
@@ -1620,7 +1783,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
                 ? "GOOGLE ADS"
                 : "TODAS AS MÍDIAS"}
           </span>
-          <h1>{section === "TODAY" ? "O que precisa de atenção hoje" : section === "REPORTS" ? "Relatórios de campanhas" : section === "HISTORY" ? "Histórico de relatórios" : section === "COMPILED" ? "Visão geral de performance" : section === "CAMPAIGNS" ? "Campanhas em acompanhamento" : "Contas e vínculos"}</h1>
+          <h1>{section === "TODAY" ? "O que precisa de atenção hoje" : section === "REPORTS" ? "Relatórios de campanhas" : section === "HISTORY" ? "Histórico de relatórios" : section === "COMPILED" ? "Comparação de performance" : "Gestão de mídia"}</h1>
           <p>
             {section === "REPORTS" ? "Organize frequências, gere os PDFs e acompanhe cada envio aos clientes." : section === "HISTORY" ? "Consulte versões, responsáveis, canais e confirmações de cada relatório enviado." : "Visão organizada da conta do cliente até cada campanha e seus resultados oficiais."}
           </p>
@@ -1701,27 +1864,10 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
         {(contextClient !== "ALL" || contextResponsible !== "ALL") && <button className="media-context-clear" onClick={() => { setContextClient("ALL"); setContextResponsible("ALL"); }}>Limpar filtros</button>}
         <div className="media-filter-chips">{contextClient !== "ALL" && <button onClick={() => setContextClient("ALL")}>{clients.find((item) => item.id === contextClient)?.name || "Cliente"}<X/></button>}{contextResponsible !== "ALL" && <button onClick={() => setContextResponsible("ALL")}>{users.find((item) => item.id === contextResponsible)?.name || "Responsável"}<X/></button>}</div>
       </section>}
-      {section !== "REPORTS" && section !== "HISTORY" && <nav
+      {section === "CAMPAIGNS" && <nav
         className="traffic-platform-switch"
         aria-label="Plataforma de anúncios"
       >
-        <button
-          className={platform === "ALL" ? "active all" : ""}
-          onClick={() => selectPlatform("ALL")}
-        >
-          <span className="all-ads-symbol">
-            <b>∞</b>
-            <b>G</b>
-          </span>
-          <span>
-            <b>Todos</b>
-            <small>
-              {platform === "ALL"
-                ? `${data?.accounts.length || 0} contas conectadas`
-                : "Meta Ads + Google Ads"}
-            </small>
-          </span>
-        </button>
         <button
           className={platform === "META_ADS" ? "active meta" : ""}
           onClick={() => selectPlatform("META_ADS")}
@@ -1850,8 +1996,8 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
         {mediaMode === "TODAY" ? (
           <section className="media-today">
             <div className="media-today-summary"><article className="critical"><AlertTriangle/><span><b>{todayRows.filter((item) => item.status === "WITH_ISSUES" || item.score < 70).length}</b><small>Críticos</small><em>{previousToday.filter((item) => item.critical).length} no período anterior</em></span></article><article><WalletCards/><span><b>{todayRows.filter((item) => item.issue.includes("Saldo")).length}</b><small>Saldo baixo</small><em>{previousToday.filter((item) => item.lowBalance).length} anteriormente</em></span></article><article><Clock3/><span><b>{todayRows.filter((item) => item.issue.includes("pendente")).length}</b><small>Análises pendentes</small><em>{previousToday.filter((item) => item.pending).length} anteriormente</em></span></article><article><CheckCircle2/><span><b>{Math.max(0, allCampaigns.length - todayRows.length)}</b><small>Sem alerta</small><em>{Math.max(0, previousFiltered.length - previousToday.filter((item) => item.critical || item.lowBalance || item.pending).length)} anteriormente</em></span></article></div>
-            <header><div><span>FILA PRIORIZADA</span><h2>Decisões recomendadas</h2><p>Problemas críticos aparecem primeiro. Abra a campanha sem perder seus filtros.</p></div><NavLink to="/midia/campanhas">Ver todas as campanhas</NavLink></header>
-            <div className="media-today-list">{todayVisible.map((item) => <article key={`${item.platform}:${item.accountId}:${item.id}`}><i className={item.status === "WITH_ISSUES" || item.score < 70 ? "critical" : "warning"}><AlertTriangle/></i><span><b>{item.name}</b><small>{item.group?.client?.name || accountLabel(item.group?.account || { id:item.accountId, name:item.client, currency:item.currency, amountSpent:0, spendCap:0 })} · {item.platform === "META_ADS" ? "Meta Ads" : "Google Ads"}</small></span><strong>{item.issue}</strong><em>{item.spend ? `${money(item.spend, item.currency)} investidos · ${number(item.leads)} conversões` : "Sem investimento no período"}</em><NavLink onClick={() => void recordTodayAnalysis(item)} to={`/midia/campanhas?campaign=${encodeURIComponent(`${item.platform}:${item.accountId}:${item.id}`)}`}>Analisar</NavLink></article>)}{!todayRows.length && <div className="media-today-empty"><CheckCircle2/><b>Operação saudável</b><span>Nenhuma prioridade crítica nos filtros atuais.</span></div>}</div>
+            <header><div><span>FILA PRIORIZADA</span><h2>Decisões recomendadas</h2><p>Problemas críticos aparecem primeiro. Abra a campanha sem perder seus filtros.</p></div><NavLink to="/midia/gestao">Ver todas as campanhas</NavLink></header>
+            <div className="media-today-list">{todayVisible.map((item) => <article key={`${item.platform}:${item.accountId}:${item.id}`}><i className={item.status === "WITH_ISSUES" || item.score < 70 ? "critical" : "warning"}><AlertTriangle/></i><span><b>{item.name}</b><small>{item.group?.client?.name || accountLabel(item.group?.account || { id:item.accountId, name:item.client, currency:item.currency, amountSpent:0, spendCap:0 })} · {item.platform === "META_ADS" ? "Meta Ads" : "Google Ads"}</small></span><strong>{item.issue}</strong><em>{item.spend ? `${money(item.spend, item.currency)} investidos · ${number(item.leads)} conversões` : "Sem investimento no período"}</em><NavLink onClick={() => void recordTodayAnalysis(item)} to={`/midia/gestao?campaign=${encodeURIComponent(`${item.platform}:${item.accountId}:${item.id}`)}`}>Analisar</NavLink></article>)}{!todayRows.length && <div className="media-today-empty"><CheckCircle2/><b>Operação saudável</b><span>Nenhuma prioridade crítica nos filtros atuais.</span></div>}</div>
             {!!todayRows.length && <footer className="media-list-pagination"><span>Exibindo {(todaySafePage - 1) * 20 + 1}–{Math.min(todaySafePage * 20, todayRows.length)} de <b>{todayRows.length}</b></span><nav><button disabled={todaySafePage === 1} onClick={() => setTodayPage((value) => Math.max(1, value - 1))}>Anterior</button><em>Página {todaySafePage} de {todayTotalPages}</em><button disabled={todaySafePage === todayTotalPages} onClick={() => setTodayPage((value) => Math.min(todayTotalPages, value + 1))}>Próxima</button></nav></footer>}
           </section>
         ) : mediaMode === "REPORTS" || mediaMode === "HISTORY" ? (
@@ -1870,7 +2016,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
             onSinceChange={setSince}
             onUntilChange={setUntil}
           />
-        ) : mediaMode === "CAMPAIGNS" ? (
+        ) : mediaMode === "CAMPAIGNS" || (mediaMode === "CLIENTS" && managementView === "CAMPAIGNS") ? (
           <CampaignReport
             campaigns={allCampaigns}
             groups={groups}
@@ -1881,13 +2027,19 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
             until={until}
             allPlatforms={platform === "ALL"}
             onClientReportSelected={() => setPlatform("ALL")}
+            onAnalysisClosed={mediaMode === "CLIENTS" ? () => {
+              const params = new URLSearchParams(window.location.search);
+              params.delete("campaign");
+              window.history.replaceState({}, "", `${window.location.pathname}${params.size ? `?${params}` : ""}`);
+              setManagementView("PORTFOLIOS");
+            } : undefined}
           />
         ) : (
           <>
             <section className="traffic-toolbar">
               <div>
-                <h2>Clientes e campanhas</h2>
-                <p>Clique em um cliente para consultar suas campanhas.</p>
+                <h2>Clientes e portfólios</h2>
+                <p>Selecione um cliente para consultar suas contas, campanhas, anúncios e criativos.</p>
               </div>
               <div className="traffic-filters">
                 <label className="traffic-search">
@@ -1955,9 +2107,11 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
                     users={users}
                     onAssign={saveAssignment}
                     platform={group.platform}
-                    showPlatform={platform === "ALL"}
+                    showPlatform={false}
                     canManage={canManageAssignments}
                     periodDays={periodDays}
+                    onAnalyze={openCampaignAnalysis}
+                    onVerify={markCampaignAnalyzed}
                   />
                 ))}
               </section>
@@ -2078,6 +2232,44 @@ function campaignScore(item: Campaign) {
   );
 }
 
+function campaignScoreBreakdown(item: Campaign) {
+  if (!hasDelivery(item)) return {
+    score: -1,
+    summary: "Sem entrega suficiente para calcular o score.",
+    factors: [] as Array<{ label: string; value: string; points: number; max: number; tone: "good" | "warning" | "bad" }>,
+    strengths: [] as string[],
+    improvements: ["Ative ou revise a veiculação para gerar dados avaliáveis."],
+  };
+  const ctr = item.impressions ? (item.clicks / item.impressions) * 100 : 0,
+    conversionRate = item.clicks ? (item.leads / item.clicks) * 100 : 0,
+    budgetUse = item.dailyBudget ? item.spend / (item.dailyBudget * 7) : 1,
+    ctrPoints = Math.min(25, ctr * 5),
+    conversionPoints = Math.min(30, conversionRate * 4),
+    budgetPoints = Math.max(0, 15 - Math.abs(1 - budgetUse) * 15),
+    statusPoints = item.status === "ACTIVE" ? 0 : -12,
+    score = campaignScore(item),
+    factors = [
+      { label: "CTR", value: `${number(ctr, 2)}%`, points: ctrPoints, max: 25, tone: ctr >= 2 ? "good" as const : ctr >= 1 ? "warning" as const : "bad" as const },
+      { label: "Conversão clique → lead", value: `${number(conversionRate, 2)}%`, points: conversionPoints, max: 30, tone: conversionRate >= 5 ? "good" as const : conversionRate >= 2 ? "warning" as const : "bad" as const },
+      { label: "Ritmo do orçamento (7 dias)", value: `${number(budgetUse * 100, 0)}%`, points: budgetPoints, max: 15, tone: budgetUse >= .7 && budgetUse <= 1.3 ? "good" as const : budgetUse >= .4 && budgetUse <= 1.6 ? "warning" as const : "bad" as const },
+      { label: "Status da campanha", value: statusLabel[item.status] || item.status, points: statusPoints, max: 0, tone: item.status === "ACTIVE" ? "good" as const : "bad" as const },
+    ],
+    strengths = [] as string[], improvements = [] as string[];
+  if (ctr >= 2) strengths.push(`CTR de ${number(ctr, 2)}% gera tráfego com boa aderência.`);
+  else improvements.push("Melhorar criativo, mensagem ou público para elevar o CTR.");
+  if (conversionRate >= 5) strengths.push(`Conversão de ${number(conversionRate, 2)}% aproveita bem os cliques.`);
+  else improvements.push("Revisar oferta, formulário e landing page para converter mais cliques.");
+  if (budgetUse >= .7 && budgetUse <= 1.3) strengths.push("O investimento está próximo do ritmo planejado.");
+  else improvements.push(budgetUse < .7 ? "Investigar baixa entrega e ampliar o uso do orçamento disponível." : "Rever orçamento ou segmentação para controlar o ritmo de gasto.");
+  if (item.status === "ACTIVE") strengths.push("A campanha está ativa, sem penalidade operacional.");
+  else improvements.push("Regularizar o status da campanha; a inatividade retira 12 pontos.");
+  return {
+    score,
+    summary: `A nota parte de 30 pontos e soma CTR (+${Math.round(ctrPoints)}), conversão (+${Math.round(conversionPoints)}) e ritmo do orçamento (+${Math.round(budgetPoints)})${statusPoints ? `, com ${statusPoints} pelo status` : ""}.`,
+    factors, strengths, improvements,
+  };
+}
+
 type CompiledCampaign = Campaign & { groupName: string };
 const comparisonChange = (current: number, previous: number) =>
   previous ? ((current - previous) / previous) * 100 : current ? 100 : 0;
@@ -2147,8 +2339,13 @@ function CompiledReport({ campaigns, groups, platform, since, until, onSinceChan
     [page, setPage] = useState(1),
     [pageSize, setPageSize] = useState<20 | 40 | 60 | 80 | 100>(20),
     [loadingComparison, setLoadingComparison] = useState(false),
-    [comparisonError, setComparisonError] = useState("");
-  useEffect(() => { setPage(1); }, [search, platform, since, until, previousSince, previousUntil, pageSize]);
+    [comparisonError, setComparisonError] = useState(""),
+    [selectedPortfolio, setSelectedPortfolio] = useState("");
+  useEffect(() => {
+    if (!groups.length) return;
+    if (!groups.some((group) => group.key === selectedPortfolio)) setSelectedPortfolio(groups[0].key);
+  }, [groups, selectedPortfolio]);
+  useEffect(() => { setPage(1); }, [search, platform, selectedPortfolio, since, until, previousSince, previousUntil, pageSize]);
   useEffect(() => {
     let cancelled = false;
     const loadComparison = async () => {
@@ -2170,8 +2367,11 @@ function CompiledReport({ campaigns, groups, platform, since, until, onSinceChan
     void loadComparison();
     return () => { cancelled = true; };
   }, [platform, previousSince, previousUntil]);
-  const previousById = new Map(previousCampaigns.map((item) => [`${item.platform}:${item.accountId}:${item.id}`, item])),
-    rows = campaigns.filter((item) => `${item.groupName} ${item.name}`.toLowerCase().includes(search.toLowerCase())),
+  const selectedGroup = groups.find((group) => group.key === selectedPortfolio),
+    selectedAccountIds = new Set(selectedGroup?.accounts.map((account) => account.id) || []),
+    selectedPortfolioName = selectedGroup ? selectedGroup.client?.name || accountLabel(selectedGroup.account) : "Selecione um cliente/portfólio",
+    previousById = new Map(previousCampaigns.map((item) => [`${item.platform}:${item.accountId}:${item.id}`, item])),
+    rows = campaigns.filter((item) => selectedAccountIds.has(item.accountId) && `${item.groupName} ${item.name}`.toLowerCase().includes(search.toLowerCase())),
     aggregate = (items: Campaign[]) => items.reduce((sum, item) => ({ spend: sum.spend + item.spend, impressions: sum.impressions + item.impressions, clicks: sum.clicks + item.clicks, leads: sum.leads + item.leads }), { spend: 0, impressions: 0, clicks: 0, leads: 0 }),
     currentTotal = aggregate(rows),
     matchedPrevious = rows.map((item) => previousById.get(`${item.platform}:${item.accountId}:${item.id}`)).filter(Boolean) as Campaign[],
@@ -2182,7 +2382,28 @@ function CompiledReport({ campaigns, groups, platform, since, until, onSinceChan
     safePage = Math.min(page, totalPages),
     paginatedRows = rows.slice((safePage - 1) * pageSize, safePage * pageSize);
   return <section className="compiled-report">
-    <header className="compiled-heading"><div><small>COMPILADO</small><h2>Comparação de performance</h2><p>Compare campanhas e identifique mudanças relevantes sem ruído.</p></div><span>{rows.length} campanhas</span></header>
+    <header className="compiled-heading"><div><small>COMPARAÇÃO POR CLIENTE / PORTFÓLIO</small><h2>{selectedPortfolioName}</h2><p>Compare os períodos das campanhas pertencentes a este cliente/portfólio.</p></div><span>{rows.length} campanhas</span></header>
+    <section className="compiled-client-picker">
+      <header><div><small>CLIENTES E PORTFÓLIOS</small><h3>Escolha quem você quer comparar</h3></div><span>{groups.length} cliente(s) / portfólio(s)</span></header>
+      <div>
+        {groups.map((group) => {
+          const accountIds = new Set(group.accounts.map((account) => account.id)),
+            portfolioCampaigns = campaigns.filter((campaign) => accountIds.has(campaign.accountId)),
+            portfolioSpend = portfolioCampaigns.reduce((sum, campaign) => sum + campaign.spend, 0),
+            portfolioLeads = portfolioCampaigns.reduce((sum, campaign) => sum + campaign.leads, 0),
+            name = group.client?.name || accountLabel(group.account);
+          return (
+            <button type="button" className={selectedPortfolio === group.key ? "active" : ""} onClick={() => setSelectedPortfolio(group.key)} key={group.key}>
+              <ClientAvatar name={name} picture={group.account.profilePictureUrl} />
+              <span className="compiled-client-identity"><b>{name}</b><small>{group.accounts.length} conta(s) · {portfolioCampaigns.length} campanha(s)</small><em>{group.responsible?.name ? `Responsável: ${group.responsible.name}` : "Responsável não atribuído"}</em></span>
+              <span className="compiled-client-stat"><small>Investimento</small><b>{money(portfolioSpend, group.account.currency)}</b></span>
+              <span className="compiled-client-stat"><small>Conversões</small><b>{number(portfolioLeads)}</b></span>
+              <span className="compiled-client-open">{selectedPortfolio === group.key ? <CheckCircle2 /> : <ChevronDown />}</span>
+            </button>
+          );
+        })}
+      </div>
+    </section>
     <section className="compiled-periods">
       <div><small>PERÍODO ATUAL</small><label><CalendarDays /><input type="date" value={since} max={until} onChange={(event) => onSinceChange(event.target.value)} /><span>até</span><input type="date" value={until} min={since} onChange={(event) => onUntilChange(event.target.value)} /></label></div>
       <i>versus</i>
@@ -2199,7 +2420,7 @@ function CompiledReport({ campaigns, groups, platform, since, until, onSinceChan
       campaigns={rows}
       since={since}
       until={until}
-      context="Visão geral consolidada"
+      context={`Comparação · ${selectedPortfolioName}`}
       scope="OVERVIEW"
       overview={{
         campaignCount: rows.length,
@@ -2217,7 +2438,7 @@ function CompiledReport({ campaigns, groups, platform, since, until, onSinceChan
         previousCtr: previousTotal.impressions ? previousTotal.clicks / previousTotal.impressions * 100 : 0,
       }}
     />
-    <div className="compiled-toolbar"><label><Search /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar cliente ou campanha…" /></label><span>{loadingComparison ? <><RefreshCw className="spin" /> Comparando…</> : "Valores anteriores entre parênteses"}</span></div>
+    <div className="compiled-toolbar"><label><Search /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar campanha deste portfólio…" /></label><span>{loadingComparison ? <><RefreshCw className="spin" /> Comparando…</> : "Valores anteriores entre parênteses"}</span></div>
     <div className="compiled-table"><table><thead><tr><th>Cliente / campanha</th><th>Plataforma</th><th>Cliques</th><th>Impressões</th><th>Conversões</th><th>Investimento</th><th>CPL</th><th>CTR</th></tr></thead><tbody>{paginatedRows.map((item) => {
       const previous = previousById.get(`${item.platform}:${item.accountId}:${item.id}`),
         currentCtr = item.impressions ? (item.clicks / item.impressions) * 100 : 0,
@@ -2247,6 +2468,7 @@ function CampaignReport({
   includeThirtyDaySummary = false,
   automaticPreview = null,
   onAutomaticPreviewDone,
+  onAnalysisClosed,
 }: {
   campaigns: Array<Campaign & { groupName: string }>;
   groups: ClientGroup[];
@@ -2262,6 +2484,7 @@ function CampaignReport({
   includeThirtyDaySummary?: boolean;
   automaticPreview?: { id: number; clientId: string; target: Window } | null;
   onAutomaticPreviewDone?: () => void;
+  onAnalysisClosed?: () => void;
 }) {
   const tableRef = useRef<HTMLDivElement>(null);
   const [previousCampaigns, setPreviousCampaigns] = useState<Campaign[]>([]);
@@ -2378,7 +2601,7 @@ function CampaignReport({
       }),
       { spend: 0, impressions: 0, clicks: 0, leads: 0, budget: 0 },
     );
-  const selected = rows.find((item) => `${item.platform}:${item.accountId}:${item.id}` === selectedId) || null;
+  const selected = enrichedCampaigns.find((item) => `${item.platform}:${item.accountId}:${item.id}` === selectedId) || null;
   const currentKeys = new Set(rows.map((item) => `${item.platform}:${item.accountId}:${item.id}`)), previousRows = previousCampaigns.filter((item) => currentKeys.has(`${item.platform}:${item.accountId}:${item.id}`)),
     previousTotal = previousRows.reduce((sum, item) => ({ spend: sum.spend + item.spend, leads: sum.leads + item.leads }), { spend: 0, leads: 0 }),
     percentChange = mediaPercentChange;
@@ -2693,7 +2916,7 @@ function CampaignReport({
                     {item.cpl === null ? <PerformanceValue value="—" tone="neutral" /> : <PerformanceValue value={money(item.cpl, item.currency)} tone={!total.leads ? "neutral" : item.cpl <= (total.spend / total.leads) * .85 ? "good" : item.cpl <= (total.spend / total.leads) * 1.2 ? "warning" : "bad"} detail="CPL comparado à média das campanhas exibidas" />}
                   </td>
                   <td>
-                    <ScoreGauge score={item.score} label="Campanha" compact />
+                    <ScoreGauge score={item.score} label="Campanha" compact campaign={item} />
                   </td>
                   <td><span className={`campaign-review-state ${verificationDue(item) ? "pending" : "current"}`}>{verificationDue(item) ? <Clock3 /> : <CheckCircle2 />}<span><b>{verificationDue(item) ? "Pendente" : "Em dia"}</b><small>{verificationDue(item) ? item.verifiedAt ? "Revisar novamente" : "Nunca revisada" : `até ${new Date(new Date(item.verifiedAt!).getTime() + 7 * 86400000).toLocaleDateString("pt-BR")}`}</small></span></span></td>
                   <td><div className="campaign-row-actions"><button type="button" className="campaign-analyze" onClick={() => analyzeCampaign(item, campaignKey)}><BarChart3 /> Analisar</button>{verificationDue(item) && <button type="button" className={`campaign-review ${item.score >= 0 && item.score < 70 ? "urgent" : ""}`} title="Abrir a campanha e realizar a revisão pendente" onClick={() => analyzeCampaign(item, campaignKey)}><CheckCircle2 /><span>Verificar</span></button>}</div></td>
@@ -2768,7 +2991,7 @@ function CampaignReport({
           )}
         </article>
       </section>}
-      {selected && <CampaignAnalysisDrawer campaign={selected} periodDays={periodDays} onClose={() => setSelectedId(null)} onVerified={(history, verifiedAt) => {
+      {selected && <CampaignAnalysisDrawer campaign={selected} periodDays={periodDays} onClose={() => { setSelectedId(null); onAnalysisClosed?.(); }} onVerified={(history, verifiedAt) => {
         const source = campaigns.find((item) => item.id === selected.id && item.accountId === selected.accountId && item.platform === selected.platform);
         if (source) Object.assign(source, { verified: true, verifiedAt, verificationHistory: history });
         setVerificationRevision((value) => value + 1);
@@ -2854,6 +3077,7 @@ function CampaignAnalysisDrawer({ campaign, periodDays, onClose, onVerified }: {
     showGeography = campaign.platform === "GOOGLE_ADS" || rawGeography.some((item) => (item.level === "CITY" || item.level === "NEIGHBORHOOD") && item.leads > 0),
     opportunitySpend = campaign.score >= 90 ? 0 : campaign.spend * Math.max(.05, (90 - Math.max(0, campaign.score)) / 100),
     opportunityLeads = campaign.cpl && campaign.cpl > 0 ? Math.round(opportunitySpend / campaign.cpl) : 0;
+  const scoreDetails = campaignScoreBreakdown(campaign);
   const exportPdf = async () => {
     if (!campaignIsActive) { setReportNotice("Relatórios só podem ser gerados para campanhas ativas."); return; }
     if (reportAction) return;
@@ -2964,7 +3188,7 @@ function CampaignAnalysisDrawer({ campaign, periodDays, onClose, onVerified }: {
       campaign.verifiedAt = result.verifiedAt;
       campaign.verificationHistory = result.history || campaign.verificationHistory;
       onVerified(result.history || [], result.verifiedAt);
-      setReportNotice("Revisão concluída. A campanha saiu da fila Hoje pelos próximos 7 dias.");
+      setReportNotice("Revisão concluída. A campanha ficará analisada pelos próximos 7 dias.");
     } catch (error) { setReportNotice(error instanceof DOMException && error.name === "AbortError" ? "A confirmação demorou mais que o esperado. Atualize a página para confirmar o resultado antes de tentar novamente." : "Falha de conexão ao concluir a revisão. Tente novamente."); }
     finally { window.clearTimeout(timeout); setVerifying(false); }
   };
@@ -2972,7 +3196,7 @@ function CampaignAnalysisDrawer({ campaign, periodDays, onClose, onVerified }: {
     <aside className="campaign-analysis" role="dialog" aria-modal="true" aria-label={`Análise da campanha ${campaign.name}`}>
       <header>
         <div><span>ANÁLISE DA CAMPANHA</span><h2>{campaign.name}</h2><p>{campaign.groupName} · {objectiveLabel(campaign.objective)} · Responsável: {campaign.responsible}</p></div>
-        <ScoreGauge score={campaign.score} label="Score da campanha" />
+        <ScoreGauge score={campaign.score} label="Score da campanha" campaign={campaign} />
         <span className={`campaign-analysis-review-state ${verificationDue(campaign) ? "pending" : "current"}`}>{verificationDue(campaign) ? <Clock3 /> : <CheckCircle2 />}<span><b>{verificationDue(campaign) ? "Revisão pendente" : "Revisão em dia"}</b><small>{campaign.verifiedAt ? `Última em ${new Date(campaign.verifiedAt).toLocaleDateString("pt-BR")}` : "Ainda não verificada"}</small></span></span>
         <button type="button" onClick={onClose} aria-label="Fechar análise"><X /></button>
       </header>
@@ -2988,6 +3212,24 @@ function CampaignAnalysisDrawer({ campaign, periodDays, onClose, onVerified }: {
           <ReportMetric label="Conversões" value={number(campaign.leads)} tone={scoreTone(campaign.score)} />
           <ReportMetric label="CPL" value={campaign.cpl == null ? "—" : money(campaign.cpl, campaign.currency)} tone={campaign.cpl == null ? "neutral" : scoreTone(campaign.score)} />
         </section>
+        {analysisView === "ANALYSIS" && (
+          <section className={`campaign-score-explanation ${scoreTone(campaign.score)}`}>
+            <header>
+              <div><small>COMO A NOTA FOI CALCULADA</small><h3>Por que o score é {campaign.score}</h3><p>{scoreDetails.summary}</p></div>
+              <strong>{campaign.score}<small>/100</small></strong>
+            </header>
+            <div className="campaign-score-factors">
+              <article><small>BASE</small><b>+30</b><span>Pontuação inicial com entrega</span></article>
+              {scoreDetails.factors.map((factor) => (
+                <article className={factor.tone} key={factor.label}><small>{factor.label}</small><b>{factor.points >= 0 ? "+" : ""}{Math.round(factor.points)}</b><span>{factor.value}{factor.max ? ` · máximo ${factor.max}` : ""}</span></article>
+              ))}
+            </div>
+            <div className="campaign-score-guidance">
+              <article className="strengths"><h4><CheckCircle2 /> Por que está bom</h4>{scoreDetails.strengths.length ? scoreDetails.strengths.map((reason) => <p key={reason}>{reason}</p>) : <p>Nenhum fator atingiu ainda a faixa saudável.</p>}</article>
+              <article className="improvements"><h4><TrendingUp /> Como melhorar</h4>{scoreDetails.improvements.length ? scoreDetails.improvements.map((reason) => <p key={reason}>{reason}</p>) : <p>Mantenha a configuração e teste expansão de forma controlada.</p>}</article>
+            </div>
+          </section>
+        )}
         <section className="campaign-visual-summary">
           <article style={{"--progress":`${Math.min(100,Math.max(0,campaign.score))}%`} as CSSProperties}><div><span><b>{campaign.score >= 0 ? campaign.score : "—"}</b><small>/100</small></span></div><h3>Saúde da campanha</h3><p>{campaign.score >= 90 ? "Operação saudável" : campaign.score >= 70 ? "Requer acompanhamento" : "Ação prioritária"}</p></article>
           <article style={{"--progress":`${Math.min(100,budgetUse)}%`} as CSSProperties}><div><span><b>{number(budgetUse,0)}%</b></span></div><h3>Uso do orçamento</h3><p>{campaign.balanceAvailable ? `${money(campaign.balance,campaign.currency)} de saldo restante` : "Saldo não informado pela plataforma"}</p></article>
@@ -3043,15 +3285,18 @@ function ScoreGauge({
   score,
   label,
   compact = false,
+  campaign,
 }: {
   score: number;
   label: string;
   compact?: boolean;
+  campaign?: Campaign;
 }) {
   const tone =
     score < 0 ? "empty" : score >= 90 ? "good" : score >= 70 ? "warn" : "bad";
+  const explanation = campaign ? campaignScoreBreakdown(campaign) : null;
   return (
-    <div className={`score-gauge score-${tone} ${compact ? "compact" : ""}`}>
+    <div className={`score-gauge score-${tone} ${compact ? "compact" : ""}`} title={explanation?.summary}>
       <small>{label}</small>
       <div className="score-gauge-number">
         <b>{score >= 0 ? score : "—"}</b>

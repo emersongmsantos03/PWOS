@@ -32,6 +32,8 @@ properties:
             secretRef: integration-key
           - name: APP_BASE_URL
             value: https://REPLACE_WITH_HOSTNAME
+          - name: PW_OS_REQUIRE_DATA
+            value: "true"
           - name: AZURE_EMAIL_SMTP_HOST
             value: smtp.azurecomm.net
           - name: AZURE_EMAIL_SMTP_USERNAME

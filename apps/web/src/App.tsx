@@ -324,10 +324,8 @@ function Shell({
                 <item.icon />{item.label}<ChevronDown className="sidebar-media-chevron" />
               </button>
               <div className="sidebar-media-submenu">
-                <NavLink to="/midia/hoje" onClick={() => setMenu(false)}>Hoje</NavLink>
-                <NavLink to="/midia/compilado" onClick={() => setMenu(false)}>Visão geral</NavLink>
-                <NavLink to="/midia/campanhas" onClick={() => setMenu(false)}>Campanhas</NavLink>
-                <NavLink to="/midia/gestao" onClick={() => setMenu(false)}>Contas e vínculos</NavLink>
+                <NavLink to="/midia/compilado" onClick={() => setMenu(false)}>Comparação</NavLink>
+                <NavLink to="/midia/gestao" onClick={() => setMenu(false)}>Gestão de mídia</NavLink>
                 <NavLink to="/midia/relatorios" onClick={() => setMenu(false)}>Relatórios</NavLink>
                 <NavLink to="/midia/historico" onClick={() => setMenu(false)}>Histórico</NavLink>
               </div>
@@ -656,10 +654,10 @@ function Shell({
             }
           />
           <Route path="/financeiro" element={can("finance.view")?<FinancialManagement />:<Navigate to={firstAccessiblePath} replace />} />
-          <Route path="/midia" element={can("media.view")?<Navigate to="/midia/hoje" replace />:<Navigate to={firstAccessiblePath} replace />} />
-          <Route path="/midia/hoje" element={can("media.view")?<MediaDashboard section="TODAY" />:<Navigate to={firstAccessiblePath} replace />} />
+          <Route path="/midia" element={can("media.view")?<Navigate to="/midia/gestao" replace />:<Navigate to={firstAccessiblePath} replace />} />
+          <Route path="/midia/hoje" element={can("media.view")?<Navigate to="/midia/gestao" replace />:<Navigate to={firstAccessiblePath} replace />} />
           <Route path="/midia/gestao" element={can("media.view")?<MediaDashboard section="CLIENTS" />:<Navigate to={firstAccessiblePath} replace />} />
-          <Route path="/midia/campanhas" element={can("media.view")?<MediaDashboard section="CAMPAIGNS" />:<Navigate to={firstAccessiblePath} replace />} />
+          <Route path="/midia/campanhas" element={can("media.view")?<MediaDashboard section="CLIENTS" />:<Navigate to={firstAccessiblePath} replace />} />
           <Route path="/midia/compilado" element={can("media.view")?<MediaDashboard section="COMPILED" />:<Navigate to={firstAccessiblePath} replace />} />
           <Route path="/midia/relatorios" element={can("media.view")?<MediaDashboard section="REPORTS" />:<Navigate to={firstAccessiblePath} replace />} />
           <Route path="/midia/historico" element={can("media.view")?<MediaDashboard section="HISTORY" />:<Navigate to={firstAccessiblePath} replace />} />
