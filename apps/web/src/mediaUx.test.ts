@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matchesMediaMetric, mediaPercentChange, mediaTrendCacheKey } from "./mediaUx";
+import { matchesMediaMetric, mediaObjectiveLabel, mediaPercentChange, mediaTrendCacheKey } from "./mediaUx";
 
 describe("media UX helpers", () => {
   it("filtra campanhas pela métrica selecionada", () => {
@@ -18,5 +18,14 @@ describe("media UX helpers", () => {
   it("isola o cache por período, granularidade e campanhas", () => {
     expect(mediaTrendCacheKey("WEEKLY", "2026-08-01", "2026-08-25", "meta:1"))
       .toBe("pw-os-media-trend:WEEKLY:2026-08-01:2026-08-25:meta:1");
+  });
+
+  it("traduz os objetivos da Meta e do Google para português", () => {
+    expect(mediaObjectiveLabel("OUTCOME_SALES")).toBe("Vendas");
+    expect(mediaObjectiveLabel("Traffic")).toBe("Tráfego");
+    expect(mediaObjectiveLabel("ENGAGEMENT")).toBe("Engajamento");
+    expect(mediaObjectiveLabel("PERFORMANCE_MAX")).toBe("Performance Máxima");
+    expect(mediaObjectiveLabel("SMART")).toBe("Pesquisa");
+    expect(mediaObjectiveLabel("")).toBe("Não informado");
   });
 });

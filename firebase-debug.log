@@ -1,0 +1,393 @@
+[debug] [2026-09-01T16:13:08.281Z] ----------------------------------------------------------------------
+[debug] [2026-09-01T16:13:08.287Z] Command:       /Users/emersonmoraes/.local/opt/node-v22.23.2-darwin-x64/bin/node /Users/emersonmoraes/Documents/PW OS/PW OS/node_modules/.bin/firebase projects:list --json
+[debug] [2026-09-01T16:13:08.288Z] CLI Version:   15.28.2
+[debug] [2026-09-01T16:13:08.288Z] Platform:      darwin
+[debug] [2026-09-01T16:13:08.289Z] Node Version:  v22.23.2
+[debug] [2026-09-01T16:13:08.289Z] Detected Agent: codex_cli
+[debug] [2026-09-01T16:13:08.289Z] Time:          Tue Sep 01 2026 13:13:08 GMT-0300 (Brasilia Standard Time)
+[debug] [2026-09-01T16:13:08.289Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2026-09-01T16:13:08.313Z] >>> [apiv2][query] GET https://firebase-public.firebaseio.com/cli.json [none]
+[debug] [2026-09-01T16:13:08.346Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-09-01T16:13:08.805Z] <<< [apiv2][status] GET https://firebase-public.firebaseio.com/cli.json 200
+[debug] [2026-09-01T16:13:08.805Z] <<< [apiv2][body] GET https://firebase-public.firebaseio.com/cli.json {"cloudBuildErrorAfter":1594252800000,"cloudBuildWarnAfter":1590019200000,"defaultNode10After":1594252800000,"minVersion":"3.0.5","node8DeploysDisabledAfter":1613390400000,"node8RuntimeDisabledAfter":1615809600000,"node8WarnAfter":1600128000000}
+[debug] [2026-09-01T16:13:11.363Z] Error: Could not load the default credentials. Browse to https://cloud.google.com/docs/authentication/getting-started for more information.
+    at GoogleAuth.getApplicationDefaultAsync (/Users/emersonmoraes/Documents/PW OS/PW OS/node_modules/firebase-tools/node_modules/google-auth-library/build/src/auth/googleauth.js:287:15)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+    at async GoogleAuth._GoogleAuth_determineClient (/Users/emersonmoraes/Documents/PW OS/PW OS/node_modules/firebase-tools/node_modules/google-auth-library/build/src/auth/googleauth.js:834:32)
+    at async GoogleAuth.getClient (/Users/emersonmoraes/Documents/PW OS/PW OS/node_modules/firebase-tools/node_modules/google-auth-library/build/src/auth/googleauth.js:698:20)
+    at async GoogleAuth.getAccessToken (/Users/emersonmoraes/Documents/PW OS/PW OS/node_modules/firebase-tools/node_modules/google-auth-library/build/src/auth/googleauth.js:722:24)
+    at async autoAuth (/Users/emersonmoraes/Documents/PW OS/PW OS/node_modules/firebase-tools/lib/requireAuth.js:38:19)
+    at async Object.requireAuth [as fn] (/Users/emersonmoraes/Documents/PW OS/PW OS/node_modules/firebase-tools/lib/requireAuth.js:100:20)
+    at async /Users/emersonmoraes/Documents/PW OS/PW OS/node_modules/firebase-tools/lib/command.js:278:17
+[error] 
+[error] Error: Failed to authenticate, have you run firebase login?
+[debug] [2026-09-01T16:13:19.870Z] ----------------------------------------------------------------------
+[debug] [2026-09-01T16:13:19.874Z] Command:       /Users/emersonmoraes/.local/opt/node-v22.23.2-darwin-x64/bin/node /Users/emersonmoraes/Documents/PW OS/PW OS/node_modules/.bin/firebase login --no-localhost
+[debug] [2026-09-01T16:13:19.875Z] CLI Version:   15.28.2
+[debug] [2026-09-01T16:13:19.875Z] Platform:      darwin
+[debug] [2026-09-01T16:13:19.876Z] Node Version:  v22.23.2
+[debug] [2026-09-01T16:13:19.876Z] Detected Agent: codex_cli
+[debug] [2026-09-01T16:13:19.876Z] Time:          Tue Sep 01 2026 13:13:19 GMT-0300 (Brasilia Standard Time)
+[debug] [2026-09-01T16:13:19.876Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2026-09-01T16:13:19.912Z] >>> [apiv2][query] POST https://auth.firebase.tools/attest [none]
+[debug] [2026-09-01T16:13:19.913Z] >>> [apiv2][body] POST https://auth.firebase.tools/attest {"session_id":"6ab791f7-15bb-490f-bb2a-99b9303820aa"}
+[debug] [2026-09-01T16:13:21.786Z] <<< [apiv2][status] POST https://auth.firebase.tools/attest 200
+[debug] [2026-09-01T16:30:56.336Z] ----------------------------------------------------------------------
+[debug] [2026-09-01T16:30:56.341Z] Command:       /Users/emersonmoraes/.local/opt/node-v22.23.2-darwin-x64/bin/node /Users/emersonmoraes/.local/bin/firebase login
+[debug] [2026-09-01T16:30:56.342Z] CLI Version:   15.28.2
+[debug] [2026-09-01T16:30:56.342Z] Platform:      darwin
+[debug] [2026-09-01T16:30:56.343Z] Node Version:  v22.23.2
+[debug] [2026-09-01T16:30:56.344Z] Detected Agent: codex_cli
+[debug] [2026-09-01T16:30:56.345Z] Time:          Tue Sep 01 2026 13:30:56 GMT-0300 (Brasilia Standard Time)
+[debug] [2026-09-01T16:30:56.346Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2026-09-01T16:30:56.730Z] >>> [apiv2][query] POST https://auth.firebase.tools/attest [none]
+[debug] [2026-09-01T16:30:56.730Z] >>> [apiv2][body] POST https://auth.firebase.tools/attest {"session_id":"3f9cb84c-7757-4560-957a-1f02738e25a0"}
+[debug] [2026-09-01T16:30:57.540Z] <<< [apiv2][status] POST https://auth.firebase.tools/attest 200
+[debug] [2026-09-01T16:32:11.434Z] ----------------------------------------------------------------------
+[debug] [2026-09-01T16:32:11.438Z] Command:       /Users/emersonmoraes/.local/opt/node-v22.23.2-darwin-x64/bin/node /Users/emersonmoraes/.local/bin/firebase login 4/0ATsMZqC8_drAMBP5y-752HtXDh3NFNyiFdvF1nF3_swNsCFuw9nWJqhRKeP3nmW1j3F2Ow
+[debug] [2026-09-01T16:32:11.440Z] CLI Version:   15.28.2
+[debug] [2026-09-01T16:32:11.444Z] Platform:      darwin
+[debug] [2026-09-01T16:32:11.444Z] Node Version:  v22.23.2
+[debug] [2026-09-01T16:32:11.446Z] Detected Agent: codex_cli
+[debug] [2026-09-01T16:32:11.447Z] Time:          Tue Sep 01 2026 13:32:11 GMT-0300 (Brasilia Standard Time)
+[debug] [2026-09-01T16:32:11.448Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2026-09-01T16:32:11.849Z] >>> [apiv2][query] POST https://accounts.google.com/o/oauth2/token [none]
+[debug] [2026-09-01T16:32:11.850Z] >>> [apiv2][body] POST https://accounts.google.com/o/oauth2/token [omitted]
+[debug] [2026-09-01T16:32:12.298Z] <<< [apiv2][status] POST https://accounts.google.com/o/oauth2/token 200
+[debug] [2026-09-01T16:32:23.244Z] ----------------------------------------------------------------------
+[debug] [2026-09-01T16:32:23.248Z] Command:       /Users/emersonmoraes/.local/opt/node-v22.23.2-darwin-x64/bin/node /Users/emersonmoraes/.local/bin/firebase projects:list --json
+[debug] [2026-09-01T16:32:23.249Z] CLI Version:   15.28.2
+[debug] [2026-09-01T16:32:23.249Z] Platform:      darwin
+[debug] [2026-09-01T16:32:23.249Z] Node Version:  v22.23.2
+[debug] [2026-09-01T16:32:23.249Z] Detected Agent: codex_cli
+[debug] [2026-09-01T16:32:23.250Z] Time:          Tue Sep 01 2026 13:32:23 GMT-0300 (Brasilia Standard Time)
+[debug] [2026-09-01T16:32:23.250Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2026-09-01T16:32:23.636Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-09-01T16:32:23.636Z] > authorizing via signed-in user (pwmidiasistema@gmail.com)
+[debug] [2026-09-01T16:32:23.654Z] Checked if tokens are valid: true, expires at: 1788283931298
+[debug] [2026-09-01T16:32:23.654Z] Checked if tokens are valid: true, expires at: 1788283931298
+[debug] [2026-09-01T16:32:23.656Z] >>> [apiv2][query] GET https://firebase.googleapis.com/v1beta1/projects pageSize=1000
+[debug] [2026-09-01T16:32:24.488Z] <<< [apiv2][status] GET https://firebase.googleapis.com/v1beta1/projects 200
+[debug] [2026-09-01T16:35:07.229Z] ----------------------------------------------------------------------
+[debug] [2026-09-01T16:35:07.234Z] Command:       /Users/emersonmoraes/.local/opt/node-v22.23.2-darwin-x64/bin/node /Users/emersonmoraes/.local/bin/firebase use pw-os-9ddce
+[debug] [2026-09-01T16:35:07.235Z] CLI Version:   15.28.2
+[debug] [2026-09-01T16:35:07.235Z] Platform:      darwin
+[debug] [2026-09-01T16:35:07.235Z] Node Version:  v22.23.2
+[debug] [2026-09-01T16:35:07.236Z] Detected Agent: codex_cli
+[debug] [2026-09-01T16:35:07.236Z] Time:          Tue Sep 01 2026 13:35:07 GMT-0300 (Brasilia Standard Time)
+[debug] [2026-09-01T16:35:07.236Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2026-09-01T16:35:07.595Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-09-01T16:35:07.595Z] > authorizing via signed-in user (pwmidiasistema@gmail.com)
+[debug] [2026-09-01T16:35:07.612Z] Checked if tokens are valid: true, expires at: 1788283931298
+[debug] [2026-09-01T16:35:07.613Z] Checked if tokens are valid: true, expires at: 1788283931298
+[debug] [2026-09-01T16:35:07.614Z] >>> [apiv2][query] GET https://serviceusage.googleapis.com/v1/projects/pw-os-9ddce/services/cloudresourcemanager.googleapis.com [none]
+[debug] [2026-09-01T16:35:07.615Z] >>> [apiv2][(partial)header] GET https://serviceusage.googleapis.com/v1/projects/pw-os-9ddce/services/cloudresourcemanager.googleapis.com  x-goog-user-project=pw-os-9ddce
+[debug] [2026-09-01T16:35:08.841Z] <<< [apiv2][status] GET https://serviceusage.googleapis.com/v1/projects/pw-os-9ddce/services/cloudresourcemanager.googleapis.com 200
+[debug] [2026-09-01T16:35:08.841Z] <<< [apiv2][body] GET https://serviceusage.googleapis.com/v1/projects/pw-os-9ddce/services/cloudresourcemanager.googleapis.com [omitted]
+[debug] [2026-09-01T16:35:08.851Z] Checked if tokens are valid: true, expires at: 1788283931298
+[debug] [2026-09-01T16:35:08.852Z] Checked if tokens are valid: true, expires at: 1788283931298
+[debug] [2026-09-01T16:35:08.852Z] >>> [apiv2][query] GET https://cloudresourcemanager.googleapis.com/v1/projects/pw-os-9ddce [none]
+[debug] [2026-09-01T16:35:09.749Z] <<< [apiv2][status] GET https://cloudresourcemanager.googleapis.com/v1/projects/pw-os-9ddce 200
+[debug] [2026-09-01T16:35:10.910Z] ----------------------------------------------------------------------
+[debug] [2026-09-01T16:35:10.916Z] Command:       /Users/emersonmoraes/.local/opt/node-v22.23.2-darwin-x64/bin/node /Users/emersonmoraes/.local/bin/firebase deploy --only firestore:rules,storage
+[debug] [2026-09-01T16:35:10.917Z] CLI Version:   15.28.2
+[debug] [2026-09-01T16:35:10.917Z] Platform:      darwin
+[debug] [2026-09-01T16:35:10.920Z] Node Version:  v22.23.2
+[debug] [2026-09-01T16:35:10.921Z] Detected Agent: codex_cli
+[debug] [2026-09-01T16:35:10.924Z] Time:          Tue Sep 01 2026 13:35:10 GMT-0300 (Brasilia Standard Time)
+[debug] [2026-09-01T16:35:10.924Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2026-09-01T16:35:13.336Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-09-01T16:35:13.337Z] > authorizing via signed-in user (pwmidiasistema@gmail.com)
+[debug] [2026-09-01T16:35:13.337Z] [iam] checking project pw-os-9ddce for permissions ["datastore.indexes.create","datastore.indexes.delete","datastore.indexes.list","datastore.indexes.update","firebase.projects.get","firebaserules.releases.create","firebaserules.releases.update","firebaserules.rulesets.create"]
+[debug] [2026-09-01T16:35:13.354Z] Checked if tokens are valid: true, expires at: 1788283931298
+[debug] [2026-09-01T16:35:13.355Z] Checked if tokens are valid: true, expires at: 1788283931298
+[debug] [2026-09-01T16:35:13.358Z] >>> [apiv2][query] POST https://cloudresourcemanager.googleapis.com/v1/projects/pw-os-9ddce:testIamPermissions [none]
+[debug] [2026-09-01T16:35:13.359Z] >>> [apiv2][(partial)header] POST https://cloudresourcemanager.googleapis.com/v1/projects/pw-os-9ddce:testIamPermissions  x-goog-user-project=pw-os-9ddce
+[debug] [2026-09-01T16:35:13.359Z] >>> [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/pw-os-9ddce:testIamPermissions {"permissions":["datastore.indexes.create","datastore.indexes.delete","datastore.indexes.list","datastore.indexes.update","firebase.projects.get","firebaserules.releases.create","firebaserules.releases.update","firebaserules.rulesets.create"]}
+[debug] [2026-09-01T16:35:14.293Z] <<< [apiv2][status] POST https://cloudresourcemanager.googleapis.com/v1/projects/pw-os-9ddce:testIamPermissions 200
+[debug] [2026-09-01T16:35:14.293Z] <<< [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/pw-os-9ddce:testIamPermissions {"permissions":["datastore.indexes.create","datastore.indexes.delete","datastore.indexes.list","datastore.indexes.update","firebase.projects.get","firebaserules.releases.create","firebaserules.releases.update","firebaserules.rulesets.create"]}
+[info] 
+[info] === Deploying to 'pw-os-9ddce'...
+[info] 
+[info] i  deploying storage, firestore 
+[info] i  storage: ensuring required API firebasestorage.googleapis.com is enabled... 
+[debug] [2026-09-01T16:35:14.296Z] Checked if tokens are valid: true, expires at: 1788283931298
+[debug] [2026-09-01T16:35:14.296Z] Checked if tokens are valid: true, expires at: 1788283931298
+[debug] [2026-09-01T16:35:14.296Z] >>> [apiv2][query] GET https://serviceusage.googleapis.com/v1/projects/pw-os-9ddce/services/firebasestorage.googleapis.com [none]
+[debug] [2026-09-01T16:35:14.296Z] >>> [apiv2][(partial)header] GET https://serviceusage.googleapis.com/v1/projects/pw-os-9ddce/services/firebasestorage.googleapis.com  x-goog-user-project=pw-os-9ddce
+[debug] [2026-09-01T16:35:15.377Z] <<< [apiv2][status] GET https://serviceusage.googleapis.com/v1/projects/pw-os-9ddce/services/firebasestorage.googleapis.com 200
+[debug] [2026-09-01T16:35:15.378Z] <<< [apiv2][body] GET https://serviceusage.googleapis.com/v1/projects/pw-os-9ddce/services/firebasestorage.googleapis.com [omitted]
+[warn] ⚠  storage: missing required API firebasestorage.googleapis.com. Enabling now... 
+[debug] [2026-09-01T16:35:15.378Z] Checked if tokens are valid: true, expires at: 1788283931298
+[debug] [2026-09-01T16:35:15.379Z] Checked if tokens are valid: true, expires at: 1788283931298
+[debug] [2026-09-01T16:35:15.379Z] >>> [apiv2][query] POST https://serviceusage.googleapis.com/v1/projects/pw-os-9ddce/services/firebasestorage.googleapis.com:enable [none]
+[debug] [2026-09-01T16:35:15.379Z] >>> [apiv2][(partial)header] POST https://serviceusage.googleapis.com/v1/projects/pw-os-9ddce/services/firebasestorage.googleapis.com:enable  x-goog-user-project=pw-os-9ddce
+[debug] [2026-09-01T16:35:17.013Z] <<< [apiv2][status] POST https://serviceusage.googleapis.com/v1/projects/pw-os-9ddce/services/firebasestorage.googleapis.com:enable 200
+[debug] [2026-09-01T16:35:17.013Z] <<< [apiv2][body] POST https://serviceusage.googleapis.com/v1/projects/pw-os-9ddce/services/firebasestorage.googleapis.com:enable [omitted]
+[debug] [2026-09-01T16:35:27.028Z] Checked if tokens are valid: true, expires at: 1788283931298
+[debug] [2026-09-01T16:35:27.028Z] Checked if tokens are valid: true, expires at: 1788283931298
+[debug] [2026-09-01T16:35:27.029Z] >>> [apiv2][query] GET https://firebasestorage.googleapis.com/v1alpha/projects/pw-os-9ddce/defaultBucket [none]
+[debug] [2026-09-01T16:35:28.279Z] <<< [apiv2][status] GET https://firebasestorage.googleapis.com/v1alpha/projects/pw-os-9ddce/defaultBucket 404
+[debug] [2026-09-01T16:35:28.279Z] <<< [apiv2][body] GET https://firebasestorage.googleapis.com/v1alpha/projects/pw-os-9ddce/defaultBucket {"error":{"code":404,"message":"Requested entity was not found.","status":"NOT_FOUND"}}
+[error] 
+[error] Error: Firebase Storage has not been set up on project 'pw-os-9ddce'. Go to https://console.firebase.google.com/project/pw-os-9ddce/storage and click 'Get Started' to set up Firebase Storage.
+[debug] [2026-09-01T16:35:35.095Z] ----------------------------------------------------------------------
+[debug] [2026-09-01T16:35:35.100Z] Command:       /Users/emersonmoraes/.local/opt/node-v22.23.2-darwin-x64/bin/node /Users/emersonmoraes/.local/bin/firebase deploy --only firestore:rules
+[debug] [2026-09-01T16:35:35.100Z] CLI Version:   15.28.2
+[debug] [2026-09-01T16:35:35.100Z] Platform:      darwin
+[debug] [2026-09-01T16:35:35.101Z] Node Version:  v22.23.2
+[debug] [2026-09-01T16:35:35.101Z] Detected Agent: codex_cli
+[debug] [2026-09-01T16:35:35.101Z] Time:          Tue Sep 01 2026 13:35:35 GMT-0300 (Brasilia Standard Time)
+[debug] [2026-09-01T16:35:35.102Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2026-09-01T16:35:37.091Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-09-01T16:35:37.091Z] > authorizing via signed-in user (pwmidiasistema@gmail.com)
+[debug] [2026-09-01T16:35:37.093Z] [iam] checking project pw-os-9ddce for permissions ["datastore.indexes.create","datastore.indexes.delete","datastore.indexes.list","datastore.indexes.update","firebase.projects.get"]
+[debug] [2026-09-01T16:35:37.112Z] Checked if tokens are valid: true, expires at: 1788283931298
+[debug] [2026-09-01T16:35:37.113Z] Checked if tokens are valid: true, expires at: 1788283931298
+[debug] [2026-09-01T16:35:37.116Z] >>> [apiv2][query] POST https://cloudresourcemanager.googleapis.com/v1/projects/pw-os-9ddce:testIamPermissions [none]
+[debug] [2026-09-01T16:35:37.119Z] >>> [apiv2][(partial)header] POST https://cloudresourcemanager.googleapis.com/v1/projects/pw-os-9ddce:testIamPermissions  x-goog-user-project=pw-os-9ddce
+[debug] [2026-09-01T16:35:37.119Z] >>> [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/pw-os-9ddce:testIamPermissions {"permissions":["datastore.indexes.create","datastore.indexes.delete","datastore.indexes.list","datastore.indexes.update","firebase.projects.get"]}
+[debug] [2026-09-01T16:35:38.041Z] <<< [apiv2][status] POST https://cloudresourcemanager.googleapis.com/v1/projects/pw-os-9ddce:testIamPermissions 200
+[debug] [2026-09-01T16:35:38.041Z] <<< [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/pw-os-9ddce:testIamPermissions {"permissions":["datastore.indexes.create","datastore.indexes.delete","datastore.indexes.list","datastore.indexes.update","firebase.projects.get"]}
+[info] 
+[info] === Deploying to 'pw-os-9ddce'...
+[info] 
+[info] i  deploying firestore 
+[info] i  firestore: ensuring required API firestore.googleapis.com is enabled... 
+[debug] [2026-09-01T16:35:38.044Z] Checked if tokens are valid: true, expires at: 1788283931298
+[debug] [2026-09-01T16:35:38.044Z] Checked if tokens are valid: true, expires at: 1788283931298
+[debug] [2026-09-01T16:35:38.044Z] >>> [apiv2][query] GET https://serviceusage.googleapis.com/v1/projects/pw-os-9ddce/services/firestore.googleapis.com [none]
+[debug] [2026-09-01T16:35:38.044Z] >>> [apiv2][(partial)header] GET https://serviceusage.googleapis.com/v1/projects/pw-os-9ddce/services/firestore.googleapis.com  x-goog-user-project=pw-os-9ddce
+[debug] [2026-09-01T16:35:39.137Z] <<< [apiv2][status] GET https://serviceusage.googleapis.com/v1/projects/pw-os-9ddce/services/firestore.googleapis.com 200
+[debug] [2026-09-01T16:35:39.137Z] <<< [apiv2][body] GET https://serviceusage.googleapis.com/v1/projects/pw-os-9ddce/services/firestore.googleapis.com [omitted]
+[warn] ⚠  firestore: missing required API firestore.googleapis.com. Enabling now... 
+[debug] [2026-09-01T16:35:39.138Z] Checked if tokens are valid: true, expires at: 1788283931298
+[debug] [2026-09-01T16:35:39.138Z] Checked if tokens are valid: true, expires at: 1788283931298
+[debug] [2026-09-01T16:35:39.140Z] >>> [apiv2][query] POST https://serviceusage.googleapis.com/v1/projects/pw-os-9ddce/services/firestore.googleapis.com:enable [none]
+[debug] [2026-09-01T16:35:39.141Z] >>> [apiv2][(partial)header] POST https://serviceusage.googleapis.com/v1/projects/pw-os-9ddce/services/firestore.googleapis.com:enable  x-goog-user-project=pw-os-9ddce
+[debug] [2026-09-01T16:35:40.773Z] <<< [apiv2][status] POST https://serviceusage.googleapis.com/v1/projects/pw-os-9ddce/services/firestore.googleapis.com:enable 200
+[debug] [2026-09-01T16:35:40.774Z] <<< [apiv2][body] POST https://serviceusage.googleapis.com/v1/projects/pw-os-9ddce/services/firestore.googleapis.com:enable [omitted]
+[info] i  firestore: ensuring required API firestore.googleapis.com is enabled... 
+[debug] [2026-09-01T16:35:50.786Z] Checked if tokens are valid: true, expires at: 1788283931298
+[debug] [2026-09-01T16:35:50.786Z] Checked if tokens are valid: true, expires at: 1788283931298
+[debug] [2026-09-01T16:35:50.787Z] >>> [apiv2][query] GET https://firestore.googleapis.com/v1/projects/pw-os-9ddce/databases/(default) [none]
+[debug] [2026-09-01T16:35:51.831Z] <<< [apiv2][status] GET https://firestore.googleapis.com/v1/projects/pw-os-9ddce/databases/(default) 404
+[debug] [2026-09-01T16:35:51.831Z] <<< [apiv2][body] GET https://firestore.googleapis.com/v1/projects/pw-os-9ddce/databases/(default) {"error":{"code":404,"message":"Project 'pw-os-9ddce' or database '(default)' does not exist.","status":"NOT_FOUND"}}
+[info] i  firestore: Creating the new Firestore database (default)... 
+[debug] [2026-09-01T16:35:51.833Z] Checked if tokens are valid: true, expires at: 1788283931298
+[debug] [2026-09-01T16:35:51.834Z] Checked if tokens are valid: true, expires at: 1788283931298
+[debug] [2026-09-01T16:35:51.836Z] >>> [apiv2][query] POST https://firestore.googleapis.com/v1/projects/pw-os-9ddce/databases databaseId=%28default%29
+[debug] [2026-09-01T16:35:51.836Z] >>> [apiv2][body] POST https://firestore.googleapis.com/v1/projects/pw-os-9ddce/databases {"locationId":"nam5","type":"FIRESTORE_NATIVE","databaseEdition":"STANDARD","deleteProtectionState":"DELETE_PROTECTION_DISABLED","pointInTimeRecoveryEnablement":"POINT_IN_TIME_RECOVERY_DISABLED"}
+[debug] [2026-09-01T16:35:52.649Z] <<< [apiv2][status] POST https://firestore.googleapis.com/v1/projects/pw-os-9ddce/databases 200
+[debug] [2026-09-01T16:35:52.649Z] <<< [apiv2][body] POST https://firestore.googleapis.com/v1/projects/pw-os-9ddce/databases {"name":"projects/pw-os-9ddce/databases/(default)/operations/NL070PM8WbpbRCG9kcfR1hAqNW1hbgQiBRACgpT96BAG1Nv96AgMCiga","metadata":{"@type":"type.googleapis.com/google.firestore.admin.v1.CreateDatabaseMetadata"},"done":true,"response":{"@type":"type.googleapis.com/google.firestore.admin.v1.Database","name":"projects/pw-os-9ddce/databases/(default)","uid":"d6d1c791-bd21-445b-ba59-3cf3d03bbd34","createTime":"2026-09-01T16:35:52.541409Z","updateTime":"2026-09-01T16:35:52.541409Z","locationId":"nam5","type":"FIRESTORE_NATIVE","concurrencyMode":"PESSIMISTIC","versionRetentionPeriod":"3600s","earliestVersionTime":"2026-09-01T16:35:52.541409Z","appEngineIntegrationMode":"DISABLED","keyPrefix":"s","pointInTimeRecoveryEnablement":"POINT_IN_TIME_RECOVERY_DISABLED","deleteProtectionState":"DELETE_PROTECTION_DISABLED","databaseEdition":"STANDARD","freeTier":true,"realtimeUpdatesMode":"REALTIME_UPDATES_MODE_ENABLED","enhancedTextSearchQueryMode":"ENHANCED_QUERY_MODE_ENABLED","etag":"IPbC4JjozZYDMOGZ35jozZYD"}}
+[debug] [2026-09-01T16:35:52.650Z] Checked if tokens are valid: true, expires at: 1788283931298
+[debug] [2026-09-01T16:35:52.651Z] Checked if tokens are valid: true, expires at: 1788283931298
+[debug] [2026-09-01T16:35:52.651Z] >>> [apiv2][query] GET https://firestore.googleapis.com/v1/projects/pw-os-9ddce/databases/(default)/operations/NL070PM8WbpbRCG9kcfR1hAqNW1hbgQiBRACgpT96BAG1Nv96AgMCiga [none]
+[debug] [2026-09-01T16:35:52.957Z] <<< [apiv2][status] GET https://firestore.googleapis.com/v1/projects/pw-os-9ddce/databases/(default)/operations/NL070PM8WbpbRCG9kcfR1hAqNW1hbgQiBRACgpT96BAG1Nv96AgMCiga 200
+[debug] [2026-09-01T16:35:52.957Z] <<< [apiv2][body] GET https://firestore.googleapis.com/v1/projects/pw-os-9ddce/databases/(default)/operations/NL070PM8WbpbRCG9kcfR1hAqNW1hbgQiBRACgpT96BAG1Nv96AgMCiga {"name":"projects/pw-os-9ddce/databases/(default)/operations/NL070PM8WbpbRCG9kcfR1hAqNW1hbgQiBRACgpT96BAG1Nv96AgMCiga","metadata":{"@type":"type.googleapis.com/google.firestore.admin.v1.CreateDatabaseMetadata"},"done":true,"response":{"@type":"type.googleapis.com/google.firestore.admin.v1.Database","name":"projects/pw-os-9ddce/databases/(default)","uid":"d6d1c791-bd21-445b-ba59-3cf3d03bbd34","createTime":"2026-09-01T16:35:52.541409Z","updateTime":"2026-09-01T16:35:52.541409Z","locationId":"nam5","type":"FIRESTORE_NATIVE","concurrencyMode":"PESSIMISTIC","versionRetentionPeriod":"3600s","earliestVersionTime":"2026-09-01T16:35:52.541409Z","appEngineIntegrationMode":"DISABLED","keyPrefix":"s","pointInTimeRecoveryEnablement":"POINT_IN_TIME_RECOVERY_DISABLED","deleteProtectionState":"DELETE_PROTECTION_DISABLED","databaseEdition":"STANDARD","freeTier":true,"realtimeUpdatesMode":"REALTIME_UPDATES_MODE_ENABLED","enhancedTextSearchQueryMode":"ENHANCED_QUERY_MODE_ENABLED","etag":"IIDb9JjozZYDMOGZ35jozZYD"}}
+[info] i  cloud.firestore: checking firestore.rules for compilation errors... 
+[debug] [2026-09-01T16:35:52.958Z] Checked if tokens are valid: true, expires at: 1788283931298
+[debug] [2026-09-01T16:35:52.958Z] Checked if tokens are valid: true, expires at: 1788283931298
+[debug] [2026-09-01T16:35:52.959Z] >>> [apiv2][query] POST https://firebaserules.googleapis.com/v1/projects/pw-os-9ddce:test [none]
+[debug] [2026-09-01T16:35:52.959Z] >>> [apiv2][body] POST https://firebaserules.googleapis.com/v1/projects/pw-os-9ddce:test [omitted]
+[debug] [2026-09-01T16:35:54.289Z] <<< [apiv2][status] POST https://firebaserules.googleapis.com/v1/projects/pw-os-9ddce:test 200
+[debug] [2026-09-01T16:35:54.289Z] <<< [apiv2][body] POST https://firebaserules.googleapis.com/v1/projects/pw-os-9ddce:test {}
+[info] ✔  cloud.firestore: rules file firestore.rules compiled successfully 
+[debug] [2026-09-01T16:35:54.291Z] Checked if tokens are valid: true, expires at: 1788283931298
+[debug] [2026-09-01T16:35:54.292Z] Checked if tokens are valid: true, expires at: 1788283931298
+[debug] [2026-09-01T16:35:54.292Z] >>> [apiv2][query] GET https://firebaserules.googleapis.com/v1/projects/pw-os-9ddce/releases pageSize=10&pageToken=
+[debug] [2026-09-01T16:35:55.414Z] <<< [apiv2][status] GET https://firebaserules.googleapis.com/v1/projects/pw-os-9ddce/releases 200
+[debug] [2026-09-01T16:35:55.414Z] <<< [apiv2][body] GET https://firebaserules.googleapis.com/v1/projects/pw-os-9ddce/releases {}
+[info] i  firestore: uploading rules firestore.rules... 
+[debug] [2026-09-01T16:35:55.414Z] Checked if tokens are valid: true, expires at: 1788283931298
+[debug] [2026-09-01T16:35:55.414Z] Checked if tokens are valid: true, expires at: 1788283931298
+[debug] [2026-09-01T16:35:55.415Z] >>> [apiv2][query] POST https://firebaserules.googleapis.com/v1/projects/pw-os-9ddce/rulesets [none]
+[debug] [2026-09-01T16:35:55.415Z] >>> [apiv2][body] POST https://firebaserules.googleapis.com/v1/projects/pw-os-9ddce/rulesets [omitted]
+[debug] [2026-09-01T16:35:56.049Z] <<< [apiv2][status] POST https://firebaserules.googleapis.com/v1/projects/pw-os-9ddce/rulesets 200
+[debug] [2026-09-01T16:35:56.050Z] <<< [apiv2][body] POST https://firebaserules.googleapis.com/v1/projects/pw-os-9ddce/rulesets {"name":"projects/pw-os-9ddce/rulesets/1cc2b9e0-fa7f-4d6d-8ce8-ae1b938c8a4f","source":{"files":[{"content":"rules_version = '2';\n\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    // PW OS accesses Firestore exclusively through its trusted backend.\n    // Firebase Admin uses IAM and does not rely on these client rules.\n    match /{document=**} {\n      allow read, write: if false;\n    }\n  }\n}\n","name":"firestore.rules"}]},"createTime":"2026-09-01T16:35:55.970122Z","metadata":{"services":["cloud.firestore"]}}
+[debug] [2026-09-01T16:35:56.050Z] [rules] created ruleset projects/pw-os-9ddce/rulesets/1cc2b9e0-fa7f-4d6d-8ce8-ae1b938c8a4f
+[debug] [2026-09-01T16:35:56.051Z] [rules] releasing cloud.firestore with ruleset projects/pw-os-9ddce/rulesets/1cc2b9e0-fa7f-4d6d-8ce8-ae1b938c8a4f
+[debug] [2026-09-01T16:35:56.051Z] Checked if tokens are valid: true, expires at: 1788283931298
+[debug] [2026-09-01T16:35:56.051Z] Checked if tokens are valid: true, expires at: 1788283931298
+[debug] [2026-09-01T16:35:56.052Z] >>> [apiv2][query] PATCH https://firebaserules.googleapis.com/v1/projects/pw-os-9ddce/releases/cloud.firestore [none]
+[debug] [2026-09-01T16:35:56.052Z] >>> [apiv2][body] PATCH https://firebaserules.googleapis.com/v1/projects/pw-os-9ddce/releases/cloud.firestore {"release":{"name":"projects/pw-os-9ddce/releases/cloud.firestore","rulesetName":"projects/pw-os-9ddce/rulesets/1cc2b9e0-fa7f-4d6d-8ce8-ae1b938c8a4f"}}
+[debug] [2026-09-01T16:35:57.258Z] <<< [apiv2][status] PATCH https://firebaserules.googleapis.com/v1/projects/pw-os-9ddce/releases/cloud.firestore 404
+[debug] [2026-09-01T16:35:57.258Z] <<< [apiv2][body] PATCH https://firebaserules.googleapis.com/v1/projects/pw-os-9ddce/releases/cloud.firestore {"error":{"code":404,"message":"Requested entity was not found.","status":"NOT_FOUND"}}
+[debug] [2026-09-01T16:35:57.258Z] [rules] ruleset update failed, attempting to create instead
+[debug] [2026-09-01T16:35:57.258Z] Checked if tokens are valid: true, expires at: 1788283931298
+[debug] [2026-09-01T16:35:57.258Z] Checked if tokens are valid: true, expires at: 1788283931298
+[debug] [2026-09-01T16:35:57.259Z] >>> [apiv2][query] POST https://firebaserules.googleapis.com/v1/projects/pw-os-9ddce/releases [none]
+[debug] [2026-09-01T16:35:57.259Z] >>> [apiv2][body] POST https://firebaserules.googleapis.com/v1/projects/pw-os-9ddce/releases {"name":"projects/pw-os-9ddce/releases/cloud.firestore","rulesetName":"projects/pw-os-9ddce/rulesets/1cc2b9e0-fa7f-4d6d-8ce8-ae1b938c8a4f"}
+[debug] [2026-09-01T16:35:58.693Z] <<< [apiv2][status] POST https://firebaserules.googleapis.com/v1/projects/pw-os-9ddce/releases 200
+[debug] [2026-09-01T16:43:02.790Z] ----------------------------------------------------------------------
+[debug] [2026-09-01T16:43:02.840Z] Command:       /Users/emersonmoraes/.local/opt/node-v22.23.2-darwin-x64/bin/node /Users/emersonmoraes/.local/bin/firebase deploy --only storage
+[debug] [2026-09-01T16:43:02.841Z] CLI Version:   15.28.2
+[debug] [2026-09-01T16:43:02.842Z] Platform:      darwin
+[debug] [2026-09-01T16:43:02.843Z] Node Version:  v22.23.2
+[debug] [2026-09-01T16:43:02.844Z] Detected Agent: codex_cli
+[debug] [2026-09-01T16:43:02.845Z] Time:          Tue Sep 01 2026 13:43:02 GMT-0300 (Brasilia Standard Time)
+[debug] [2026-09-01T16:43:02.848Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2026-09-01T16:43:05.327Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-09-01T16:43:05.331Z] > authorizing via signed-in user (pwmidiasistema@gmail.com)
+[debug] [2026-09-01T16:43:05.332Z] [iam] checking project pw-os-9ddce for permissions ["firebase.projects.get","firebaserules.releases.create","firebaserules.releases.update","firebaserules.rulesets.create"]
+[debug] [2026-09-01T16:43:05.361Z] Checked if tokens are valid: true, expires at: 1788283931298
+[debug] [2026-09-01T16:43:05.364Z] Checked if tokens are valid: true, expires at: 1788283931298
+[debug] [2026-09-01T16:43:05.367Z] >>> [apiv2][query] POST https://cloudresourcemanager.googleapis.com/v1/projects/pw-os-9ddce:testIamPermissions [none]
+[debug] [2026-09-01T16:43:05.368Z] >>> [apiv2][(partial)header] POST https://cloudresourcemanager.googleapis.com/v1/projects/pw-os-9ddce:testIamPermissions  x-goog-user-project=pw-os-9ddce
+[debug] [2026-09-01T16:43:05.370Z] >>> [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/pw-os-9ddce:testIamPermissions {"permissions":["firebase.projects.get","firebaserules.releases.create","firebaserules.releases.update","firebaserules.rulesets.create"]}
+[debug] [2026-09-01T16:43:06.331Z] <<< [apiv2][status] POST https://cloudresourcemanager.googleapis.com/v1/projects/pw-os-9ddce:testIamPermissions 200
+[debug] [2026-09-01T16:43:06.331Z] <<< [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/pw-os-9ddce:testIamPermissions {"permissions":["firebase.projects.get","firebaserules.releases.create","firebaserules.releases.update","firebaserules.rulesets.create"]}
+[info] 
+[info] === Deploying to 'pw-os-9ddce'...
+[info] 
+[info] i  deploying storage 
+[info] i  storage: ensuring required API firebasestorage.googleapis.com is enabled... 
+[debug] [2026-09-01T16:43:06.337Z] Checked if tokens are valid: true, expires at: 1788283931298
+[debug] [2026-09-01T16:43:06.338Z] Checked if tokens are valid: true, expires at: 1788283931298
+[debug] [2026-09-01T16:43:06.338Z] >>> [apiv2][query] GET https://firebasestorage.googleapis.com/v1alpha/projects/pw-os-9ddce/defaultBucket [none]
+[debug] [2026-09-01T16:43:07.644Z] <<< [apiv2][status] GET https://firebasestorage.googleapis.com/v1alpha/projects/pw-os-9ddce/defaultBucket 404
+[debug] [2026-09-01T16:43:07.644Z] <<< [apiv2][body] GET https://firebasestorage.googleapis.com/v1alpha/projects/pw-os-9ddce/defaultBucket {"error":{"code":404,"message":"Requested entity was not found.","status":"NOT_FOUND"}}
+[error] 
+[error] Error: Firebase Storage has not been set up on project 'pw-os-9ddce'. Go to https://console.firebase.google.com/project/pw-os-9ddce/storage and click 'Get Started' to set up Firebase Storage.
+[debug] [2026-09-02T14:42:21.762Z] ----------------------------------------------------------------------
+[debug] [2026-09-02T14:42:21.769Z] Command:       /Users/emersonmoraes/.local/opt/node-v22.23.2-darwin-x64/bin/node /Users/emersonmoraes/Documents/PW OS/PW OS/node_modules/.bin/firebase projects:list --json
+[debug] [2026-09-02T14:42:21.770Z] CLI Version:   15.28.2
+[debug] [2026-09-02T14:42:21.772Z] Platform:      darwin
+[debug] [2026-09-02T14:42:21.772Z] Node Version:  v22.23.2
+[debug] [2026-09-02T14:42:21.773Z] Detected Agent: codex_cli
+[debug] [2026-09-02T14:42:21.773Z] Time:          Wed Sep 02 2026 11:42:21 GMT-0300 (Brasilia Standard Time)
+[debug] [2026-09-02T14:42:21.773Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2026-09-02T14:42:23.449Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-09-02T14:42:23.450Z] > authorizing via signed-in user (pwmidiasistema@gmail.com)
+[debug] [2026-09-02T14:42:23.550Z] Checked if tokens are valid: false, expires at: 1788283931298
+[debug] [2026-09-02T14:42:23.550Z] Checked if tokens are valid: false, expires at: 1788283931298
+[debug] [2026-09-02T14:42:23.551Z] > refreshing access token with scopes: []
+[debug] [2026-09-02T14:42:23.561Z] >>> [apiv2][query] POST https://www.googleapis.com/oauth2/v3/token [none]
+[debug] [2026-09-02T14:42:23.561Z] >>> [apiv2][body] POST https://www.googleapis.com/oauth2/v3/token [omitted]
+[debug] [2026-09-02T14:42:24.156Z] <<< [apiv2][status] POST https://www.googleapis.com/oauth2/v3/token 200
+[debug] [2026-09-02T14:42:24.157Z] <<< [apiv2][body] POST https://www.googleapis.com/oauth2/v3/token [omitted]
+[debug] [2026-09-02T14:42:24.199Z] >>> [apiv2][query] GET https://firebase.googleapis.com/v1beta1/projects pageSize=1000
+[debug] [2026-09-02T14:42:25.018Z] <<< [apiv2][status] GET https://firebase.googleapis.com/v1beta1/projects 200
+[debug] [2026-09-02T14:43:00.503Z] ----------------------------------------------------------------------
+[debug] [2026-09-02T14:43:00.508Z] Command:       /Users/emersonmoraes/.local/opt/node-v22.23.2-darwin-x64/bin/node /Users/emersonmoraes/Documents/PW OS/PW OS/node_modules/.bin/firebase hosting:sites:list --project pw-os-9ddce --json
+[debug] [2026-09-02T14:43:00.508Z] CLI Version:   15.28.2
+[debug] [2026-09-02T14:43:00.509Z] Platform:      darwin
+[debug] [2026-09-02T14:43:00.509Z] Node Version:  v22.23.2
+[debug] [2026-09-02T14:43:00.510Z] Detected Agent: codex_cli
+[debug] [2026-09-02T14:43:00.510Z] Time:          Wed Sep 02 2026 11:43:00 GMT-0300 (Brasilia Standard Time)
+[debug] [2026-09-02T14:43:00.510Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2026-09-02T14:43:00.881Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-09-02T14:43:00.881Z] > authorizing via signed-in user (pwmidiasistema@gmail.com)
+[debug] [2026-09-02T14:43:00.882Z] [iam] checking project pw-os-9ddce for permissions ["firebase.projects.get","firebasehosting.sites.get"]
+[debug] [2026-09-02T14:43:00.897Z] Checked if tokens are valid: true, expires at: 1788363743159
+[debug] [2026-09-02T14:43:00.897Z] Checked if tokens are valid: true, expires at: 1788363743159
+[debug] [2026-09-02T14:43:00.899Z] >>> [apiv2][query] POST https://cloudresourcemanager.googleapis.com/v1/projects/pw-os-9ddce:testIamPermissions [none]
+[debug] [2026-09-02T14:43:00.899Z] >>> [apiv2][(partial)header] POST https://cloudresourcemanager.googleapis.com/v1/projects/pw-os-9ddce:testIamPermissions  x-goog-user-project=pw-os-9ddce
+[debug] [2026-09-02T14:43:00.899Z] >>> [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/pw-os-9ddce:testIamPermissions {"permissions":["firebase.projects.get","firebasehosting.sites.get"]}
+[debug] [2026-09-02T14:43:01.886Z] <<< [apiv2][status] POST https://cloudresourcemanager.googleapis.com/v1/projects/pw-os-9ddce:testIamPermissions 200
+[debug] [2026-09-02T14:43:01.887Z] <<< [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/pw-os-9ddce:testIamPermissions {"permissions":["firebase.projects.get","firebasehosting.sites.get"]}
+[debug] [2026-09-02T14:43:01.888Z] Checked if tokens are valid: true, expires at: 1788363743159
+[debug] [2026-09-02T14:43:01.888Z] Checked if tokens are valid: true, expires at: 1788363743159
+[debug] [2026-09-02T14:43:01.889Z] >>> [apiv2][query] GET https://firebasehosting.googleapis.com/v1beta1/projects/pw-os-9ddce/sites pageToken=&pageSize=10
+[debug] [2026-09-02T14:43:03.110Z] <<< [apiv2][status] GET https://firebasehosting.googleapis.com/v1beta1/projects/pw-os-9ddce/sites 200
+[debug] [2026-09-02T14:43:21.056Z] ----------------------------------------------------------------------
+[debug] [2026-09-02T14:43:21.060Z] Command:       /Users/emersonmoraes/.local/opt/node-v22.23.2-darwin-x64/bin/node /Users/emersonmoraes/Documents/PW OS/PW OS/node_modules/.bin/firebase apphosting:backends:list --project pw-os-9ddce --json
+[debug] [2026-09-02T14:43:21.060Z] CLI Version:   15.28.2
+[debug] [2026-09-02T14:43:21.061Z] Platform:      darwin
+[debug] [2026-09-02T14:43:21.061Z] Node Version:  v22.23.2
+[debug] [2026-09-02T14:43:21.061Z] Detected Agent: codex_cli
+[debug] [2026-09-02T14:43:21.061Z] Time:          Wed Sep 02 2026 11:43:21 GMT-0300 (Brasilia Standard Time)
+[debug] [2026-09-02T14:43:21.061Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2026-09-02T14:43:21.387Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-09-02T14:43:21.387Z] > authorizing via signed-in user (pwmidiasistema@gmail.com)
+[debug] [2026-09-02T14:43:21.404Z] Checked if tokens are valid: true, expires at: 1788363743159
+[debug] [2026-09-02T14:43:21.404Z] Checked if tokens are valid: true, expires at: 1788363743159
+[debug] [2026-09-02T14:43:21.406Z] >>> [apiv2][query] GET https://serviceusage.googleapis.com/v1/projects/pw-os-9ddce/services/firebaseapphosting.googleapis.com [none]
+[debug] [2026-09-02T14:43:21.406Z] >>> [apiv2][(partial)header] GET https://serviceusage.googleapis.com/v1/projects/pw-os-9ddce/services/firebaseapphosting.googleapis.com  x-goog-user-project=pw-os-9ddce
+[debug] [2026-09-02T14:43:22.762Z] <<< [apiv2][status] GET https://serviceusage.googleapis.com/v1/projects/pw-os-9ddce/services/firebaseapphosting.googleapis.com 200
+[debug] [2026-09-02T14:43:22.765Z] <<< [apiv2][body] GET https://serviceusage.googleapis.com/v1/projects/pw-os-9ddce/services/firebaseapphosting.googleapis.com [omitted]
+[debug] [2026-09-02T14:43:22.765Z] Checked if tokens are valid: true, expires at: 1788363743159
+[debug] [2026-09-02T14:43:22.766Z] Checked if tokens are valid: true, expires at: 1788363743159
+[debug] [2026-09-02T14:43:22.766Z] >>> [apiv2][query] POST https://serviceusage.googleapis.com/v1/projects/pw-os-9ddce/services/firebaseapphosting.googleapis.com:enable [none]
+[debug] [2026-09-02T14:43:22.766Z] >>> [apiv2][(partial)header] POST https://serviceusage.googleapis.com/v1/projects/pw-os-9ddce/services/firebaseapphosting.googleapis.com:enable  x-goog-user-project=pw-os-9ddce
+[debug] [2026-09-02T14:43:23.790Z] <<< [apiv2][status] POST https://serviceusage.googleapis.com/v1/projects/pw-os-9ddce/services/firebaseapphosting.googleapis.com:enable 400
+[debug] [2026-09-02T14:43:23.790Z] <<< [apiv2][body] POST https://serviceusage.googleapis.com/v1/projects/pw-os-9ddce/services/firebaseapphosting.googleapis.com:enable [omitted]
+[error] 
+[error] Error: Request to https://serviceusage.googleapis.com/v1/projects/pw-os-9ddce/services/firebaseapphosting.googleapis.com:enable had HTTP Error: 400, Billing account for project '196338731494' is not open. Billing must be enabled for activation of service(s) 'artifactregistry.googleapis.com,cloudbuild.googleapis.com,containerregistry.googleapis.com,run.googleapis.com,secretmanager.googleapis.com' to proceed.
+Help Token: AbluAGsBv2kG-J2pjkXp8sjOR0vzXWW1ms6bZAwLlP0BfYX5o4xYytmCo1cfh6kq8sq_mBVpRX62PURVm0NzyDPoJIfpZT84VYqQuZXDftMoTyUO
+[debug] [2026-09-02T14:43:23.802Z] Error Context: {
+  "body": {
+    "error": {
+      "code": 400,
+      "message": "Billing account for project '196338731494' is not open. Billing must be enabled for activation of service(s) 'artifactregistry.googleapis.com,cloudbuild.googleapis.com,containerregistry.googleapis.com,run.googleapis.com,secretmanager.googleapis.com' to proceed.\nHelp Token: AbluAGsBv2kG-J2pjkXp8sjOR0vzXWW1ms6bZAwLlP0BfYX5o4xYytmCo1cfh6kq8sq_mBVpRX62PURVm0NzyDPoJIfpZT84VYqQuZXDftMoTyUO",
+      "status": "FAILED_PRECONDITION",
+      "details": [
+        {
+          "@type": "type.googleapis.com/google.rpc.PreconditionFailure",
+          "violations": [
+            {
+              "type": "googleapis.com/billing-enabled",
+              "subject": "?error_code=390002&project=196338731494&services=artifactregistry.googleapis.com&services=cloudbuild.googleapis.com&services=containerregistry.googleapis.com&services=run.googleapis.com&services=secretmanager.googleapis.com"
+            }
+          ]
+        },
+        {
+          "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+          "reason": "UREQ_PROJECT_BILLING_NOT_OPEN",
+          "domain": "serviceusage.googleapis.com/billing-enabled",
+          "metadata": {
+            "project": "196338731494",
+            "services": "artifactregistry.googleapis.com,cloudbuild.googleapis.com,containerregistry.googleapis.com,run.googleapis.com,secretmanager.googleapis.com"
+          }
+        }
+      ]
+    }
+  },
+  "response": {
+    "statusCode": 400
+  }
+}
+[debug] [2026-09-02T14:43:26.798Z] ----------------------------------------------------------------------
+[debug] [2026-09-02T14:43:26.801Z] Command:       /Users/emersonmoraes/.local/opt/node-v22.23.2-darwin-x64/bin/node /Users/emersonmoraes/Documents/PW OS/PW OS/node_modules/.bin/firebase functions:list --project pw-os-9ddce --json
+[debug] [2026-09-02T14:43:26.802Z] CLI Version:   15.28.2
+[debug] [2026-09-02T14:43:26.802Z] Platform:      darwin
+[debug] [2026-09-02T14:43:26.802Z] Node Version:  v22.23.2
+[debug] [2026-09-02T14:43:26.803Z] Detected Agent: codex_cli
+[debug] [2026-09-02T14:43:26.803Z] Time:          Wed Sep 02 2026 11:43:26 GMT-0300 (Brasilia Standard Time)
+[debug] [2026-09-02T14:43:26.803Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2026-09-02T14:43:27.360Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-09-02T14:43:27.361Z] > authorizing via signed-in user (pwmidiasistema@gmail.com)
+[debug] [2026-09-02T14:43:27.361Z] [iam] checking project pw-os-9ddce for permissions ["cloudfunctions.functions.list","firebase.projects.get","run.services.list"]
+[debug] [2026-09-02T14:43:27.379Z] Checked if tokens are valid: true, expires at: 1788363743159
+[debug] [2026-09-02T14:43:27.379Z] Checked if tokens are valid: true, expires at: 1788363743159
+[debug] [2026-09-02T14:43:27.383Z] >>> [apiv2][query] POST https://cloudresourcemanager.googleapis.com/v1/projects/pw-os-9ddce:testIamPermissions [none]
+[debug] [2026-09-02T14:43:27.383Z] >>> [apiv2][(partial)header] POST https://cloudresourcemanager.googleapis.com/v1/projects/pw-os-9ddce:testIamPermissions  x-goog-user-project=pw-os-9ddce
+[debug] [2026-09-02T14:43:27.383Z] >>> [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/pw-os-9ddce:testIamPermissions {"permissions":["cloudfunctions.functions.list","firebase.projects.get","run.services.list"]}
+[debug] [2026-09-02T14:43:28.328Z] <<< [apiv2][status] POST https://cloudresourcemanager.googleapis.com/v1/projects/pw-os-9ddce:testIamPermissions 200
+[debug] [2026-09-02T14:43:28.328Z] <<< [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/pw-os-9ddce:testIamPermissions {"permissions":["cloudfunctions.functions.list","firebase.projects.get","run.services.list"]}
+[debug] [2026-09-02T14:43:28.332Z] Checked if tokens are valid: true, expires at: 1788363743159
+[debug] [2026-09-02T14:43:28.332Z] Checked if tokens are valid: true, expires at: 1788363743159
+[debug] [2026-09-02T14:43:28.332Z] >>> [apiv2][query] GET https://cloudfunctions.googleapis.com/v1/projects/pw-os-9ddce/locations/-/functions [none]
+[debug] [2026-09-02T14:43:28.900Z] <<< [apiv2][status] GET https://cloudfunctions.googleapis.com/v1/projects/pw-os-9ddce/locations/-/functions 403
+[debug] [2026-09-02T14:43:28.900Z] <<< [apiv2][body] GET https://cloudfunctions.googleapis.com/v1/projects/pw-os-9ddce/locations/-/functions {"error":{"code":403,"message":"Cloud Functions API has not been used in project pw-os-9ddce before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/cloudfunctions.googleapis.com/overview?project=pw-os-9ddce then retry. If you enabled this API recently, wait a few minutes for the action to propagate to our systems and retry.","status":"PERMISSION_DENIED","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"SERVICE_DISABLED","domain":"googleapis.com","metadata":{"containerInfo":"pw-os-9ddce","consumer":"projects/pw-os-9ddce","service":"cloudfunctions.googleapis.com","serviceTitle":"Cloud Functions API","activationUrl":"https://console.developers.google.com/apis/api/cloudfunctions.googleapis.com/overview?project=pw-os-9ddce"}},{"@type":"type.googleapis.com/google.rpc.LocalizedMessage","locale":"en-US","message":"Cloud Functions API has not been used in project pw-os-9ddce before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/cloudfunctions.googleapis.com/overview?project=pw-os-9ddce then retry. If you enabled this API recently, wait a few minutes for the action to propagate to our systems and retry."},{"@type":"type.googleapis.com/google.rpc.Help","links":[{"description":"Google developers console API activation","url":"https://console.developers.google.com/apis/api/cloudfunctions.googleapis.com/overview?project=pw-os-9ddce"}]}]}}
+[debug] [2026-09-02T14:43:28.901Z] [functions] failed to list functions for pw-os-9ddce
+[debug] [2026-09-02T14:43:28.901Z] [functions] Request to https://cloudfunctions.googleapis.com/v1/projects/pw-os-9ddce/locations/-/functions had HTTP Error: 403, Cloud Functions API has not been used in project pw-os-9ddce before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/cloudfunctions.googleapis.com/overview?project=pw-os-9ddce then retry. If you enabled this API recently, wait a few minutes for the action to propagate to our systems and retry.
+[debug] [2026-09-02T14:43:28.911Z] FirebaseError: Request to https://cloudfunctions.googleapis.com/v1/projects/pw-os-9ddce/locations/-/functions had HTTP Error: 403, Cloud Functions API has not been used in project pw-os-9ddce before or it is disabled. Enable it by visiting https://console.developers.google.com/apis/api/cloudfunctions.googleapis.com/overview?project=pw-os-9ddce then retry. If you enabled this API recently, wait a few minutes for the action to propagate to our systems and retry.
+    at responseToError (/Users/emersonmoraes/Documents/PW OS/PW OS/node_modules/firebase-tools/lib/responseToError.js:53:12)
+    at RetryOperation._fn (/Users/emersonmoraes/Documents/PW OS/PW OS/node_modules/firebase-tools/lib/apiv2.js:415:77)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+[error] 
+[error] Error: Failed to list functions for pw-os-9ddce

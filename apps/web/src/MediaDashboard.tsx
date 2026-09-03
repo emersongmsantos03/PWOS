@@ -58,7 +58,7 @@ import "./MediaAdDetailsFix.css";
 import "./MediaAiModal.css";
 import "./MediaComparison.css";
 import { ClientReportAgenda } from "./ClientReportAgenda";
-import { matchesMediaMetric, mediaPercentChange, mediaTrendCacheKey, type MediaMetricFocus } from "./mediaUx";
+import { matchesMediaMetric, mediaObjectiveLabel, mediaPercentChange, mediaTrendCacheKey, type MediaMetricFocus } from "./mediaUx";
 import { systemConfirm } from "./SystemDialog";
 
 type Campaign = {
@@ -243,13 +243,7 @@ const statusLabel: Record<string, string> = {
   PENDING_REVIEW: "Em análise",
   PREAPPROVED: "Pré-aprovado",
 };
-const objectiveLabel = (value: string) =>
-  (value.toUpperCase() === "SMART" ? "SEARCH" : value)
-    .replace(/^OUTCOME_/, "")
-    .replaceAll("_", " ")
-    .toLowerCase()
-    .replace(/^./, (letter) => letter.toUpperCase())
-    .replace(/^Search$/, "Pesquisa");
+const objectiveLabel = mediaObjectiveLabel;
 const emptyTotals = (): Totals => ({
   spend: 0,
   reach: 0,
