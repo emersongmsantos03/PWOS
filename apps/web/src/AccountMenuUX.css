@@ -1,0 +1,49 @@
+.account-dropdown .account-cover { height: 58px; }
+.account-dropdown > header {
+  align-items: center;
+  margin-top: 0;
+  padding: 15px 18px;
+  border-bottom: 1px solid var(--divider);
+  background: var(--surface);
+}
+.account-dropdown .avatar.large { flex: 0 0 52px; border-color: var(--surface); }
+.account-dropdown > header > div { padding: 0; }
+.account-dropdown > header b { color: var(--heading); font-size: 12px; }
+.account-dropdown > header span { margin-top: 2px; color: var(--subtle); font-size: 8px; }
+.account-dropdown > header small { margin-top: 5px; color: var(--text); }
+.account-menu-close { width: 36px; height: 36px; right: 11px; top: 11px; border-color: #ffffff55; background: #ffffff18; }
+.account-menu-close:hover,
+.account-menu-close:focus-visible { background: #ffffff2b; outline: 3px solid #ffffff28; }
+.account-menu-items { padding: 8px; }
+.account-menu-items > button { min-height: 64px; padding: 10px 12px; }
+.account-menu-items > button:focus-visible { outline: 3px solid color-mix(in srgb,var(--accent) 25%,transparent); outline-offset: 1px; }
+.account-menu-items > button > .menu-item-icon {
+  box-sizing: border-box;
+  display: grid !important;
+  width: 38px;
+  height: 38px;
+  align-self: center;
+  place-items: center;
+  padding: 0;
+  line-height: 0;
+}
+.account-menu-items > button > .menu-item-icon svg {
+  display: block;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  transform: none;
+}
+.account-menu-items b { color: var(--heading); font-size: 10px; }
+.account-menu-items small { color: var(--subtle); font-size: 8px; line-height: 1.35; }
+.theme-pill { min-width: 48px; padding: 6px 8px; text-align: center; }
+.account-dropdown > footer { min-height: 58px; padding: 11px 16px; }
+.account-dropdown > footer > button { min-height: 38px !important; padding: 7px 11px !important; border: 1px solid color-mix(in srgb,var(--red) 30%,transparent) !important; background: color-mix(in srgb,var(--red) 7%,transparent) !important; font-size: 9px !important; }
+html[data-theme="dark"] .account-dropdown { background: #17212d; border-color: #344456; }
+html[data-theme="dark"] .account-dropdown > header { background: #17212d; }
+html[data-theme="dark"] .account-dropdown > header b,
+html[data-theme="dark"] .account-menu-items b { color: #f5f8fb; }
+html[data-theme="dark"] .account-dropdown > header span,
+html[data-theme="dark"] .account-menu-items small { color: #b8c4d0; }
+html[data-theme="dark"] .account-menu-items > button { color: #edf3f8; }
+html[data-theme="dark"] .account-menu-items > button:hover { background: #223142; }

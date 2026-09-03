@@ -98,6 +98,7 @@ type MetaCampaignPayload = {
   id: string;
   name: string;
   objective?: string;
+  status?: string;
   effective_status?: string;
   daily_budget?: string;
   lifetime_budget?: string;
@@ -1066,10 +1067,32 @@ function localApi(
   const localNotificationReadsPath = "data/notification-reads.local.json";
   const localMetaDashboardCachePath = "data/meta-dashboard-cache.local.json";
   const localGoogleDashboardCachePath = "data/google-dashboard-cache.local.json";
+  const localMediaMetricSnapshotsPath = "data/media-metric-snapshots.local.json";
   const localCampaignVerificationsPath = "data/campaign-verifications.local.json";
   const localCampaignOptimizationHistoryPath = "data/campaign-optimization-history.local.json";
-  const mediaSyncIntervalMs = 4 * 60 * 60 * 1000;
+  const mediaSyncIntervalMs = 24 * 60 * 60 * 1000;
   const mediaManualRefreshCooldownMs = 5 * 60 * 1000;
+  const persistMediaMetricSnapshot = (platform: "META_ADS" | "GOOGLE_ADS", payload: { since: string; until: string; syncedAt: string; campaigns: Record<string, any>[] }) => {
+    mkdirSync("data", { recursive: true });
+    let snapshots: Record<string, any>[] = [];
+    try { snapshots = JSON.parse(readFileSync(localMediaMetricSnapshotsPath, "utf8")) as Record<string, any>[]; } catch { snapshots = []; }
+    const snapshot = {
+      id: `${platform}:${payload.since}:${payload.until}`,
+      platform,
+      since: payload.since,
+      until: payload.until,
+      syncedAt: payload.syncedAt,
+      campaigns: payload.campaigns.map((campaign) => ({
+        id: campaign.id, accountId: campaign.accountId, name: campaign.name, currency: campaign.currency,
+        status: campaign.status, objective: campaign.objective, dailyBudget: campaign.dailyBudget, lifetimeBudget: campaign.lifetimeBudget,
+        remainingBudget: campaign.remainingBudget, spend: campaign.spend, reach: campaign.reach, impressions: campaign.impressions,
+        clicks: campaign.clicks, leads: campaign.leads, conversations: campaign.conversations, cpl: campaign.cpl, frequency: campaign.frequency,
+      })),
+    };
+    snapshots = [snapshot, ...snapshots.filter((item) => item.id !== snapshot.id)]
+      .sort((a, b) => String(b.syncedAt).localeCompare(String(a.syncedAt))).slice(0, 800);
+    writeFileSync(localMediaMetricSnapshotsPath, JSON.stringify(snapshots, null, 2), { mode: 0o600 });
+  };
   type CampaignReviewEntry = {
     action: "ANALYSIS" | "REVIEW" | "REPORT_DOWNLOADED" | "REPORT_SENT";
     createdAt: string;
@@ -2000,7 +2023,14 @@ function localApi(
         clearInterval(attachmentCleanupTimer),
       );
       const mediaInternalSyncToken = randomBytes(24).toString("hex");
+      let lastScheduledMediaDay = "";
       const runScheduledMediaSync = async () => {
+        const saoPauloParts = Object.fromEntries(
+          new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hourCycle: "h23" })
+            .formatToParts(new Date()).filter((part) => part.type !== "literal").map((part) => [part.type, part.value]),
+        );
+        const localDay = `${saoPauloParts.year}-${saoPauloParts.month}-${saoPauloParts.day}`;
+        if (Number(saoPauloParts.hour) < 4 || lastScheduledMediaDay === localDay) return;
         const address = server.httpServer?.address();
         if (!address || typeof address === "string") return;
         await Promise.all(
@@ -2017,13 +2047,6 @@ function localApi(
                 cachedAt?: string;
                 payload?: { syncedAt?: string };
               };
-              const lastSyncAt = new Date(
-                cached.syncedAt || cached.cachedAt || cached.payload?.syncedAt || 0,
-              ).getTime();
-              if (
-                Number.isFinite(lastSyncAt) &&
-                Date.now() - lastSyncAt < mediaSyncIntervalMs
-              ) return;
               await fetch(
                 `http://127.0.0.1:${address.port}/api/media/${provider}/campaigns?since=${encodeURIComponent(cached.since)}&until=${encodeURIComponent(cached.until)}&refresh=1`,
                 { headers: { "x-pw-media-background": mediaInternalSyncToken } },
@@ -2036,10 +2059,11 @@ function localApi(
             }
           }),
         );
+        lastScheduledMediaDay = localDay;
       };
       const scheduledMediaTimer = setInterval(
         () => void runScheduledMediaSync(),
-        mediaSyncIntervalMs,
+        60 * 1000,
       );
       scheduledMediaTimer.unref();
       server.httpServer?.once("listening", () =>
@@ -2063,6 +2087,15 @@ function localApi(
         const mutationMethod=request.method||"GET",ignoredAudit=/^\/(auth|client-auth|notifications|media\/.*\/token)/.test(url)||/\/(test|sync)$/.test(url),shouldAudit=!!currentUser&&!ignoredAudit&&["POST","PATCH","PUT","DELETE"].includes(mutationMethod);
         if(shouldAudit){const originalEnd=response.end.bind(response);response.end=((chunk?:any,...args:any[])=>{if(response.statusCode>=200&&response.statusCode<400){let payload:any={};try{payload=JSON.parse(typeof chunk==="string"?chunk:chunk?.toString?.()||"{}")}catch{}const entity=Object.values(payload||{}).find(value=>value&&typeof value==="object"&&!Array.isArray(value)&&(value as any).id) as any,pathParts=url.split("?")[0].split("/").filter(Boolean),commentLike=/\/(comments|activities)$/.test(url),action:SystemAudit["action"]=commentLike?"COMMENT":mutationMethod==="DELETE"?"DELETE":mutationMethod==="PATCH"||mutationMethod==="PUT"||/\/(read|read-all|response|reorder|move|convert|reverse|decision|submit)$/.test(url)?"UPDATE":"CREATE";systemAudits.push({id:randomUUID(),action,resource:pathParts[0]||"system",resourceId:String(entity?.id||payload?.id||pathParts.find(part=>/^[0-9a-f-]{20,}$/i.test(part))||""),path:url.split("?")[0],method:mutationMethod,userId:currentUser.id,userName:currentUser.name,status:response.statusCode,createdAt:new Date().toISOString()});persistSystemAudits()}return originalEnd(chunk,...args)}) as typeof response.end}
         if(url==="/audit-logs"&&request.method==="GET"){if(!currentUser||(currentUser.profile!=="MASTER"&&!hasPermission(currentUser,"users.manage")))return json(response,403,{message:"Você não possui acesso aos logs."});return json(response,200,{logs:systemAudits.slice(-1000).reverse()})}
+        if (url.startsWith("/media/history") && request.method === "GET") {
+          if (!currentUser || !hasPermission(currentUser, "media.view")) return json(response, 403, { message: "Você não possui acesso ao histórico de mídia." });
+          const requestUrl = new URL(request.url || "", "http://localhost"), platform = requestUrl.searchParams.get("platform"), since = requestUrl.searchParams.get("since"), until = requestUrl.searchParams.get("until");
+          let snapshots: Record<string, any>[] = [];
+          try { snapshots = JSON.parse(readFileSync(localMediaMetricSnapshotsPath, "utf8")) as Record<string, any>[]; } catch { snapshots = []; }
+          const snapshot = snapshots.find((item) => item.platform === platform && item.since === since && item.until === until);
+          if (!snapshot) return json(response, 404, { message: "Este período ainda não foi armazenado no histórico.", campaigns: [] });
+          return json(response, 200, { source: "DATABASE", ...snapshot });
+        }
         if (url === "/auth/forgot-password" && request.method === "POST") {
           const input = await body(request), email = String(input.email || "").trim().toLowerCase();
           const attemptKey = `${String(request.headers["x-forwarded-for"] || request.socket.remoteAddress || "unknown").split(",")[0]}:${email}`, lastAttempt = passwordResetAttempts.get(attemptKey) || 0;
@@ -7213,7 +7246,7 @@ function localApi(
               ) as Record<string, any>;
               const cacheAge = Date.now() - new Date(cached.syncedAt || 0).getTime();
               if (
-                cached.schemaVersion === 8 &&
+                cached.schemaVersion === 10 &&
                 cached.since === since &&
                 cached.until === until &&
                 (!forceRefresh || cacheAge < mediaManualRefreshCooldownMs)
@@ -7393,7 +7426,7 @@ function localApi(
               // métricas, não baixar novamente criativos, URLs, termos e
               // geografia de dezenas de contas. Esses detalhes permanecem no
               // cache e são renovados numa consulta normal de um novo período.
-              const loadGoogleDetails = !comparisonRequest && !forceRefresh;
+              const loadGoogleDetails = !comparisonRequest;
               const landingPages = new Map<string, string>();
               const adsByCampaign = new Map<string, Record<string, any>[]>();
               if (loadGoogleDetails) try {
@@ -7429,10 +7462,13 @@ function localApi(
                 const responsiveImageRows = await search(
                   account.id,
                   account.loginCustomerId,
-                  "SELECT campaign.id, ad_group_ad.ad.id, asset.id, asset.name, asset.type, asset.image_asset.full_size.url FROM ad_group_ad_asset WHERE campaign.status = 'ENABLED'",
+                  "SELECT campaign.id, ad_group_ad_asset_view.ad_group_ad, asset.id, asset.name, asset.type, asset.image_asset.full_size.url FROM ad_group_ad_asset_view WHERE ad_group_ad_asset_view.enabled = TRUE",
                 );
                 responsiveImageRows.forEach((assetRow) => {
-                  const campaignId = String(assetRow.campaign?.id || ""), adId = String(assetRow.adGroupAd?.ad?.id || ""), asset = assetRow.asset || {}, imageUrl = asset.imageAsset?.fullSize?.url;
+                  const campaignId = String(assetRow.campaign?.id || ""),
+                    adResource = String(assetRow.adGroupAdAssetView?.adGroupAd || ""),
+                    adId = adResource.split("~").at(-1) || "",
+                    asset = assetRow.asset || {}, imageUrl = asset.imageAsset?.fullSize?.url;
                   if (!campaignId || !adId || asset.type !== "IMAGE" || !imageUrl) return;
                   const ad = (adsByCampaign.get(campaignId) || []).find((item) => item.id === adId);
                   if (!ad) return;
@@ -7444,10 +7480,32 @@ function localApi(
                 console.warn(`[Google Ads] Imagens de anúncios responsivos indisponíveis para ${account.id}:`, cause instanceof Error ? cause.message : cause);
               }
               if (loadGoogleDetails) try {
+                const campaignImageRows = await search(account.id, account.loginCustomerId, "SELECT campaign.id, asset.id, asset.name, asset.type, asset.image_asset.full_size.url FROM campaign_asset WHERE campaign_asset.status != 'REMOVED' AND asset.type = 'IMAGE'");
+                const imagesByCampaign = new Map<string, Record<string, any>[]>();
+                campaignImageRows.forEach((assetRow) => {
+                  const campaignId = String(assetRow.campaign?.id || ""), asset = assetRow.asset || {}, imageUrl = asset.imageAsset?.fullSize?.url;
+                  if (!campaignId || !imageUrl) return;
+                  const creative = { id: String(asset.id || imageUrl), name: asset.name || null, type: "IMAGE", url: imageUrl, thumbnailUrl: imageUrl };
+                  imagesByCampaign.set(campaignId, [...(imagesByCampaign.get(campaignId) || []), creative]);
+                });
+                imagesByCampaign.forEach((images, campaignId) => {
+                  const ads = adsByCampaign.get(campaignId) || [], target = ads.length === 1 ? ads[0] : null;
+                  if (target) {
+                    images.forEach((creative) => { if (!target.creatives.some((current: any) => current.id === creative.id || current.url === creative.url)) target.creatives.unshift(creative); });
+                    target.previewUrl ||= images[0]?.thumbnailUrl || null;
+                  } else {
+                    const unique = images.filter((creative, index) => images.findIndex((item) => item.id === creative.id || item.url === creative.url) === index);
+                    adsByCampaign.set(campaignId, [...ads, { id: `campaign-assets-${campaignId}`, name: "Recursos visuais da campanha", status: "ACTIVE", groupName: null, format: "IMAGENS DA CAMPANHA", landingPageUrl: null, previewUrl: unique[0]?.thumbnailUrl || null, headline: null, body: null, spend: 0, impressions: 0, clicks: 0, results: 0, creatives: unique }]);
+                  }
+                });
+              } catch (cause) {
+                console.warn(`[Google Ads] Imagens vinculadas à campanha indisponíveis para ${account.id}:`, cause instanceof Error ? cause.message : cause);
+              }
+              if (loadGoogleDetails) try {
                 const assetGroupImageRows = await search(
                   account.id,
                   account.loginCustomerId,
-                  "SELECT campaign.id, asset_group.id, asset_group.name, asset.id, asset.name, asset.type, asset.image_asset.full_size.url FROM asset_group_asset WHERE campaign.status = 'ENABLED'",
+                  "SELECT campaign.id, asset_group.id, asset_group.name, asset.id, asset.name, asset.type, asset.image_asset.full_size.url FROM asset_group_asset",
                 );
                 const performanceMaxAds = new Map<string, Record<string, any>>();
                 assetGroupImageRows.forEach((assetRow) => {
@@ -7648,7 +7706,7 @@ function localApi(
             const googleSyncedAt = new Date().toISOString(),
               googleCampaigns = withOptimizationHistory(campaigns, "GOOGLE_ADS", googleSyncedAt),
               googlePayload = {
-              schemaVersion: 8,
+              schemaVersion: 10,
               since,
               until,
               syncedAt: googleSyncedAt,
@@ -7668,6 +7726,7 @@ function localApi(
               })),
               campaigns: googleCampaigns,
             };
+            persistMediaMetricSnapshot("GOOGLE_ADS", googlePayload);
             // Uma comparação usa outro intervalo e não deve substituir o
             // cache principal. Isso fazia cada abertura disparar nova consulta.
             if (!comparisonRequest) {
@@ -7728,7 +7787,7 @@ function localApi(
                 pictures?: Record<string, string>;
               };
               if (
-                cached.schemaVersion === 7 &&
+                cached.schemaVersion === 8 &&
                 cached.since === since &&
                 cached.until === until &&
                 (!forceRefresh || Date.now() - new Date(cached.cachedAt).getTime() < mediaManualRefreshCooldownMs)
@@ -7830,6 +7889,7 @@ function localApi(
             const accountCampaigns = new Map<string, MetaCampaignPayload[]>();
             const accountInsights = new Map<string, Map<string, MetaInsight>>();
             const accountAds = new Map<string, Map<string, Record<string, any>[]>>();
+            const accountAdSets = new Map<string, Map<string, Array<{ id: string; name: string; status: string; configuredStatus: string }>>>();
             const accountGeographies = new Map<string, Map<string, Array<{ name: string; level: "REGION" | "CITY" | "NEIGHBORHOOD"; leads: number; clicks: number; spend: number }>>>();
             const campaignLandingPages = new Map<string, string>();
             for (const item of accountRefs) {
@@ -7868,11 +7928,28 @@ function localApi(
                 /* business_management é opcional; página e Instagram continuam como fallback */
               }
               const campaignRows = await listAll<MetaCampaignPayload>(
-                `${item.id}/campaigns?fields=id,name,objective,effective_status,daily_budget,lifetime_budget,budget_remaining&limit=500`,
+                `${item.id}/campaigns?fields=id,name,objective,status,effective_status,daily_budget,lifetime_budget,budget_remaining&limit=500`,
               );
               const adSetRows = await listAll<{
+                id?: string;
+                name?: string;
+                campaign_id?: string;
+                status?: string;
+                effective_status?: string;
                 promoted_object?: { page_id?: string; instagram_actor_id?: string };
-              }>(`${item.id}/adsets?fields=promoted_object&limit=500`);
+              }>(`${item.id}/adsets?fields=id,name,campaign_id,status,effective_status,promoted_object&limit=500`);
+              const adSetById = new Map(adSetRows.filter((row) => row.id).map((row) => [row.id!, row]));
+              const adSetsByCampaign = new Map<string, Array<{ id: string; name: string; status: string; configuredStatus: string }>>();
+              adSetRows.forEach((row) => {
+                if (!row.id || !row.campaign_id) return;
+                adSetsByCampaign.set(row.campaign_id, [...(adSetsByCampaign.get(row.campaign_id) || []), {
+                  id: row.id,
+                  name: row.name || `Conjunto ${row.id}`,
+                  status: row.effective_status || row.status || "UNKNOWN",
+                  configuredStatus: row.status || "UNKNOWN",
+                }]);
+              });
+              accountAdSets.set(item.id, adSetsByCampaign);
               const adRows = await listAll<{
                 id?: string;
                 name?: string;
@@ -7921,7 +7998,10 @@ function localApi(
                   ];
                 const normalized = {
                   id: ad.id, name: ad.name || creative.name || `Anúncio ${ad.id}`,
-                  status: ad.effective_status || ad.status || "UNKNOWN", groupName: ad.adset?.name || null,
+                  status: ad.effective_status || ad.status || "UNKNOWN",
+                  configuredStatus: ad.status || "UNKNOWN",
+                  adSetStatus: ad.adset?.id ? adSetById.get(ad.adset.id)?.effective_status || adSetById.get(ad.adset.id)?.status || "UNKNOWN" : "UNKNOWN",
+                  groupName: ad.adset?.name || null,
                   format: video?.video_id || creative.video_id ? "VÍDEO" : "IMAGEM / PUBLICAÇÃO",
                   landingPageUrl: landingPageFromCreative(creative) || null, previewUrl,
                   headline: link?.name || video?.title || creative.title || null,
@@ -8146,6 +8226,8 @@ function localApi(
                   name: campaign.name,
                   objective: campaign.objective || "OUTRO",
                   status: campaign.effective_status || "UNKNOWN",
+                  configuredStatus: campaign.status || "UNKNOWN",
+                  adSets: accountAdSets.get(account.id)?.get(campaign.id) || [],
                   dailyBudget: Number(campaign.daily_budget || 0) / 100,
                   lifetimeBudget: Number(campaign.lifetime_budget || 0) / 100,
                   remainingBudget: campaign.budget_remaining == null ? null : Number(campaign.budget_remaining) / 100,
@@ -8169,7 +8251,7 @@ function localApi(
             const syncedAt = new Date().toISOString(),
               campaignsWithHistory = withOptimizationHistory(campaigns, "META_ADS", syncedAt),
               payload = {
-                schemaVersion: 7,
+                schemaVersion: 8,
                 since,
                 until,
                 syncedAt,
@@ -8185,13 +8267,14 @@ function localApi(
                 })),
                 campaigns: campaignsWithHistory,
               };
+            persistMediaMetricSnapshot("META_ADS", payload);
             if (!comparisonRequest) {
               mkdirSync("data", { recursive: true });
               writeFileSync(
                 localMetaDashboardCachePath,
                 JSON.stringify(
                   {
-                    schemaVersion: 7,
+                    schemaVersion: 8,
                     since,
                     until,
                     cachedAt: syncedAt,

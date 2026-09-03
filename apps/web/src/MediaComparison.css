@@ -1,0 +1,54 @@
+.traffic-page .comparison-by-portfolio{gap:12px}
+.traffic-page .comparison-by-portfolio .compiled-heading{min-height:72px;padding:14px 17px}
+.traffic-page .comparison-by-portfolio .compiled-heading h2{font-size:17px}
+.traffic-page .comparison-platform-switch{display:grid;grid-template-columns:repeat(2,1fr);overflow:hidden;border:1px solid var(--media-line);border-radius:10px;background:var(--media-panel)}
+.traffic-page .comparison-platform-switch>button{display:flex;align-items:center;justify-content:center;gap:9px;min-height:48px;padding:7px 12px;border:0;border-left:1px solid var(--media-line);background:transparent;color:var(--media-ink);text-align:left;cursor:pointer}
+.traffic-page .comparison-platform-switch>button:first-child{border-left:0}
+.traffic-page .comparison-platform-switch>button.active{background:color-mix(in srgb,var(--media-action) 7%,var(--media-panel));box-shadow:inset 0 -2px var(--media-action)}
+.traffic-page .comparison-platform-switch :is(.meta-ads-symbol,.google-ads-symbol){display:grid!important;width:30px!important;height:30px!important;min-width:30px;flex:0 0 30px!important;place-items:center!important;box-sizing:border-box;margin:0;padding:0;border:1px solid var(--media-line);border-radius:7px;background:var(--media-panel)}
+.traffic-page .comparison-platform-switch .meta-ads-symbol{padding-bottom:2px!important;background:#edf4ff;color:#0866ff;font-size:18px;line-height:1}
+.traffic-page .comparison-platform-switch .google-ads-symbol svg{display:block;width:22px;height:22px;margin:auto}
+.traffic-page .comparison-platform-switch .google-ads-symbol .google-blue{fill:#4285f4}
+.traffic-page .comparison-platform-switch .google-ads-symbol .google-green{fill:#34a853}
+.traffic-page .comparison-platform-switch .google-ads-symbol .google-yellow{fill:#fbbc04}
+.traffic-page .comparison-platform-switch button>span:last-child{display:flex;flex-direction:column}
+.traffic-page .comparison-platform-switch b{font-size:9px}
+.traffic-page .comparison-platform-switch small{margin-top:2px;color:var(--media-muted);font-size:6px}
+.traffic-page .media-management-platform-switch{margin-bottom:9px}
+.traffic-page .comparison-by-portfolio .compiled-periods{position:relative;grid-template-columns:minmax(0,1fr) 90px minmax(0,1fr);align-items:center;padding:14px 16px;background:var(--media-panel)}
+.traffic-page .comparison-by-portfolio .compiled-periods>div{min-width:0}
+.traffic-page .comparison-by-portfolio .compiled-periods>div>small{font-size:7px;letter-spacing:.06em}
+.traffic-page .comparison-by-portfolio .compiled-periods label{box-sizing:border-box;width:100%;height:42px;background:var(--media-soft)}
+.traffic-page .comparison-by-portfolio .compiled-periods input{width:100%;min-width:105px}
+.traffic-page .comparison-by-portfolio .compiled-periods>i{margin:16px 0 0;text-align:center}
+.traffic-page .comparison-by-portfolio .compiled-client-picker{margin:0;padding:0;overflow:hidden;border-color:var(--media-line);border-radius:11px;background:var(--media-panel)}
+.traffic-page .comparison-by-portfolio .compiled-client-picker>header{min-height:55px;box-sizing:border-box;margin:0;padding:11px 15px;border-bottom:1px solid var(--media-line)}
+.traffic-page .compiled-portfolio-search{display:flex;align-items:center;gap:6px;width:min(260px,35vw);height:32px;padding:0 9px;border:1px solid var(--media-line);border-radius:7px;background:var(--media-soft)}
+.traffic-page .compiled-portfolio-search svg{width:13px;color:var(--media-muted)}
+.traffic-page .compiled-portfolio-search input{width:100%;border:0;outline:0;background:transparent;color:var(--media-ink);font-size:8px}
+.traffic-page .comparison-by-portfolio .compiled-client-picker>div{display:flex;max-height:330px;overflow-y:auto;flex-direction:column;gap:0}
+.traffic-page .comparison-by-portfolio .compiled-client-picker>div>button{min-height:70px;padding:10px 14px;border:0;border-top:1px solid var(--media-line);border-radius:0;background:var(--media-panel);transform:none}
+.traffic-page .comparison-by-portfolio .compiled-client-picker>div>button:first-child{border-top:0}
+.traffic-page .comparison-by-portfolio .compiled-client-picker>div>button:hover{background:var(--media-soft)}
+.traffic-page .comparison-by-portfolio .compiled-client-picker>div>button.active{border-color:var(--media-line);background:color-mix(in srgb,var(--media-action) 5%,var(--media-panel));box-shadow:inset 3px 0 var(--media-action)}
+.traffic-page .comparison-by-portfolio .compiled-client-picker .traffic-client-avatar{width:43px;height:43px;border-radius:11px}
+.traffic-page .comparison-by-portfolio .compiled-client-identity>b{font-size:11px}
+.traffic-page .comparison-by-portfolio .compiled-client-identity>small{font-size:7px}
+.traffic-page .comparison-by-portfolio .compiled-client-stat{min-width:95px}
+.traffic-page .comparison-by-portfolio .compiled-client-stat small{font-size:6px}
+.traffic-page .comparison-by-portfolio .compiled-client-stat b{font-size:10px}
+.traffic-page .compiled-selected-portfolio{display:flex;align-items:center;justify-content:space-between;min-height:46px;padding:0 14px;border:1px solid var(--media-line);border-radius:9px;background:var(--media-panel)}
+.traffic-page .compiled-selected-portfolio>span{display:flex;flex-direction:column}
+.traffic-page .compiled-selected-portfolio small{color:var(--media-action);font-size:6px;font-weight:850;letter-spacing:.07em}
+.traffic-page .compiled-selected-portfolio b{margin-top:2px;color:var(--media-ink);font-size:11px}
+.traffic-page .compiled-selected-portfolio em{padding:5px 8px;border-radius:999px;background:var(--media-soft);color:var(--media-muted);font-size:7px;font-style:normal;font-weight:750}
+.traffic-page .comparison-by-portfolio .compiled-summary{grid-template-columns:repeat(4,1fr);border-color:var(--media-line)}
+.traffic-page .comparison-by-portfolio .compiled-summary article{min-height:78px;background:var(--media-panel)}
+.traffic-page .comparison-by-portfolio .compiled-summary article>small{font-size:7px}
+.traffic-page .comparison-by-portfolio .compiled-summary .compiled-metric>b{font-size:17px}
+.traffic-page .comparison-by-portfolio .compiled-metric>small{display:flex;gap:5px;flex-wrap:wrap;font-size:7px}
+.traffic-page .comparison-by-portfolio .compiled-metric>small em{display:inline-block}
+.traffic-page .comparison-by-portfolio .compiled-table th,.traffic-page .comparison-by-portfolio .compiled-table td:not(:first-child){text-align:center}
+.traffic-page .comparison-by-portfolio .compiled-table .compiled-metric{align-items:center}
+@media(max-width:900px){.traffic-page .comparison-by-portfolio .compiled-periods{grid-template-columns:1fr}.traffic-page .comparison-by-portfolio .compiled-periods>i{margin:0;text-align:left}.traffic-page .comparison-by-portfolio .compiled-summary{grid-template-columns:1fr 1fr}.traffic-page .comparison-platform-switch{grid-template-columns:repeat(2,minmax(145px,1fr))}}
+@media(max-width:650px){.traffic-page .comparison-by-portfolio .compiled-heading{align-items:flex-start}.traffic-page .comparison-by-portfolio .compiled-heading>span{display:none}.traffic-page .comparison-by-portfolio .compiled-periods{padding:10px}.traffic-page .comparison-by-portfolio .compiled-periods label{display:grid;grid-template-columns:auto minmax(105px,1fr) auto minmax(105px,1fr);overflow-x:auto}.traffic-page .comparison-by-portfolio .compiled-client-picker>div{max-height:280px}.traffic-page .comparison-by-portfolio .compiled-client-picker>div>button{grid-template-columns:auto minmax(0,1fr) auto}.traffic-page .comparison-by-portfolio .compiled-client-stat{display:none}.traffic-page .comparison-by-portfolio .compiled-summary{grid-template-columns:1fr 1fr}.traffic-page .comparison-by-portfolio .compiled-summary article{min-width:0;padding:11px}.traffic-page .comparison-by-portfolio .compiled-summary .compiled-metric>b{font-size:14px}.traffic-page .comparison-by-portfolio .compiled-toolbar{align-items:stretch;flex-direction:column}.traffic-page .comparison-by-portfolio .compiled-toolbar>span{justify-content:flex-start}.traffic-page .comparison-by-portfolio .compiled-table{border:0}.traffic-page .comparison-by-portfolio .compiled-table table{min-width:920px}}

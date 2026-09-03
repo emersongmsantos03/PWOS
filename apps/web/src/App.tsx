@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { Component, lazy, Suspense, useEffect, useMemo, useState, type ErrorInfo, type ReactNode } from "react";
 import {
   useNavigate,
   useParams,
@@ -81,6 +81,7 @@ import { maskPhone } from "./inputMasks";
 import "./Notifications.css";
 import "./SidebarMediaSubmenu.css";
 import "./SidebarMediaGapFix.css";
+import "./AccountMenuUX.css";
 
 const money = (value: number) =>
   value.toLocaleString("pt-BR", {
@@ -181,6 +182,37 @@ function Brand({ compact = false }: { compact?: boolean }) {
       {!compact && <small>PERFORMANCE WORKSPACE</small>}
     </div>
   );
+}
+
+class RouteRenderBoundary extends Component<
+  { children: ReactNode },
+  { failed: boolean }
+> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error("Falha isolada ao renderizar a página", error, info);
+  }
+
+  render() {
+    if (!this.state.failed) return this.props.children;
+    return (
+      <section className="route-render-error" role="alert">
+        <AlertTriangle />
+        <div>
+          <b>Não foi possível exibir esta página</b>
+          <p>Os outros módulos continuam disponíveis. Recarregue para tentar novamente.</p>
+        </div>
+        <button type="button" onClick={() => window.location.reload()}>
+          Recarregar página
+        </button>
+      </section>
+    );
+  }
 }
 
 function Shell({
@@ -515,7 +547,6 @@ function Shell({
                   <div className="account-dropdown" role="menu">
                     <div className="account-cover">
                       <span>PW</span>
-                      <i />
                       <button type="button" className="account-menu-close" onClick={() => setAccountMenu(false)} aria-label="Fechar menu"><X /></button>
                     </div>
                     <header>
@@ -588,6 +619,7 @@ function Shell({
             </div>
           </div>
         </header>
+        <RouteRenderBoundary key={location.pathname}>
         <Suspense fallback={<div className="route-skeleton" role="status"><i/><i/><i/><span>Carregando módulo…</span></div>}><Routes>
           <Route
             path="/"
@@ -655,12 +687,12 @@ function Shell({
           />
           <Route path="/financeiro" element={can("finance.view")?<FinancialManagement />:<Navigate to={firstAccessiblePath} replace />} />
           <Route path="/midia" element={can("media.view")?<Navigate to="/midia/gestao" replace />:<Navigate to={firstAccessiblePath} replace />} />
-          <Route path="/midia/hoje" element={can("media.view")?<Navigate to="/midia/gestao" replace />:<Navigate to={firstAccessiblePath} replace />} />
-          <Route path="/midia/gestao" element={can("media.view")?<MediaDashboard section="CLIENTS" />:<Navigate to={firstAccessiblePath} replace />} />
-          <Route path="/midia/campanhas" element={can("media.view")?<MediaDashboard section="CLIENTS" />:<Navigate to={firstAccessiblePath} replace />} />
-          <Route path="/midia/compilado" element={can("media.view")?<MediaDashboard section="COMPILED" />:<Navigate to={firstAccessiblePath} replace />} />
-          <Route path="/midia/relatorios" element={can("media.view")?<MediaDashboard section="REPORTS" />:<Navigate to={firstAccessiblePath} replace />} />
-          <Route path="/midia/historico" element={can("media.view")?<MediaDashboard section="HISTORY" />:<Navigate to={firstAccessiblePath} replace />} />
+          <Route path="/midia/hoje" element={can("media.view")?<MediaDashboard key="media-priority-queue" section="TODAY" />:<Navigate to={firstAccessiblePath} replace />} />
+          <Route path="/midia/gestao" element={can("media.view")?<MediaDashboard key="media-management" section="CLIENTS" />:<Navigate to={firstAccessiblePath} replace />} />
+          <Route path="/midia/campanhas" element={can("media.view")?<MediaDashboard key="media-campaigns" section="CLIENTS" />:<Navigate to={firstAccessiblePath} replace />} />
+          <Route path="/midia/compilado" element={can("media.view")?<MediaDashboard key="media-comparison" section="COMPILED" />:<Navigate to={firstAccessiblePath} replace />} />
+          <Route path="/midia/relatorios" element={can("media.view")?<MediaDashboard key="media-reports" section="REPORTS" />:<Navigate to={firstAccessiblePath} replace />} />
+          <Route path="/midia/historico" element={can("media.view")?<MediaDashboard key="media-history" section="HISTORY" />:<Navigate to={firstAccessiblePath} replace />} />
           <Route path="/midia/:id" element={can("media.view")?<MediaDashboard />:<Navigate to={firstAccessiblePath} replace />} />
           <Route path="/relatorios" element={can("reports.view")?<OperationalReports />:<Navigate to={firstAccessiblePath} replace />} />
           <Route path="/chamados" element={can("tickets.view")?<TicketsManagement user={user} />:<Navigate to={firstAccessiblePath} replace />} />
@@ -699,6 +731,7 @@ function Shell({
             }
           />
         </Routes></Suspense>
+        </RouteRenderBoundary>
         <MobileNav />
         {profilePanel && (
           <ProfilePanel
