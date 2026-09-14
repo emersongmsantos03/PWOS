@@ -1184,7 +1184,7 @@ function localApi(
   const localCampaignOptimizationHistoryPath = "data/campaign-optimization-history.local.json";
   const mediaSyncIntervalMs = 24 * 60 * 60 * 1000;
   const mediaManualRefreshCooldownMs = 5 * 60 * 1000;
-  const persistMediaMetricSnapshot = (platform: "META_ADS" | "GOOGLE_ADS", payload: { since: string; until: string; syncedAt: string; campaigns: Record<string, any>[] }) => {
+  const persistMediaMetricSnapshot = (platform: "META_ADS" | "GOOGLE_ADS", payload: { schemaVersion: number; since: string; until: string; syncedAt: string; accounts: Record<string, any>[]; campaigns: Record<string, any>[] }) => {
     mkdirSync("data", { recursive: true });
     let snapshots: Record<string, any>[] = [];
     try { snapshots = JSON.parse(readFileSync(localMediaMetricSnapshotsPath, "utf8")) as Record<string, any>[]; } catch { snapshots = []; }
@@ -1194,12 +1194,9 @@ function localApi(
       since: payload.since,
       until: payload.until,
       syncedAt: payload.syncedAt,
-      campaigns: payload.campaigns.map((campaign) => ({
-        id: campaign.id, accountId: campaign.accountId, name: campaign.name, currency: campaign.currency,
-        status: campaign.status, objective: campaign.objective, dailyBudget: campaign.dailyBudget, lifetimeBudget: campaign.lifetimeBudget,
-        remainingBudget: campaign.remainingBudget, spend: campaign.spend, reach: campaign.reach, impressions: campaign.impressions,
-        clicks: campaign.clicks, leads: campaign.leads, conversations: campaign.conversations, cpl: campaign.cpl, frequency: campaign.frequency,
-      })),
+      schemaVersion: payload.schemaVersion,
+      accounts: payload.accounts,
+      campaigns: payload.campaigns,
     };
     snapshots = [snapshot, ...snapshots.filter((item) => item.id !== snapshot.id)]
       .sort((a, b) => String(b.syncedAt).localeCompare(String(a.syncedAt))).slice(0, 800);
@@ -1224,6 +1221,22 @@ function localApi(
       return undefined;
     }
   };
+  // Cache entries belong to an exact platform/period, never to a user session.
+  const readStoredMediaPeriod = (platform: "META_ADS" | "GOOGLE_ADS", since: string, until: string) => {
+    const schemaVersion = platform === "META_ADS" ? 8 : 10;
+    let latest: Record<string, any> | undefined;
+    try {
+      const cached = JSON.parse(readFileSync(platform === "META_ADS" ? localMetaDashboardCachePath : localGoogleDashboardCachePath, "utf8"));
+      latest = platform === "META_ADS" ? { ...cached.payload, schemaVersion: cached.schemaVersion } : cached;
+    } catch { /* A missing cache is loaded from the shared connection below. */ }
+    const candidates = [latest, readMediaMetricSnapshot(platform, since, until)]
+      .filter((item): item is Record<string, any> => !!item && item.schemaVersion === schemaVersion &&
+        item.since === since && item.until === until && Array.isArray(item.accounts) && Array.isArray(item.campaigns));
+    return candidates.sort((a, b) => String(b.syncedAt).localeCompare(String(a.syncedAt)))[0];
+  };
+  const mediaPeriodIsFresh = (snapshot: Record<string, any>, force: boolean) =>
+    Date.now() - new Date(snapshot.syncedAt || 0).getTime() <
+      (force ? mediaManualRefreshCooldownMs : snapshot.until >= new Date().toISOString().slice(0, 10) ? 15 * 60_000 : mediaSyncIntervalMs);
   type CampaignReviewEntry = {
     action: "ANALYSIS" | "REVIEW" | "REPORT_DOWNLOADED" | "REPORT_SENT";
     createdAt: string;
@@ -2154,7 +2167,18 @@ function localApi(
         clearInterval(attachmentCleanupTimer),
       );
       let googleDirectoryCache: { key: string; expiresAt: number; accounts: Array<{ id: string; name: string; currency: string; loginCustomerId: string; manager: boolean }> } | null = null;
-      let googleManualSyncInProgress = false;
+      const pendingMediaPeriods = new Map<string, Promise<void>>();
+      const acquireMediaPeriod = async (key: string) => {
+        const previous = pendingMediaPeriods.get(key);
+        let release!: () => void;
+        const current = new Promise<void>(resolve => { release = resolve; });
+        pendingMediaPeriods.set(key, current);
+        await previous;
+        return () => {
+          if (pendingMediaPeriods.get(key) === current) pendingMediaPeriods.delete(key);
+          release();
+        };
+      };
       const mediaInternalSyncToken = randomBytes(24).toString("hex");
       let lastScheduledMediaDay = "";
       const runScheduledMediaSync = async () => {
@@ -7624,89 +7648,19 @@ function localApi(
               ? requestUrl.searchParams.get("until")!
               : today,
             forceRefresh = requestUrl.searchParams.get("refresh") === "1",
-            comparisonRequest = requestUrl.searchParams.get("comparison") === "1",
-            storedRequest = requestUrl.searchParams.get("stored") === "1";
+            comparisonRequest = requestUrl.searchParams.get("comparison") === "1";
           const manualSync = forceRefresh && requestUrl.searchParams.get("manual") === "1";
-          const requestedSync = manualSync;
-          if (manualSync && !hasPermission(currentUser, "media.sync"))
+          if (!backgroundSync && forceRefresh && !hasPermission(currentUser, "media.sync"))
             return json(response, 403, { message: "Você não possui permissão para sincronizar campanhas." });
-          if (manualSync && (!runtimeGoogleRefreshToken || !runtimeGoogleDeveloperToken))
-            return json(response, 409, { message: "Conecte o Google Ads antes de sincronizar." });
-          if (!manualSync && storedRequest && existsSync(localGoogleDashboardCachePath))
-            try {
-              const cached = JSON.parse(
-                readFileSync(localGoogleDashboardCachePath, "utf8"),
-              ) as Record<string, any>;
-              if (cached.schemaVersion === 10 && cached.since === since && cached.until === until)
-                return json(response, 200, withCampaignVerifications({
-                  ...cached,
-                  cache: {
-                    status: "stored",
-                    cachedAt: cached.syncedAt,
-                    nextSyncAt: new Date(
-                      new Date(cached.syncedAt).getTime() + mediaSyncIntervalMs,
-                    ).toISOString(),
-                  },
-                }, "GOOGLE_ADS"));
-            } catch {}
-          if (existsSync(localGoogleDashboardCachePath))
-            try {
-              const cached = JSON.parse(
-                readFileSync(localGoogleDashboardCachePath, "utf8"),
-              ) as Record<string, any>;
-              const cacheAge = Date.now() - new Date(cached.syncedAt || 0).getTime();
-              if (
-                !manualSync && cached.schemaVersion === 10 &&
-                cached.since === since &&
-                cached.until === until &&
-                (!forceRefresh || cacheAge < mediaManualRefreshCooldownMs)
-              )
-                return json(response, 200, withCampaignVerifications({
-                  ...cached,
-                  cache: {
-                    status: forceRefresh ? "rate_limited" : "stored",
-                    cachedAt: cached.syncedAt,
-                    nextSyncAt: new Date(
-                      new Date(cached.syncedAt).getTime() + mediaSyncIntervalMs,
-                    ).toISOString(),
-                  },
-                }, "GOOGLE_ADS"));
-            } catch {}
-          const storedGoogleSnapshot = readMediaMetricSnapshot(
-            "GOOGLE_ADS",
-            since,
-            until,
-          );
-          if (!manualSync && storedGoogleSnapshot) {
-            let accounts: Record<string, any>[] = [];
-            try {
-              accounts = (JSON.parse(
-                readFileSync(localGoogleDashboardCachePath, "utf8"),
-              ) as { accounts?: Record<string, any>[] }).accounts || [];
-            } catch {}
+          if (since > until)
+            return json(response, 400, { message: "O início do período deve ser anterior ou igual ao fim." });
+          const releasePeriod = await acquireMediaPeriod(`GOOGLE_ADS:${since}:${until}`);
+          try {
+          const storedGooglePeriod = readStoredMediaPeriod("GOOGLE_ADS", since, until);
+          if (storedGooglePeriod && mediaPeriodIsFresh(storedGooglePeriod, forceRefresh))
             return json(response, 200, withCampaignVerifications({
-              schemaVersion: 10,
-              since,
-              until,
-              syncedAt: storedGoogleSnapshot.syncedAt,
-              accounts,
-              campaigns: storedGoogleSnapshot.campaigns || [],
-              cache: { status: "history", cachedAt: storedGoogleSnapshot.syncedAt },
+              ...storedGooglePeriod, cache: { status: "stored", cachedAt: storedGooglePeriod.syncedAt },
             }, "GOOGLE_ADS"));
-          }
-          // Abrir uma tela nunca deve consumir a cota das plataformas. Somente
-          // a rotina interna ou uma sincronização manual autorizada pode renovar os dados.
-          if (!backgroundSync && !requestedSync)
-            return json(response, 409, {
-              code: "MEDIA_PERIOD_NOT_STORED",
-              message:
-                "Este período ainda não está na base compartilhada. Um usuário com permissão de sincronização pode carregá-lo para toda a equipe. A conexão é única; não é necessário conectar a conta de cada colaborador.",
-              availablePeriod: (() => {
-                try { const saved = JSON.parse(readFileSync(localGoogleDashboardCachePath, "utf8")); return { since: saved.since, until: saved.until }; } catch { return null; }
-              })(),
-            });
-          if (!backgroundSync && !hasPermission(currentUser, "media.sync"))
-            return json(response, 403, { message: "Este período ainda não foi sincronizado. Solicite a sincronização ao responsável pela mídia." });
           const cachedGoogleCampaigns = new Map<string, Record<string, any>>();
           if (existsSync(localGoogleDashboardCachePath)) try {
             const previous = JSON.parse(readFileSync(localGoogleDashboardCachePath, "utf8")) as { campaigns?: Record<string, any>[] };
@@ -7725,11 +7679,8 @@ function localApi(
               message: `Complete a conexão do Google Ads: ${missing.join(", ")}.`,
               missingCredentials: missing,
             });
-          if (requestedSync && googleManualSyncInProgress)
-            return json(response, 409, { code: "GOOGLE_SYNC_BUSY", message: "Uma sincronização do Google já está em andamento. Aguarde sua conclusão." });
-          if (requestedSync) googleManualSyncInProgress = true;
           const syncController = new AbortController();
-          const syncDeadline = setTimeout(() => syncController.abort(), requestedSync ? 120_000 : 15 * 60_000);
+          const syncDeadline = setTimeout(() => syncController.abort(), 240_000);
           const googleFetch = (input: string, init: RequestInit = {}) => fetch(input, {
             ...init, signal: AbortSignal.any([syncController.signal, AbortSignal.timeout(20_000)]),
           });
@@ -7876,7 +7827,7 @@ function localApi(
               // métricas, não baixar novamente criativos, URLs, termos e
               // geografia de dezenas de contas. Esses detalhes permanecem no
               // cache e são renovados numa consulta normal de um novo período.
-              const loadGoogleDetails = !comparisonRequest && !requestedSync;
+              const loadGoogleDetails = !comparisonRequest && !manualSync;
               const landingPages = new Map<string, string>();
               const adsByCampaign = new Map<string, Record<string, any>[]>();
               if (loadGoogleDetails) try {
@@ -8186,6 +8137,12 @@ function localApi(
             }
             return json(response, 200, withCampaignVerifications(googlePayload, "GOOGLE_ADS"));
           } catch (cause) {
+            if (storedGooglePeriod)
+              return json(response, 200, withCampaignVerifications({
+                ...storedGooglePeriod,
+                cache: { status: "stale", cachedAt: storedGooglePeriod.syncedAt },
+                syncWarning: cause instanceof Error ? cause.message : "O Google está temporariamente indisponível.",
+              }, "GOOGLE_ADS"));
             return json(response, 502, {
               message:
                 cause instanceof Error && (syncController.signal.aborted || cause.name === "TimeoutError" || cause.name === "AbortError")
@@ -8195,8 +8152,8 @@ function localApi(
           } finally {
             clearTimeout(syncDeadline);
             syncController.abort();
-            if (requestedSync) googleManualSyncInProgress = false;
           }
+          } finally { releasePeriod(); }
         }
         if (
           url.startsWith("/media/meta/campaigns") &&
@@ -8207,10 +8164,6 @@ function localApi(
           if (!backgroundSync && !hasPermission(currentUser, "media.view"))
             return json(response, 403, {
               message: "Você não possui acesso às campanhas.",
-            });
-          if (!metaAccessConnections().length)
-            return json(response, 503, {
-              message: "Configure o token da Meta na Central de Conexões.",
             });
           const requestUrl = new URL(request.url || "", "http://localhost");
           const today = new Date().toISOString().slice(0, 10);
@@ -8228,99 +8181,22 @@ function localApi(
             ? requestUrl.searchParams.get("until")!
             : today;
           const forceRefresh = requestUrl.searchParams.get("refresh") === "1",
-            comparisonRequest = requestUrl.searchParams.get("comparison") === "1",
-            storedRequest = requestUrl.searchParams.get("stored") === "1";
-          if (storedRequest && existsSync(localMetaDashboardCachePath))
-            try {
-              const cached = JSON.parse(
-                readFileSync(localMetaDashboardCachePath, "utf8"),
-              ) as {
-                schemaVersion?: number;
-                cachedAt: string;
-                payload: Record<string, any>;
-                pictures?: Record<string, string>;
-              };
-              if (cached.schemaVersion === 8) {
-                Object.entries(cached.pictures || {}).forEach(([id, picture]) =>
-                  metaAccountPictures.set(id, picture),
-                );
-                return json(response, 200, withCampaignVerifications({
-                  ...cached.payload,
-                  cache: {
-                    status: "stored",
-                    cachedAt: cached.cachedAt,
-                    nextSyncAt: new Date(
-                      new Date(cached.cachedAt).getTime() + mediaSyncIntervalMs,
-                    ).toISOString(),
-                  },
-                }, "META_ADS"));
-              }
-            } catch {}
-          if (existsSync(localMetaDashboardCachePath))
-            try {
-              const cached = JSON.parse(
-                readFileSync(localMetaDashboardCachePath, "utf8"),
-              ) as {
-                schemaVersion?: number;
-                since: string;
-                until: string;
-                cachedAt: string;
-                payload: Record<string, unknown>;
-                pictures?: Record<string, string>;
-              };
-              if (
-                cached.schemaVersion === 8 &&
-                cached.since === since &&
-                cached.until === until &&
-                (!forceRefresh || Date.now() - new Date(cached.cachedAt).getTime() < mediaManualRefreshCooldownMs)
-              ) {
-                Object.entries(cached.pictures || {}).forEach(([id, picture]) =>
-                  metaAccountPictures.set(id, picture),
-                );
-                return json(response, 200, withCampaignVerifications({
-                  ...cached.payload,
-                  cache: {
-                    status: forceRefresh ? "rate_limited" : "fresh",
-                    cachedAt: cached.cachedAt,
-                    nextSyncAt: new Date(
-                      new Date(cached.cachedAt).getTime() + mediaSyncIntervalMs,
-                    ).toISOString(),
-                  },
-                }, "META_ADS"));
-              }
-            } catch {}
-          const storedMetaSnapshot = readMediaMetricSnapshot(
-            "META_ADS",
-            since,
-            until,
-          );
-          if (storedMetaSnapshot) {
-            let accounts: Record<string, any>[] = [];
-            try {
-              const cached = JSON.parse(
-                readFileSync(localMetaDashboardCachePath, "utf8"),
-              ) as { payload?: { accounts?: Record<string, any>[] } };
-              accounts = cached.payload?.accounts || [];
-            } catch {}
+            comparisonRequest = requestUrl.searchParams.get("comparison") === "1";
+          if (!backgroundSync && forceRefresh && !hasPermission(currentUser, "media.sync"))
+            return json(response, 403, { message: "Você não possui permissão para sincronizar campanhas." });
+          if (since > until)
+            return json(response, 400, { message: "O início do período deve ser anterior ou igual ao fim." });
+          const releasePeriod = await acquireMediaPeriod(`META_ADS:${since}:${until}`);
+          try {
+          const storedMetaPeriod = readStoredMediaPeriod("META_ADS", since, until);
+          if (storedMetaPeriod && mediaPeriodIsFresh(storedMetaPeriod, forceRefresh))
             return json(response, 200, withCampaignVerifications({
-              schemaVersion: 8,
-              since,
-              until,
-              syncedAt: storedMetaSnapshot.syncedAt,
-              accounts,
-              campaigns: storedMetaSnapshot.campaigns || [],
-              cache: { status: "history", cachedAt: storedMetaSnapshot.syncedAt },
+              ...storedMetaPeriod, cache: { status: "stored", cachedAt: storedMetaPeriod.syncedAt },
             }, "META_ADS"));
-          }
-          if (!backgroundSync)
-            return json(response, 409, {
-              code: "MEDIA_PERIOD_NOT_STORED",
-              message:
-                "Este período ainda não está na base compartilhada. Um usuário com permissão de sincronização pode carregá-lo para toda a equipe. A conexão é única; não é necessário conectar a conta de cada colaborador.",
-              availablePeriod: (() => {
-                try { const saved = JSON.parse(readFileSync(localMetaDashboardCachePath, "utf8")); return { since: saved.since, until: saved.until }; } catch { return null; }
-              })(),
-            });
+          if (!metaAccessConnections().length)
+            return json(response, 503, { message: "A conexão compartilhada da Meta precisa ser configurada na Central de Conexões." });
+          const metaController = new AbortController();
+          const metaDeadline = setTimeout(() => metaController.abort(), 240_000);
           const metaConnections = metaAccessConnections();
           const accountTokens = new Map<string, string>();
           const graph = async <T>(path: string, explicitToken?: string) => {
@@ -8332,6 +8208,7 @@ function localApi(
               path.startsWith("http")
                 ? path
                 : `https://graph.facebook.com/${metaGraphVersion}/${path}${separator}access_token=${encodeURIComponent(accessToken)}`,
+              { signal: AbortSignal.any([metaController.signal, AbortSignal.timeout(20_000)]) },
             );
             const payload = (await result.json()) as T & {
               error?: { message?: string; code?: number };
@@ -8351,7 +8228,7 @@ function localApi(
                 let next: string | undefined = path;
                 while (next) {
                   const page: { data?: T[]; paging?: { next?: string } } =
-                    await graph<{ data?: T[]; paging?: { next?: string } }>(next, connection.token);
+                    await graph<{ data?: T[]; paging?: { next?: string } }>(next, allConnections ? connection.token : undefined);
                   for (const row of page.data || []) {
                     const rowId = (row as { id?: string }).id;
                     if (path.startsWith("me/adaccounts") && rowId) accountTokens.set(rowId, connection.token);
@@ -8417,7 +8294,7 @@ function localApi(
             const accountAdSets = new Map<string, Map<string, Array<{ id: string; name: string; status: string; configuredStatus: string }>>>();
             const accountGeographies = new Map<string, Map<string, Array<{ name: string; level: "REGION" | "CITY" | "NEIGHBORHOOD"; leads: number; clicks: number; spend: number }>>>();
             const campaignLandingPages = new Map<string, string>();
-            for (const item of accountRefs) {
+            await forEachConcurrent(accountRefs, 4, async (item) => {
               const accountDetail = await graph<MetaAccountPayload>(
                 `${item.id}?fields=id,name,currency,amount_spent,spend_cap`,
               );
@@ -8710,7 +8587,8 @@ function localApi(
                 geographyByCampaign.set(region.campaign_id, entries);
               });
               accountGeographies.set(item.id, geographyByCampaign);
-            }
+            });
+            metaController.signal.throwIfAborted();
             const actionValue = (
               actions: MetaAction[] | undefined,
               names: string[],
@@ -8822,21 +8700,23 @@ function localApi(
               },
             }, "META_ADS"));
           } catch (cause) {
-            if (existsSync(localMetaDashboardCachePath)) try {
-              const cached = JSON.parse(readFileSync(localMetaDashboardCachePath, "utf8"));
+            if (storedMetaPeriod)
               return json(response, 200, withCampaignVerifications({
-                ...cached.payload,
-                cache: { status: "stale", cachedAt: cached.cachedAt, nextSyncAt: new Date(Date.now() + mediaSyncIntervalMs).toISOString() },
+                ...storedMetaPeriod,
+                cache: { status: "stale", cachedAt: storedMetaPeriod.syncedAt },
                 syncWarning: cause instanceof Error ? cause.message : "A Meta está temporariamente indisponível.",
               }, "META_ADS"));
-            } catch { /* cache inválido: mantém o erro original */ }
             return json(response, 502, {
               message:
                 cause instanceof Error
                   ? cause.message
                   : "Não foi possível consultar a Meta Ads.",
             });
+          } finally {
+            clearTimeout(metaDeadline);
+            metaController.abort();
           }
+          } finally { releasePeriod(); }
         }
         if (url === "/permissions/catalog" && request.method === "GET") {
           if (!hasPermission(currentUser, "roles.view"))

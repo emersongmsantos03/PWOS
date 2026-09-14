@@ -34,8 +34,7 @@ try {
     result=await fetch(base+'/media/google/campaigns?since=2026-09-01&until=2026-09-07',{headers});
     assert.equal((await result.json()).campaigns[0].spend,20);
     result=await fetch(base+'/media/google/campaigns?since=2026-09-04&until=2026-09-10&fetch_missing=1',{headers});
-    assert.equal(result.status,409);payload=await result.json();assert.equal(payload.code,'MEDIA_PERIOD_NOT_STORED');
-    assert.deepEqual(payload.availablePeriod,{since:'2026-09-01',until:'2026-09-07'});
+    assert.equal(result.status,503);payload=await result.json();assert.ok(payload.missingCredentials.length);
     if(email.startsWith('employee')){
       result=await fetch(base+'/media/google/campaigns?since=2026-09-01&until=2026-09-07&refresh=1&manual=1',{headers});
       assert.equal(result.status,403);
@@ -43,7 +42,7 @@ try {
     await fetch(base+'/auth/logout',{method:'POST',headers});
     snapshot.campaigns[0].spend=10;write('google-dashboard-cache.local.json',snapshot);
   }
-  console.log('PASS: shared data for Master and employee; shared updates; personal periods; no implicit Google refresh; sync permission preserved.');
+  console.log('PASS: shared data for Master and employee; shared updates; personal periods; missing periods reach the backend connection; sync permission preserved.');
 } finally {
   server.kill('SIGTERM');
   await new Promise(resolve=>server.once('exit',resolve));

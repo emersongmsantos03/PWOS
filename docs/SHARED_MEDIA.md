@@ -1,40 +1,41 @@
 # Dados compartilhados de mídia e preferências individuais
 
-A conexão OAuth de Google Ads pertence ao backend. Usuários internos com
-`media.view` consultam o mesmo cache e histórico por plataforma e período.
-Credenciais não são escolhidas pelo usuário conectado. `media.sync` continua
-sendo exigida para uma sincronização manual.
+Google e Meta usam as conexões OAuth mantidas pelo backend. Qualquer usuário interno
+com `media.view` pode selecionar um período e consultar campanhas, comparativos e
+o dashboard sem uma sessão Master ou a permissão `media.sync`.
 
-Abrir a gestão de mídia, alterar datas e consultar comparativos não renova tokens
-nem dispara a importação do Google. Uma sincronização manual autorizada ou a rotina
-interna publica os dados na base compartilhada. A interface consulta a base ao
-recuperar foco e a cada 60 segundos enquanto estiver visível, preservando os filtros.
+O backend reutiliza dados do intervalo exato. Se o período ainda não estiver salvo,
+consulta a plataforma com as credenciais compartilhadas e persiste contas e campanhas
+para os próximos acessos. Consultas simultâneas do mesmo período compartilham o
+carregamento. O cache vale por 15 minutos nos intervalos que incluem o dia atual
+e por 24 horas nos períodos anteriores. A atualização diária continua disponível.
 
-Quando não há dados para o período pedido, o backend responde
-`MEDIA_PERIOD_NOT_STORED` e informa o período do último cache. A tela oferece
-"Ver período salvo"; não apresenta métricas de outra data como se fossem do
-período solicitado. `fetch_missing=1` de clientes antigos não inicia mais uma
-sincronização implícita.
+`media.sync` controla somente atualizações forçadas. `stored=1` e `fetch_missing=1`
+de clientes antigos não impedem o carregamento de um período ausente.
+
+A interface preserva as datas escolhidas. Um erro da plataforma nunca devolve dados
+de outro intervalo. Se existir cache do período exato, ele pode ser retornado com
+um aviso de desatualização; sem cache, a resposta informa a falha da conexão ou da API.
 
 Datas, plataforma, cliente, responsável e preferências da tabela usam chaves de
-localStorage com o ID do usuário. Preferências antigas sem identificação não são
-importadas, pois podem pertencer a outra pessoa no mesmo navegador. A troca de
-usuário também remonta as rotas para descartar o estado da sessão anterior.
+localStorage com o ID do usuário. A troca de usuário remonta as rotas para descartar
+o estado da sessão anterior.
 
-Um token compartilhado expirado requer uma reconexão pelo Master ou por um perfil
-com a permissão `integrations.authorize`. A Central de Conexões exige
-`integrations.view` para acesso; desconectar contas exige `integrations.revoke`. Os dados já
-armazenados permanecem disponíveis a todos os usuários autorizados.
+Conectar ou renovar uma autorização OAuth requer Master ou `integrations.authorize`.
+A Central de Conexões exige `integrations.view`; desconectar exige
+`integrations.revoke`. Consultar campanhas não exige essas permissões.
 
 ## Validação
 
 ```sh
-npx vitest run apps/web/src/mediaPreferences.test.ts apps/web/src/mediaPeriodRequest.test.ts mediaConnectionSummary.test.ts
+npm test
 npm run build
 node scripts/test-shared-media.mjs
+node scripts/test-media-periods.mjs
+node scripts/test-media-permissions.mjs
 ```
 
-O teste de integração cria um diretório temporário e duas sessões (Master e
-colaboradora) em um servidor isolado: verifica igualdade dos dados, leitura de uma
-atualização compartilhada, período ausente sem credenciais e bloqueio de sync sem
-permissão. Não usa contas, dados ou credenciais de produção.
+Os testes usam servidores e dados temporários. O teste de períodos substitui as APIs
+externas por respostas controladas e verifica funcionários sem permissão de sync,
+mês atual, históricos, comparativos, cache persistente, acessos concorrentes e falhas
+dos provedores. Não usa contas ou credenciais de produção.

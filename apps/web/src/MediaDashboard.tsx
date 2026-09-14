@@ -1091,7 +1091,6 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
   const userId = useContext(MediaUserContext);
   const pageRef = useRef<HTMLDivElement>(null);
   const loadRequestRef = useRef(0);
-  const storedBootstrapPlatformsRef = useRef(new Set<MediaView>());
   const todayIso = iso(new Date());
   const urlParams = new URLSearchParams(window.location.search);
   const reportClientFromUrl = urlParams.get("reportClient") || "";
@@ -1203,7 +1202,6 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
       });
     }
   };
-  const [availablePeriod, setAvailablePeriod] = useState<{ since: string; until: string } | null>(null);
   const load = async (force = false, userInitiated = false, quiet = false) => {
     const requestId = ++loadRequestRef.current;
     if (!quiet) setLoading(true);
@@ -1213,7 +1211,6 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
     setData(current => cachedPeriod || (current && current.since === since && current.until === until ? current : null));
     if (!quiet) setManualSyncing(userInitiated);
     setError("");
-    setAvailablePeriod(null);
     try {
       const providers =
           platform === "ALL"
@@ -1223,13 +1220,10 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
           await Promise.all([
             Promise.all(
               providers.map(async (source) => {
-                const useStoredSnapshot = !force && !storedBootstrapPlatformsRef.current.has(source);
-                const response = await fetch(
-                    `/api/media/${source === "META_ADS" ? "meta" : "google"}/campaigns?since=${since}&until=${until}${force ? "&refresh=1" : ""}${source === "GOOGLE_ADS" && userInitiated ? "&manual=1" : ""}${useStoredSnapshot ? "&stored=1" : ""}`,
-                    { signal: AbortSignal.timeout(userInitiated || source === "GOOGLE_ADS" ? 135_000 : 30_000) },
-                  ),
-                  payload = await response.json();
-                if (response.ok) storedBootstrapPlatformsRef.current.add(source);
+                const { response, payload } = await requestMediaPeriod(
+                  `/api/media/${source === "META_ADS" ? "meta" : "google"}/campaigns?since=${since}&until=${until}${force ? "&refresh=1" : ""}${userInitiated ? "&manual=1" : ""}`,
+                  AbortSignal.timeout(255_000),
+                );
                 return { source, response, payload };
               }),
             ),
@@ -1263,8 +1257,6 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
         setCanSync(!!assignmentPayload.canSync);
       }
       if (requestId !== loadRequestRef.current) return;
-      const missingPeriod = mediaResults.find(item => item.payload.code === "MEDIA_PERIOD_NOT_STORED");
-      if (missingPeriod?.payload.availablePeriod) setAvailablePeriod(missingPeriod.payload.availablePeriod);
       if (!successful.length)
         throw new Error(
           mediaResults
@@ -1304,14 +1296,6 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
         while (periodCacheRef.current.size > 4) periodCacheRef.current.delete(periodCacheRef.current.keys().next().value!);
       }
       setData(payload);
-      if (platform !== "ALL" && successful.length === 1) {
-        const servedSince = String(successful[0].payload.since || ""),
-          servedUntil = String(successful[0].payload.until || "");
-        if (/^\d{4}-\d{2}-\d{2}$/.test(servedSince) && /^\d{4}-\d{2}-\d{2}$/.test(servedUntil)) {
-          if (servedSince !== since) setSince(servedSince);
-          if (servedUntil !== until) setUntil(servedUntil);
-        }
-      }
       const failures = mediaResults.filter((item) => !item.response.ok);
       if (failures.length)
         setError(
@@ -1443,8 +1427,6 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
     if (next === platform) return;
     // Cada troca consulta novamente o snapshot compartilhado mais recente do
     // servidor, sem reutilizar dados da outra plataforma ou de outro usuário.
-    if (next === "ALL") storedBootstrapPlatformsRef.current.clear();
-    else storedBootstrapPlatformsRef.current.delete(next);
     setData(periodCacheRef.current.get(`${next}:${since}:${until}`) || null);
     setError("");
     setPlatform(next);
@@ -1743,7 +1725,6 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
             </b>
             <p>{error}</p>
           </div>
-          {availablePeriod && <button onClick={() => { setSince(availablePeriod.since); setUntil(availablePeriod.until); }}>Ver período salvo ({shortDate(availablePeriod.since)} – {shortDate(availablePeriod.until)})</button>}
           <button onClick={() => void load()}>Tentar novamente</button>
         </div>
       )}

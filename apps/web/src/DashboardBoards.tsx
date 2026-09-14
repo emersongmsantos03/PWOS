@@ -104,13 +104,14 @@ function CampaignIntelligenceBoard({user,data}:{user:User;data:Data}){
     const until=iso(end),since=iso(start);
     setCampaignLoading(true);setCampaignError("");
     Promise.allSettled(["meta","google"].map(async provider=>{
-      const {response,payload}=await requestMediaPeriod(`/api/media/${provider}/campaigns?since=${since}&until=${until}${provider==="google"?"&fetch_missing=1":""}`,controller.signal);
-      if(!response.ok)throw new Error(provider);
+      const {response,payload}=await requestMediaPeriod(`/api/media/${provider}/campaigns?since=${since}&until=${until}`,controller.signal);
+      if(!response.ok)throw new Error(`${provider === "meta" ? "Meta Ads" : "Google Ads"}: ${payload.message || "Não foi possível consultar as campanhas."}`);
       return(payload.campaigns||[]).map((item:BoardCampaign)=>({...item,platform:provider==="meta"?"META_ADS":"GOOGLE_ADS"}));
     })).then(results=>{
       if(disposed)return;
       setCampaigns(results.flatMap(result=>result.status==="fulfilled"?result.value:[]));
-      if(results.some(result=>result.status==="rejected"))setCampaignError("Dados de campanhas incompletos. Consulte a Gestão de mídia para atualizar o período.");
+      const failures=results.filter((result): result is PromiseRejectedResult=>result.status==="rejected");
+      if(failures.length)setCampaignError(failures.map(result=>result.reason instanceof Error ? result.reason.message : "Não foi possível carregar as campanhas. Tente novamente.").join(" · "));
     }).finally(()=>{clearTimeout(timeout);if(!disposed)setCampaignLoading(false);});
     return()=>{disposed=true;clearTimeout(timeout);controller.abort();};
   },[user.id]);
