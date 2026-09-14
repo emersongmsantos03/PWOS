@@ -1228,6 +1228,10 @@ function localApi(
     try {
       const cached = JSON.parse(readFileSync(platform === "META_ADS" ? localMetaDashboardCachePath : localGoogleDashboardCachePath, "utf8"));
       latest = platform === "META_ADS" ? { ...cached.payload, schemaVersion: cached.schemaVersion } : cached;
+      if (platform === "META_ADS")
+        Object.entries(cached.pictures || {}).forEach(([id, picture]) => {
+          if (typeof picture === "string") metaAccountPictures.set(id, picture);
+        });
     } catch { /* A missing cache is loaded from the shared connection below. */ }
     const candidates = [latest, readMediaMetricSnapshot(platform, since, until)]
       .filter((item): item is Record<string, any> => !!item && item.schemaVersion === schemaVersion &&
