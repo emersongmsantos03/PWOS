@@ -1,6 +1,15 @@
-import { Component, Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type ErrorInfo, type FormEvent, type ReactNode } from "react";
+import "./ClientAnalysisRefinements.css";
+import { MediaUserContext, mediaPreferenceKey, readMediaPreference } from "./mediaPreferences";
+import { requestMediaPeriod } from "./mediaPeriodRequest";
+import "./SimpleClientTable.css";
+import { portfolioMetrics } from "./portfolioMetrics";
+import "./PortfolioTotals.css";
+import { MetaLogo, GoogleAdsLogo } from "./PlatformLogos";
+import { Component, Fragment, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ErrorInfo, type FormEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
+  Settings2,
+  ArrowUpRight,
   Activity,
   AlertTriangle,
   BarChart3,
@@ -189,12 +198,12 @@ type ClientGroup = {
 
 const iso = (date: Date) => date.toISOString().slice(0, 10);
 const initialSince = () => iso(new Date(Date.now() - 6 * 86400000));
-const savedMediaContext = () => {
-  try { return JSON.parse(localStorage.getItem("pw-os-media-context") || "{}") as { platform?: MediaView; since?: string; until?: string; client?: string; responsible?: string }; }
+const savedMediaContext = (userId: string) => {
+  try { return readMediaPreference(localStorage, userId, "pw-os-media-context", {}) as { platform?: MediaView; since?: string; until?: string; client?: string; responsible?: string }; }
   catch { return {}; }
 };
-const safeSavedMediaPeriod = () => {
-  const saved = savedMediaContext(), today = iso(new Date());
+const safeSavedMediaPeriod = (userId: string) => {
+  const saved = savedMediaContext(userId), today = iso(new Date());
   const until = /^\d{4}-\d{2}-\d{2}$/.test(saved.until || "") && saved.until! <= today
     ? saved.until!
     : today;
@@ -203,12 +212,12 @@ const safeSavedMediaPeriod = () => {
     : initialSince();
   return { since, until };
 };
-const savedCampaignFilters = () => {
-  try { return JSON.parse(localStorage.getItem("pw-os-campaign-filters") || "{}") as Record<string, string>; }
+const savedCampaignFilters = (userId: string) => {
+  try { return readMediaPreference(localStorage, userId, "pw-os-campaign-filters", {}) as Record<string, string>; }
   catch { return {}; }
 };
-const savedCampaignTablePreferences = () => {
-  try { return JSON.parse(localStorage.getItem("pw-os-campaign-table-preferences") || "{}") as { compact?: boolean; visibleMetrics?: { balance?: boolean; impressions?: boolean; clicks?: boolean; ctr?: boolean; review?: boolean } }; }
+const savedCampaignTablePreferences = (userId: string) => {
+  try { return readMediaPreference(localStorage, userId, "pw-os-campaign-table-preferences", {}) as { compact?: boolean; visibleMetrics?: { balance?: boolean; impressions?: boolean; clicks?: boolean; ctr?: boolean; review?: boolean } }; }
   catch { return {}; }
 };
 const shortDate = (value: string) => new Date(`${value}T12:00:00`).toLocaleDateString("pt-BR");
@@ -376,21 +385,9 @@ function PlatformMark({ platform }: { platform: "META_ADS" | "GOOGLE_ADS" }) {
     >
       <span className="platform-mark-icon" aria-hidden="true">
         {isMeta ? (
-          <svg viewBox="0 0 48 30">
-            <path d="M4 23.5C7.8 8.5 12.4 3 18 3c7.8 0 12.6 18 18 18 3.1 0 5.4-4.5 5.4-9.2C41.4 6.2 39.1 3 35.8 3 30 3 25 20.8 17.4 20.8 13 20.8 10 13 7.3 13 5.6 13 4.6 17.1 4 23.5Z" />
-          </svg>
+          <MetaLogo />
         ) : (
-          <svg viewBox="0 0 34 34">
-            <path
-              className="google-blue"
-              d="M14.7 4.1a4.3 4.3 0 0 1 7.5 0l9.1 16a4.3 4.3 0 0 1-7.5 4.3l-9.1-16a4.3 4.3 0 0 1 0-4.3Z"
-            />
-            <path
-              className="google-green"
-              d="M14.9 4.2 2.7 25.4a4.3 4.3 0 0 0 7.5 4.3L22.4 8.5a4.3 4.3 0 0 0-7.5-4.3Z"
-            />
-            <circle className="google-yellow" cx="6.4" cy="27.5" r="4.3" />
-          </svg>
+          <GoogleAdsLogo />
         )}
       </span>
       <span className="platform-mark-copy">
@@ -416,11 +413,11 @@ function MediaPlatformSwitch({
   return (
     <nav className={`comparison-platform-switch ${className}`.trim()} aria-label="Plataforma de anúncios">
       <button type="button" className={platform === "META_ADS" ? "active" : ""} onClick={() => onPlatformChange("META_ADS")}>
-        <span className="meta-ads-symbol" aria-hidden="true">∞</span>
+        <span className="meta-ads-symbol" aria-hidden="true"><MetaLogo /></span>
         <span><b>Meta Ads</b><small>{metaDetail}</small></span>
       </button>
       <button type="button" className={platform === "GOOGLE_ADS" ? "active" : ""} onClick={() => onPlatformChange("GOOGLE_ADS")}>
-        <span className="google-ads-symbol" aria-hidden="true"><svg viewBox="0 0 34 34"><path className="google-blue" d="M14.7 4.1a4.3 4.3 0 0 1 7.5 0l9.1 16a4.3 4.3 0 0 1-7.5 4.3l-9.1-16a4.3 4.3 0 0 1 0-4.3Z"/><path className="google-green" d="M14.9 4.2 2.7 25.4a4.3 4.3 0 0 0 7.5 4.3L22.4 8.5a4.3 4.3 0 0 0-7.5-4.3Z"/><circle className="google-yellow" cx="6.4" cy="27.5" r="4.3"/></svg></span>
+        <span className="google-ads-symbol" aria-hidden="true"><GoogleAdsLogo /></span>
         <span><b>Google Ads</b><small>{googleDetail}</small></span>
       </button>
     </nav>
@@ -572,6 +569,21 @@ function CampaignAds({ campaign }: { campaign: Campaign }) {
     </section>
   );
 }
+function campaignTypeLabel(campaign: Campaign) {
+  if (campaign.platform === "GOOGLE_ADS") return objectiveLabel(campaign.objective);
+  return isBoostedPost(campaign) ? "Impulsionada" : "Campanha";
+}
+function campaignObjectiveLabel(campaign: Campaign) {
+  return campaign.platform === "GOOGLE_ADS" ? "Não disponibilizado" : objectiveLabel(campaign.objective);
+}
+
+function LandingPageIcon({ url, status }: { url?: string | null; status?: Campaign["landingPageStatus"] }) {
+  const state = url ? status || "UNKNOWN" : "UNKNOWN";
+  const label = !url ? "Landing page não informada" : state === "ACTIVE" ? "Landing page ativa" : state === "INACTIVE" ? "Landing page inativa" : "Landing page com status não verificado";
+  const className = `simple-landing-status ${state.toLowerCase()}`;
+  return url ? <a className={className} href={url} target="_blank" rel="noreferrer" aria-label={`${label}: ${url}`} title={`${label}: ${url}`}><Globe2/></a> : <span className={className} role="img" aria-label={label} title={label}><Globe2/></span>;
+}
+
 function ClientCampaignGroup({
   group,
   initialOpen,
@@ -618,91 +630,85 @@ function ClientCampaignGroup({
     [saved, setSaved] = useState(false),
     [linkError, setLinkError] = useState(""),
     [verifyingId, setVerifyingId] = useState("");
-  const showAdvancedMetrics = true;
-  const selectedClient = clients.find((item) => item.id === clientId),
-    selectedResponsible = users.find((item) => item.id === responsibleId),
+  const [draftClientId, setDraftClientId] = useState(clientId);
+  const [draftResponsibleId, setDraftResponsibleId] = useState(responsibleId);
+  const editAssignment = () => {
+    setDraftClientId(clientId); setDraftResponsibleId(responsibleId);
+    setLinkError(""); setSaved(false); setLinkOpen(true);
+  };
+  const [clientAnalysisOpen, setClientAnalysisOpen] = useState(false);
+  useEffect(() => {
+    if (!clientAnalysisOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") setClientAnalysisOpen(false); };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [clientAnalysisOpen]);
+  const selectedClient = clients.find(item => item.id === clientId),
+    selectedResponsible = users.find(item => item.id === responsibleId),
     linkedClientId = selectedClient?.id || group.client?.id || "",
     portfolioName = accountLabel(group.account),
-    name =
-      clientId === META_PORTFOLIO
-        ? portfolioName === "Cliente não vinculado"
-          ? "Nome do portfólio indisponível"
-          : portfolioName
-        : selectedClient?.name || group.client?.name || portfolioName;
-  const groupPlatforms = [...new Set(group.campaigns.map((campaign) => campaign.platform || "META_ADS"))];
-  const cpl = group.totals.leads
-    ? group.totals.spend / group.totals.leads
-    : null;
-  const scoredCampaigns = group.campaigns
-      .map(campaignScore)
-      .filter((score) => score >= 0),
-    portfolioScore = scoredCampaigns.length
-      ? Math.round(
-          scoredCampaigns.reduce((sum, score) => sum + score, 0) /
-            scoredCampaigns.length,
-        )
-      : -1;
+    name = clientId === META_PORTFOLIO
+      ? portfolioName === "Cliente não vinculado" ? "Nome do portfólio indisponível" : portfolioName
+      : selectedClient?.name || group.client?.name || portfolioName;
+  const groupPlatforms = [...new Set(group.campaigns.map(item => item.platform || "META_ADS"))];
+  const scoredCampaigns = group.campaigns.map(campaignScore).filter(score => score >= 0);
+  const portfolioScore = scoredCampaigns.length ? Math.round(scoredCampaigns.reduce((sum, score) => sum + score, 0) / scoredCampaigns.length) : -1;
   return (
-    <article
-      className={`traffic-client-group ${platform === "META_ADS" ? "platform-meta" : "platform-google"} ${open ? "open" : ""} ${linkOpen ? "link-editing" : ""}`}
-    >
-      <div
-        className="traffic-client-summary"
-        onClick={() => setOpen((value) => !value)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            setOpen((value) => !value);
-          }
-        }}
-        role="button"
-        tabIndex={0}
-        aria-expanded={open}
-      >
-        <ClientAvatar name={name} picture={group.account.profilePictureUrl} />
-        <div className="traffic-client-identity">
-          <span className="traffic-client-name-row">
-            <h2>{name}</h2>
-            {group.client && <i>Cliente PW</i>}
-          </span>
-          <CampaignClientCode
-            portfolioId={group.account.businessPortfolioId}
-            accountId={group.account.id}
-            platform={platform}
-          />
-          <p>{group.client?.segment || group.account.currency}</p>
-          <small>
-            {group.accounts.length} conta(s) · {group.campaigns.length}{" "}
-            campanhas · {group.active} ativas · {group.delivered} com entrega no
-            período
-          </small>
-        </div>
-        <div className="traffic-client-quick">
-          <GroupStat
-            label="Investimento"
-            value={money(group.totals.spend, group.account.currency)}
-          />
-          <GroupStat label="Leads" value={number(group.totals.leads)} />
-          <GroupStat
-            label="CPL médio"
-            value={cpl === null ? "—" : money(cpl, group.account.currency)}
-          />
-          <ScoreGauge
-            score={portfolioScore}
-            label="Score do portfólio"
-            compact
-            portfolioCampaigns={group.campaigns}
-            coverage={{ evaluated: scoredCampaigns.length, total: group.campaigns.length }}
-          />
-        </div>
-        {showPlatform && (
-          <span className="traffic-client-platform-corner">
-            <PlatformMark platform={platform} />
-          </span>
-        )}
-        <ChevronDown />
+    <article className={`simple-client-table ${open ? "open" : ""}`}>
+      <div className="simple-table-scroll">
+        <table>
+          <colgroup><col className="simple-name-column"/>{Array.from({length:16}, (_,index) => <col key={index}/>)}</colgroup>
+          <thead><tr>{["Cliente / campanha", "Tipo", "Objetivo", "Rede", "Status", "Landing page", "Inv. diário", "Impressões", "Cliques", "CTR", "CPC", "Conversões", "Custo", "Saldo", "Score", "Responsável", "Análise"].map(label => <th key={label}>{label}</th>)}</tr></thead>
+          <tbody>
+          {(portfolioMetrics(group.campaigns)).map((total) => {
+            const amount = (value: number | null) => value == null ? "—" : money(value,total.currency);
+            return <tr className="simple-client-row" key={total.currency} onClick={event => {
+              if ((event.target as HTMLElement).closest('button, a, input, select, textarea, [role="button"], .score-reason-popover')) return;
+              if (window.getSelection()?.toString()) return;
+              setOpen(value => !value);
+            }}>
+              <td><div className="simple-client-name"><button type="button" className="simple-expand" aria-expanded={open} aria-label={`${open ? "Recolher" : "Expandir"} campanhas de ${name}`} onClick={() => setOpen(value => !value)}><ChevronDown/></button><span><b title={name}>{name}</b><small>{group.campaigns.length} campanhas · {total.currency}</small></span>{canManage && <button type="button" className="simple-edit assignment-edit-trigger" title="Editar cliente e responsável" aria-label={`Editar vínculo de ${name}`} onClick={editAssignment}><Settings2/> <span>Editar</span></button>}</div></td>
+              <td><span className="simple-campaign-type">{[...new Set(group.campaigns.map(item => campaignTypeLabel(item)))].join(" · ") || "—"}</span></td>
+              <td><span className="simple-campaign-objective" title="Objetivos informados pela plataforma; o Google não disponibiliza o objetivo selecionado na interface.">{[...new Set(group.campaigns.map(campaignObjectiveLabel))].join(" · ") || "—"}</span></td>
+              <td><span className="portfolio-network-list">{groupPlatforms.map(network => <span key={network} className="portfolio-network-icon" role="img" aria-label={network === "GOOGLE_ADS" ? "Google Ads" : "Meta Ads"} title={network === "GOOGLE_ADS" ? "Google Ads" : "Meta Ads"}>{network === "GOOGLE_ADS" ? <GoogleAdsLogo/> : <MetaLogo/>}</span>)}</span></td>
+              <td><span className={`simple-status ${group.active ? "active" : "inactive"}`}>{group.active === group.campaigns.length ? "Ativa" : group.active > 0 ? "Misto" : "Inativa"}</span></td>
+              <td>{[...new Set(group.campaigns.map(item => item.landingPageUrl).filter((url): url is string => !!url))].map(url => {
+                const statuses = group.campaigns.filter(item => item.landingPageUrl === url).map(item => item.landingPageStatus);
+                const status = statuses.includes("INACTIVE") ? "INACTIVE" : statuses.every(value => value === "ACTIVE") ? "ACTIVE" : "UNKNOWN";
+                return <LandingPageIcon key={url} url={url} status={status}/>;
+              })}{!group.campaigns.some(item => item.landingPageUrl) && <LandingPageIcon/>}</td>
+              <td><span className="simple-value simple-money">{amount(total.dailyBudget)}</span></td><td><span className="simple-value simple-volume">{number(total.impressions)}</span></td><td><span className="simple-value simple-clicks">{number(total.clicks)}</span></td>
+              <td><span className="simple-value simple-rate">{total.ctr == null ? "—" : `${number(total.ctr,2)}%`}</span></td><td><span className="simple-value simple-rate">{amount(total.cpc)}</span></td><td><span className="simple-value simple-rate">{number(total.leads)}</span></td>
+              <td><span className="simple-value simple-money">{amount(total.spend)}</span></td><td><span className="simple-value simple-volume">{amount(total.remainingBudget)}</span></td>
+              <td><ScoreGauge score={portfolioScore} label="Cliente" compact portfolioCampaigns={group.campaigns}/></td>
+              <td><span className="simple-responsible" title={selectedResponsible?.name || "Não atribuído"}><ResponsibleAvatar user={selectedResponsible}/><span>{selectedResponsible?.name || "Não atribuído"}</span></span></td>
+              <td><button type="button" className="campaign-analyze" onClick={() => setClientAnalysisOpen(true)}>Analisar</button></td>
+            </tr>;
+          })}
+          {open && (<>{group.campaigns.map(item => <Fragment key={`${item.platform}:${item.id}`}>
+                <tr className={`simple-campaign-row ${scoreTone(campaignScore(item))}`}>
+                  <td><span className="simple-child-name"><span aria-hidden="true">↳</span><b title={item.name}>{item.name}</b></span><button type="button" className="campaign-assets-trigger" onClick={() => setOpenCampaignId(current => current === item.id ? "" : item.id)}><Eye/> {openCampaignId === item.id ? "Fechar anúncios" : "Ver anúncios"}</button></td>
+                  <td><span className="simple-campaign-type">{campaignTypeLabel(item)}</span></td>
+                  <td><span className="simple-campaign-objective" title={item.platform === "GOOGLE_ADS" ? "O Google não disponibiliza pela API o objetivo selecionado na interface." : "Objetivo informado pela Meta"}>{campaignObjectiveLabel(item)}</span></td>
+                  <td><span className="portfolio-network-icon" role="img" aria-label={item.platform === "GOOGLE_ADS" ? "Google Ads" : "Meta Ads"} title={item.platform === "GOOGLE_ADS" ? "Google Ads" : "Meta Ads"}>{item.platform === "GOOGLE_ADS" ? <GoogleAdsLogo/> : <MetaLogo/>}</span></td>
+                  <td><CampaignDeliveryStatus campaign={item}/></td>
+                  <td><LandingPageIcon url={item.landingPageUrl} status={item.landingPageStatus}/></td>
+                  <td><span className="simple-value simple-money">{item.dailyBudget > 0 ? money(item.dailyBudget,item.currency) : "—"}</span></td>
+                  <td><span className="simple-value simple-volume">{number(item.impressions)}</span></td><td><span className="simple-value simple-clicks">{number(item.clicks)}</span></td>
+                  <td><span className="simple-value simple-rate">{item.impressions > 0 ? `${number(item.clicks / item.impressions * 100,2)}%` : "—"}</span></td>
+                  <td><span className="simple-value simple-rate">{item.clicks > 0 ? money(item.spend / item.clicks,item.currency) : "—"}</span></td>
+                  <td><span className="simple-value simple-rate">{number(item.leads)}</span></td><td><span className="simple-value simple-money">{money(item.spend,item.currency)}</span></td>
+                  <td><span className="simple-value simple-volume">{item.remainingBudget == null ? "—" : money(Math.max(0,item.remainingBudget),item.currency)}</span></td>
+                  <td><ScoreGauge score={campaignScore(item)} label="Campanha" compact campaign={item}/></td>
+                  <td><span className="simple-responsible" title={selectedResponsible?.name || "Não atribuído"}><ResponsibleAvatar user={selectedResponsible}/><span>{selectedResponsible?.name || "Não atribuído"}</span></span></td>
+                  <td><button type="button" className="campaign-analyze" onClick={() => onAnalyze(item)}><BarChart3/> Analisar</button></td>
+                </tr>
+                {openCampaignId === item.id && <tr className="campaign-assets-row"><td colSpan={17}><CampaignAds campaign={item}/></td></tr>}
+              </Fragment>)}</>)}
+          </tbody>
+        </table>
       </div>
-      <section className={`media-account-links ${linkOpen ? "editing" : ""}`}>
+      {linkOpen && (<>      <section className={`media-account-links ${linkOpen ? "editing" : ""}`}>
         <div className="media-link-summary">
           <div>
             <span className={clientId ? "linked" : ""}>
@@ -745,7 +751,7 @@ function ClientCampaignGroup({
           <div className="media-link-editor">
             <header>
               <div>
-                <h3>Vincular conta</h3>
+                <h3>Editar cliente e responsável</h3>
                 <p>
                   Escolha o cliente e o funcionário responsável pela operação de mídia.
                 </p>
@@ -770,9 +776,9 @@ function ClientCampaignGroup({
                 </span>
                 <div className="media-link-select">
                   <select
-                    value={clientId}
+                    value={draftClientId}
                     onChange={(event) => {
-                      setClientId(event.target.value);
+                      setDraftClientId(event.target.value);
                       setSaved(false);
                       setLinkError("");
                     }}
@@ -806,9 +812,9 @@ function ClientCampaignGroup({
                 </span>
                 <div className="media-link-select">
                   <select
-                    value={responsibleId}
+                    value={draftResponsibleId}
                     onChange={(event) => {
-                      setResponsibleId(event.target.value);
+                      setDraftResponsibleId(event.target.value);
                       setSaved(false);
                       setLinkError("");
                     }}
@@ -850,18 +856,20 @@ function ClientCampaignGroup({
                   setLinkError("");
                   try {
                     const identitySource =
-                      clientId === META_PORTFOLIO
+                      draftClientId === META_PORTFOLIO
                         ? "META_PORTFOLIO"
-                        : clientId
+                        : draftClientId
                           ? "CLIENT"
                           : "UNLINKED";
                     await Promise.all(groupPlatforms.map((source) => onAssign(
                       source,
                       [...new Set(group.campaigns.filter((campaign) => (campaign.platform || "META_ADS") === source).map((campaign) => campaign.accountId))],
-                      clientId === META_PORTFOLIO ? "" : clientId,
-                      responsibleId,
+                      draftClientId === META_PORTFOLIO ? "" : draftClientId,
+                      draftResponsibleId,
                       identitySource,
                     )));
+                    setClientId(draftClientId);
+                    setResponsibleId(draftResponsibleId);
                     setSaved(true);
                     setLinkOpen(false);
                   } catch (cause) {
@@ -885,7 +893,7 @@ function ClientCampaignGroup({
                   </>
                 ) : (
                   <>
-                    <CheckCircle2 /> Salvar vínculo
+                    <CheckCircle2 /> Salvar alterações
                   </>
                 )}
               </button>
@@ -893,223 +901,8 @@ function ClientCampaignGroup({
           </div>
         )}
       </section>
-      {open && (
-        <div className="traffic-client-body">
-          <section className="portfolio-compact-context"><div className="portfolio-compact-kpis">
-            <GroupStat
-              label="Investimento"
-              value={money(group.totals.spend, group.account.currency)}
-              detail={`${group.delivered} com entrega`}
-            />
-            <GroupStat
-              label="Alcance"
-              value={
-                group.totals.reachAvailable
-                  ? number(group.totals.reach)
-                  : "Indisponível"
-              }
-              detail={
-                group.totals.reachAvailable
-                  ? "Usuários únicos"
-                  : "Não fornecido"
-              }
-            />
-            <GroupStat
-              label="Impressões"
-              value={number(group.totals.impressions)}
-              detail={
-                group.totals.reachAvailable && group.totals.reach
-                  ? `${number(group.totals.impressions / group.totals.reach, 2)} frequência`
-                  : "Sem frequência"
-              }
-            />
-            <GroupStat
-              label="Cliques"
-              value={number(group.totals.clicks)}
-              detail={`${number(group.totals.impressions ? (group.totals.clicks / group.totals.impressions) * 100 : 0, 2)}% CTR`}
-            />
-            <GroupStat
-              label="Conversas"
-              value={number(group.totals.conversations)}
-              detail="Iniciadas"
-            />
-          </div><div className="portfolio-compact-accounts">{group.accounts.map((account) => <article key={`${account.platform || platform}:${account.id}`}><PlatformMark platform={account.platform || platform}/><span><b>{account.name}</b><small>ID {account.id.replace(/^act_|^google_/, "")}{account.businessPortfolioId ? ` · Portfólio ${account.businessPortfolioId}` : ""}</small></span><dl><div><dt>Moeda</dt><dd>{account.currency}</dd></div><div><dt>Gasto</dt><dd>{money(account.amountSpent, account.currency)}</dd></div><div><dt>Limite</dt><dd>{account.spendCap > 0 ? money(account.spendCap, account.currency) : "Não informado"}</dd></div></dl></article>)}</div></section>
-          <div className="portfolio-table-mode"><span><b>Campanhas do portfólio</b><small>Todas as métricas disponíveis em uma única visão</small></span></div>
-          <div className="traffic-group-table">
-            <table>
-              <thead>
-                <tr>
-                  <th>Campanha</th>
-                  {showAdvancedMetrics && <th>Tipo</th>}
-                  {showAdvancedMetrics && <th>Objetivo</th>}
-                  <th>Plataforma</th>
-                  <th>Status</th>
-                  <th>Orçamento diário</th>
-                  <th>Orçamento total</th>
-                  <th>Investimento</th>
-                  {showAdvancedMetrics && <th>Saldo restante</th>}
-                  <th>Dias estimados de saldo</th>
-                  <th>Resultados</th>
-                  <th>Conversas</th>
-                  <th>Custo por resultado</th>
-                  {showAdvancedMetrics && <th>Alcance</th>}
-                  <th>Impressões</th>
-                  {showAdvancedMetrics && <th>Cliques</th>}
-                  <th>CTR</th>
-                  <th>CPC</th>
-                  <th>CPM</th>
-                  <th className="metric-centered">Conversão clique → lead</th>
-                  <th className="metric-centered">Frequência</th>
-                  <th>Posição no leilão</th>
-                  <th>Otimização</th>
-                  {showAdvancedMetrics && <th>Landing page</th>}
-                  <th>Anúncios e criativos</th>
-                  <th>Termos</th>
-                  <th>Geografia</th>
-                  <th>Última otimização</th>
-                  <th>Última revisão</th>
-                  <th>Score da campanha</th>
-                  <th>Revisão e análise</th>
-                </tr>
-              </thead>
-              <tbody>
-                {group.campaigns.map((item) => (
-                  <Fragment key={item.id}>
-                  <tr
-                    className={`${hasDelivery(item) ? "" : "no-delivery"} performance-row ${scoreTone(campaignScore(item))}`}
-                  >
-                    <td>
-                      <b>{item.name}</b>
-                      <small>
-                        {hasDelivery(item)
-                          ? `${item.platform === "GOOGLE_ADS" ? "Google Ads" : "Meta Ads"} · Campanha ${item.id}`
-                          : "Sem veiculação no período"}
-                      </small>
-                      <div className="campaign-assets-line"><button type="button" className="campaign-assets-trigger" aria-expanded={openCampaignId === item.id} onClick={() => setOpenCampaignId((current) => current === item.id ? "" : item.id)}><Eye /> {openCampaignId === item.id ? "Fechar anúncios" : `Ver anúncios e criativos (${item.ads?.length || 0})`}</button><CampaignAdsHealth ads={item.ads}/></div>
-                    </td>
-                    {showAdvancedMetrics && <td>
-                      <span
-                        className={`campaign-kind ${isBoostedPost(item) ? "boosted" : "structured"}`}
-                      >
-                        {isBoostedPost(item)
-                          ? "Publicação impulsionada"
-                          : "Campanha"}
-                      </span>
-                    </td>}
-                    {showAdvancedMetrics && <td>{objectiveLabel(item.objective)}</td>}
-                    <td><PlatformMark platform={item.platform || "META_ADS"}/></td>
-                    <td><CampaignDeliveryStatus campaign={item}/></td>
-                    <td><b>{item.dailyBudget > 0 ? money(item.dailyBudget,item.currency) : "Não informado"}</b><small>limite por dia</small></td>
-                    <td><b>{item.lifetimeBudget > 0 ? money(item.lifetimeBudget,item.currency) : "Não informado"}</b><small>limite da campanha</small></td>
-                    <td>
-                      <b>{money(item.spend, item.currency)}</b>
-                      {item.dailyBudget > 0 && (
-                        <small>
-                          {money(item.dailyBudget, item.currency)}/dia
-                        </small>
-                      )}
-                    </td>
-                    {showAdvancedMetrics && <td>
-                      <b>{item.remainingBudget == null ? "—" : money(Math.max(0, item.remainingBudget), item.currency)}</b>
-                      <small>{item.remainingBudget == null ? "Não informado pela plataforma" : "Saldo atual da campanha"}</small>
-                    </td>}
-                    <td><b>{item.remainingBudget != null && item.dailyBudget > 0 ? number(Math.max(0,item.remainingBudget) / item.dailyBudget,1) : "Indisponível"}</b><small>{item.remainingBudget != null && item.dailyBudget > 0 ? "dias no orçamento atual" : "requer saldo e orçamento diário"}</small></td>
-                    <td>
-                      <b>{number(item.leads || item.conversations)}</b>
-                      <small>
-                        {item.leads
-                          ? "Leads"
-                          : item.conversations
-                            ? "Conversas"
-                            : "Sem resultado"}
-                      </small>
-                    </td>
-                    <td><b>{number(item.conversations)}</b><small>conversas iniciadas</small></td>
-                    <td>
-                      {item.cpl === null ? "—" : money(item.cpl, item.currency)}
-                    </td>
-                    {showAdvancedMetrics && <td>
-                      {item.reach >= 0 ? number(item.reach) : "Indisponível"}
-                    </td>}
-                    <td>{number(item.impressions)}</td>
-                    {showAdvancedMetrics && <td>{number(item.clicks)}</td>}
-                    <td>{item.impressions ? `${number((item.clicks / item.impressions) * 100,2)}%` : "—"}</td>
-                    <td>{item.clicks ? money(item.spend / item.clicks,item.currency) : "—"}</td>
-                    <td>{item.impressions ? money((item.spend / item.impressions) * 1000,item.currency) : "—"}</td>
-                    <td className="metric-centered">{item.clicks ? `${number((item.leads / item.clicks) * 100,2)}%` : "—"}</td>
-                    <td className="metric-centered">{item.frequency >= 0 ? number(item.frequency,2) : "Indisponível"}</td>
-                    <td>{item.auctionPosition || "Não disponibilizada"}</td>
-                    <td>{item.optimizationStatus || "Não disponibilizada"}</td>
-                    {showAdvancedMetrics && <td>
-                      <span className={`campaign-state lp-${(item.landingPageStatus || "UNKNOWN").toLowerCase()}`}>
-                        {item.landingPageStatus === "ACTIVE"
-                          ? "Online"
-                          : item.landingPageStatus === "INACTIVE"
-                            ? "Offline"
-                            : "Não localizada"}
-                      </span>
-                      {item.landingPageUrl && (
-                        <a
-                          className="campaign-lp-link"
-                          href={item.landingPageUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          title={item.landingPageUrl}
-                          aria-label={`Abrir landing page de ${item.name}`}
-                        >
-                          <Globe2 /> Abrir
-                        </a>
-                      )}
-                    </td>}
-                    <td><b>{item.ads?.length || 0} anúncio(s)</b><small>{(item.ads || []).reduce((sum,ad) => sum + ad.creatives.length,0)} recurso(s) criativo(s)</small></td>
-                    <td><b>{item.searchTerms?.length || 0}</b><small>{item.searchTerms?.[0]?.term || (item.platform === "GOOGLE_ADS" ? "nenhum termo retornado" : "disponível no Google Ads")}</small></td>
-                    <td><b>{item.geography?.length || 0}</b><small>{item.geography?.[0]?.name || "nenhuma localização retornada"}</small></td>
-                    <td><b>{item.optimizationHistory?.at(-1)?.value || item.optimizationStatus || "Sem histórico"}</b><small>{item.optimizationHistory?.at(-1)?.capturedAt ? new Date(item.optimizationHistory.at(-1)!.capturedAt).toLocaleDateString("pt-BR") : "aguardando sincronização"}</small></td>
-                    <td><b>{item.verifiedAt ? new Date(item.verifiedAt).toLocaleDateString("pt-BR") : "Pendente"}</b><small>{item.verificationHistory?.length || 0} registro(s) no histórico</small></td>
-                    <td>
-                      <ScoreGauge
-                        score={campaignScore(item)}
-                        label="Campanha"
-                        compact
-                        campaign={item}
-                      />
-                    </td>
-                    <td>
-                      <div className="portfolio-campaign-actions">
-                        <button type="button" className="campaign-analyze" onClick={() => onAnalyze(item)}><BarChart3 /> Analisar</button>
-                        {verificationDue(item) ? (
-                          <button
-                            type="button"
-                            className="campaign-mark-analyzed"
-                            disabled={verifyingId === item.id}
-                            onClick={async () => {
-                              setVerifyingId(item.id);
-                              try { await onVerify(item); } finally { setVerifyingId(""); }
-                            }}
-                          >
-                            {verifyingId === item.id ? <RefreshCw className="spin" /> : <CheckCircle2 />}
-                            {verifyingId === item.id ? "Salvando…" : "Marcar analisada"}
-                          </button>
-                        ) : (
-                          <span className="campaign-analyzed-state"><CheckCircle2 /> Analisada <small>fica pendente novamente em 7 dias</small></span>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                  {openCampaignId === item.id && (
-                    <tr className="campaign-assets-row">
-                      <td colSpan={31}>
-                        <CampaignAds campaign={item} />
-                      </td>
-                    </tr>
-                  )}
-                  </Fragment>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
+</>)}
+      {clientAnalysisOpen && createPortal(<div className="campaign-ad-modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setClientAnalysisOpen(false); }}><section className="campaign-ad-modal client-analysis-dialog" role="dialog" aria-modal="true" aria-label={`Análise de ${name}`}><header><div><h2>Análise de {name}</h2></div><button type="button" autoFocus aria-label="Fechar análise" onClick={() => setClientAnalysisOpen(false)}><X/></button></header><div className="portfolio-client-analysis"><div className="client-analysis-overview"><div><span className="client-analysis-eyebrow">Visão geral do cliente</span><p>{group.campaigns.length} campanhas <span>·</span> {group.active} ativas</p><div className="client-analysis-owner"><ResponsibleAvatar user={selectedResponsible}/><span>{selectedResponsible?.name || "Responsável não atribuído"}</span>{canManage && <button type="button" onClick={() => { setClientAnalysisOpen(false); editAssignment(); }}>Editar vínculo <Settings2/></button>}</div></div><div className={`client-analysis-score ${scoreTone(portfolioScore)}`}><span>Score do cliente</span><strong>{portfolioScore < 0 ? "—" : portfolioScore}<small>/100</small></strong><span>{toneLabel[scoreTone(portfolioScore)]}</span></div></div>{portfolioMetrics(group.campaigns).map(total => <div className="portfolio-total-grid" key={total.currency}>{[["Investimento diário", total.dailyBudget == null ? "—" : money(total.dailyBudget,total.currency)], ["Impressões", number(total.impressions)], ["Cliques", number(total.clicks)], ["CTR", total.ctr == null ? "—" : `${number(total.ctr,2)}%`], ["CPC", total.cpc == null ? "—" : money(total.cpc,total.currency)], ["Conversões", number(total.leads)], ["Custo", money(total.spend,total.currency)], ["Saldo", total.remainingBudget == null ? "—" : money(total.remainingBudget,total.currency)]].map(([label,value]) => <div key={label}><small>{label}</small><b>{value}</b></div>)}</div>)}<h3>Campanhas do cliente</h3>{group.campaigns.map(item => <div className="portfolio-analysis-campaign" key={`${item.platform}:${item.id}`}><b>{item.name}</b><span className="client-campaign-score">{campaignScore(item) < 0 ? "Sem avaliação" : `Score ${campaignScore(item)}`}</span><button type="button" className="client-analysis-action" aria-label={`Analisar campanha ${item.name}`} onClick={() => { setClientAnalysisOpen(false); onAnalyze(item); }}>Ver análise <ArrowUpRight/></button></div>)}</div></section></div>, document.body)}
     </article>
   );
 }
@@ -1258,11 +1051,7 @@ function ClientAccessModal({
 function GoogleAdsEmpty() {
   return (
     <section className="traffic-platform-empty">
-      <span className="google-ads-symbol">
-        <i />
-        <i />
-        <i />
-      </span>
+      <span className="google-ads-symbol"><GoogleAdsLogo /></span>
       <h2>Google Ads ainda não conectado</h2>
       <p>
         Quando a autorização for configurada, clientes, contas e campanhas
@@ -1298,18 +1087,11 @@ const normalizeMetaCampaignResults = (campaign: Campaign): Campaign => {
   };
 };
 
-const normalizeCachedPayload = (payload: Payload): Payload => ({
-  ...payload,
-  campaigns: (payload.campaigns || []).map((campaign) =>
-    (campaign.platform || "META_ADS") === "META_ADS"
-      ? normalizeMetaCampaignResults(campaign)
-      : campaign,
-  ),
-});
-
 export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "CLIENTS" | "CAMPAIGNS" | "COMPILED" | "REPORTS" | "HISTORY" }) {
+  const userId = useContext(MediaUserContext);
   const pageRef = useRef<HTMLDivElement>(null);
   const loadRequestRef = useRef(0);
+  const storedBootstrapPlatformsRef = useRef(new Set<MediaView>());
   const todayIso = iso(new Date());
   const urlParams = new URLSearchParams(window.location.search);
   const reportClientFromUrl = urlParams.get("reportClient") || "";
@@ -1317,7 +1099,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
   const [platform, setPlatform] = useState<MediaView>(() => {
     if (section === "REPORTS" || section === "HISTORY") return "ALL";
     if (section === "COMPILED") return "META_ADS";
-    const savedPlatform = savedMediaContext().platform;
+    const savedPlatform = savedMediaContext(userId).platform;
     return savedPlatform === "GOOGLE_ADS" ? "GOOGLE_ADS" : "META_ADS";
   });
   const mediaMode = section;
@@ -1330,23 +1112,13 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
   const [reportIncludeThirtyDays, setReportIncludeThirtyDays] = useState(false);
   const [reportWindows, setReportWindows] = useState<{ primary: { since: string; until: string }; thirty?: { since: string; until: string } } | null>(null);
   const [automaticReportPreview, setAutomaticReportPreview] = useState<{ id: number; clientId: string; target: Window } | null>(null);
-  const [data, setData] = useState<Payload | null>(() => {
-      try {
-        const initialCacheKey = platform === "GOOGLE_ADS"
-          ? "pw-os-google-dashboard-cache"
-          : platform === "ALL"
-            ? "pw-os-all-dashboard-cache"
-            : "pw-os-meta-dashboard-cache";
-        const cached = JSON.parse(
-          localStorage.getItem(initialCacheKey) || "null",
-        ) as Payload | null;
-        return cached && Array.isArray(cached.accounts) && Array.isArray(cached.campaigns)
-          ? normalizeCachedPayload(cached)
-          : null;
-      } catch {
-        return null;
-      }
-    }),
+  // Campanhas, anúncios e criativos podem ocupar vários megabytes. Além de
+  // estourar a pequena cota do localStorage, esse cache fazia um usuário ver
+  // por instantes o conteúdo deixado pelo usuário anterior no navegador.
+  // A fonte compartilhada e segura destes dados é exclusivamente o backend.
+  // Memory only: isolated to this mounted screen, never shared across logins.
+  const periodCacheRef = useRef(new Map<string, Payload>());
+  const [data, setData] = useState<Payload | null>(null),
     [clients, setClients] = useState<Client[]>([]),
     [users, setUsers] = useState<User[]>([]),
     [assignments, setAssignments] = useState<Assignment[]>([]),
@@ -1359,19 +1131,26 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
     [canManageAssignments, setCanManageAssignments] = useState(false),
     [canSync, setCanSync] = useState(false),
     [comparisonCampaigns, setComparisonCampaigns] = useState<Campaign[]>([]);
-  const [since, setSince] = useState(() => reportClientFromUrl ? initialReportPeriod().since : safeSavedMediaPeriod().since),
-    [until, setUntil] = useState(() => reportClientFromUrl ? initialReportPeriod().until : safeSavedMediaPeriod().until);
+  const [since, setSince] = useState(() => reportClientFromUrl ? initialReportPeriod().since : safeSavedMediaPeriod(userId).since),
+    [until, setUntil] = useState(() => reportClientFromUrl ? initialReportPeriod().until : safeSavedMediaPeriod(userId).until);
   const [query, setQuery] = useState(""),
     [status, setStatus] = useState(section === "TODAY" ? "ALL" : "ACTIVE"),
     [delivery, setDelivery] = useState("ALL"),
-    [contextClient, setContextClient] = useState(() => contextClientFromUrl || savedMediaContext().client || "ALL"),
-    [contextResponsible, setContextResponsible] = useState(() => savedMediaContext().responsible || "ALL");
+    [contextClient, setContextClient] = useState(() => contextClientFromUrl || savedMediaContext(userId).client || "ALL"),
+    [contextResponsible, setContextResponsible] = useState(() => savedMediaContext(userId).responsible || "ALL");
   const [loading, setLoading] = useState(!data),
     [error, setError] = useState(""),
     [manualSyncing, setManualSyncing] = useState(false),
     [isFullscreen, setIsFullscreen] = useState(false),
     [todayPage, setTodayPage] = useState(1),
     [accountsPage, setAccountsPage] = useState(1);
+  useEffect(() => {
+    [
+      "pw-os-meta-dashboard-cache",
+      "pw-os-google-dashboard-cache",
+      "pw-os-all-dashboard-cache",
+    ].forEach((key) => localStorage.removeItem(key));
+  }, []);
   useEffect(() => {
     const updateFullscreenState = () =>
       setIsFullscreen(document.fullscreenElement === pageRef.current);
@@ -1424,11 +1203,17 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
       });
     }
   };
-  const load = async (force = false, userInitiated = false) => {
+  const [availablePeriod, setAvailablePeriod] = useState<{ since: string; until: string } | null>(null);
+  const load = async (force = false, userInitiated = false, quiet = false) => {
     const requestId = ++loadRequestRef.current;
-    setLoading(true);
-    if (userInitiated) setManualSyncing(true);
+    if (!quiet) setLoading(true);
+    const periodCacheKey = `${platform}:${since}:${until}`;
+    if (force) periodCacheRef.current.clear();
+    const cachedPeriod = periodCacheRef.current.get(periodCacheKey);
+    setData(current => cachedPeriod || (current && current.since === since && current.until === until ? current : null));
+    if (!quiet) setManualSyncing(userInitiated);
     setError("");
+    setAvailablePeriod(null);
     try {
       const providers =
           platform === "ALL"
@@ -1438,10 +1223,13 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
           await Promise.all([
             Promise.all(
               providers.map(async (source) => {
+                const useStoredSnapshot = !force && !storedBootstrapPlatformsRef.current.has(source);
                 const response = await fetch(
-                    `/api/media/${source === "META_ADS" ? "meta" : "google"}/campaigns?since=${since}&until=${until}${force ? "&refresh=1" : ""}`,
+                    `/api/media/${source === "META_ADS" ? "meta" : "google"}/campaigns?since=${since}&until=${until}${force ? "&refresh=1" : ""}${source === "GOOGLE_ADS" && userInitiated ? "&manual=1" : ""}${useStoredSnapshot ? "&stored=1" : ""}`,
+                    { signal: AbortSignal.timeout(userInitiated || source === "GOOGLE_ADS" ? 135_000 : 30_000) },
                   ),
                   payload = await response.json();
+                if (response.ok) storedBootstrapPlatformsRef.current.add(source);
                 return { source, response, payload };
               }),
             ),
@@ -1474,6 +1262,9 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
         setCanManageAssignments(!!assignmentPayload.canManage);
         setCanSync(!!assignmentPayload.canSync);
       }
+      if (requestId !== loadRequestRef.current) return;
+      const missingPeriod = mediaResults.find(item => item.payload.code === "MEDIA_PERIOD_NOT_STORED");
+      if (missingPeriod?.payload.availablePeriod) setAvailablePeriod(missingPeriod.payload.availablePeriod);
       if (!successful.length)
         throw new Error(
           mediaResults
@@ -1507,13 +1298,18 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
         }),
       };
       if (requestId !== loadRequestRef.current) return;
+      if (successful.length === providers.length) {
+        periodCacheRef.current.delete(periodCacheKey);
+        periodCacheRef.current.set(periodCacheKey, payload);
+        while (periodCacheRef.current.size > 4) periodCacheRef.current.delete(periodCacheRef.current.keys().next().value!);
+      }
       setData(payload);
-      if (platform !== "ALL") {
-        try {
-          localStorage.setItem(platform === "META_ADS" ? "pw-os-meta-dashboard-cache" : "pw-os-google-dashboard-cache", JSON.stringify(payload));
-        } catch {
-          // O cache é opcional: falta de espaço não pode invalidar dados já carregados.
-          localStorage.removeItem("pw-os-all-dashboard-cache");
+      if (platform !== "ALL" && successful.length === 1) {
+        const servedSince = String(successful[0].payload.since || ""),
+          servedUntil = String(successful[0].payload.until || "");
+        if (/^\d{4}-\d{2}-\d{2}$/.test(servedSince) && /^\d{4}-\d{2}-\d{2}$/.test(servedUntil)) {
+          if (servedSince !== since) setSince(servedSince);
+          if (servedUntil !== until) setUntil(servedUntil);
         }
       }
       const failures = mediaResults.filter((item) => !item.response.ok);
@@ -1529,9 +1325,9 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
     } catch (cause) {
       if (requestId !== loadRequestRef.current) return;
       setError(
-        cause instanceof Error
-          ? cause.message
-          : "Não foi possível consultar as campanhas.",
+        cause instanceof Error && cause.name === "TimeoutError"
+          ? "A consulta demorou além do limite. Os dados anteriores foram mantidos; tente novamente."
+          : cause instanceof Error ? cause.message : "Não foi possível consultar as campanhas.",
       );
     } finally {
       if (requestId === loadRequestRef.current) {
@@ -1540,6 +1336,14 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
       }
     }
   };
+  const sharedReloadRef = useRef(() => {});
+  sharedReloadRef.current = () => { if (!loading && !manualSyncing && document.visibilityState === "visible") void load(false, false, true); };
+  useEffect(() => {
+    const refresh = () => sharedReloadRef.current();
+    const timer = window.setInterval(refresh, 60_000);
+    window.addEventListener("focus", refresh);
+    return () => { window.clearInterval(timer); window.removeEventListener("focus", refresh); };
+  }, []);
   const saveAssignment = async (
     assignmentPlatform: "META_ADS" | "GOOGLE_ADS",
     accountIds: string[],
@@ -1630,29 +1434,18 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
         );
       }
     }
-    if (identitySource === "META_PORTFOLIO") void load(true);
+    if (identitySource === "META_PORTFOLIO") void load();
     if (isFirstClientLink && await systemConfirm({ title: "Configurar os relatórios agora?", message: "A primeira conta deste cliente foi vinculada. Podemos abrir a configuração já com o responsável da mídia e o contato principal preenchidos.", confirmLabel: "Configurar relatório", cancelLabel: "Fazer depois", tone: "primary" })) {
       window.location.href = `/midia/relatorios?setupClient=${encodeURIComponent(clientId)}`;
     }
   };
   const selectPlatform = (next: MediaView) => {
     if (next === platform) return;
-    const cacheKey =
-      next === "META_ADS"
-        ? "pw-os-meta-dashboard-cache"
-        : next === "GOOGLE_ADS"
-          ? "pw-os-google-dashboard-cache"
-          : "pw-os-all-dashboard-cache";
-    try {
-      const cached = JSON.parse(
-        localStorage.getItem(cacheKey) || "null",
-      ) as Payload | null;
-      setData(
-        cached && Array.isArray(cached.accounts) && Array.isArray(cached.campaigns) ? normalizeCachedPayload(cached) : null,
-      );
-    } catch {
-      setData(null);
-    }
+    // Cada troca consulta novamente o snapshot compartilhado mais recente do
+    // servidor, sem reutilizar dados da outra plataforma ou de outro usuário.
+    if (next === "ALL") storedBootstrapPlatformsRef.current.clear();
+    else storedBootstrapPlatformsRef.current.delete(next);
+    setData(periodCacheRef.current.get(`${next}:${since}:${until}`) || null);
     setError("");
     setPlatform(next);
   };
@@ -1675,7 +1468,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
   }, [platform, since, until, section]);
   useEffect(() => {
     try {
-      localStorage.setItem("pw-os-media-context", JSON.stringify({ platform, since, until, client: contextClient, responsible: contextResponsible }));
+      localStorage.setItem(mediaPreferenceKey(userId, "pw-os-media-context"), JSON.stringify({ platform, since, until, client: contextClient, responsible: contextResponsible }));
     } catch {
       // Preferências locais são opcionais e nunca devem impedir a abertura da tela.
     }
@@ -1760,13 +1553,13 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
           client,
           responsible,
           assignment,
-          campaigns: campaigns.sort((a, b) => b.spend - a.spend),
+          campaigns: [...campaigns].sort((a, b) => a.name.localeCompare(b.name, "pt-BR", { sensitivity: "base", numeric: true })),
           totals: campaigns.reduce(add, emptyTotals()),
           active: campaigns.filter((item) => item.status === "ACTIVE").length,
           delivered: campaigns.filter(hasDelivery).length,
         };
       })
-      .sort((a, b) => b.totals.spend - a.totals.spend);
+      .sort((a, b) => (a.client?.name || accountLabel(a.account)).localeCompare(b.client?.name || accountLabel(b.account), "pt-BR", { sensitivity: "base", numeric: true }));
   }, [filtered, data, clients, users, assignments]);
   const statuses = [
     ...new Set((data?.campaigns || []).map((item) => item.status)),
@@ -1872,17 +1665,8 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
     unassignedPortfolios = groups.filter((group) => !group.responsible).length;
   const accountsTotalPages = Math.max(1, Math.ceil(groups.length / 20)), accountsSafePage = Math.min(accountsPage, accountsTotalPages), visibleGroups = groups.slice((accountsSafePage - 1) * 20, accountsSafePage * 20);
   return (
-    <div className="page traffic-page" ref={pageRef}>
-      {(manualSyncing || (loading && !data)) && (
-        <div className={`traffic-loading ${loading && !data ? "skeleton" : ""}`} role="status" aria-live="polite">
-          <RefreshCw className="spin" />
-          <span>
-            <b>{manualSyncing ? "Sincronizando campanhas…" : "Carregando campanhas…"}</b>
-            <small>{manualSyncing ? "Buscando novos dados na Meta e no Google Ads." : "Abrindo os dados disponíveis."}</small>
-          </span>
-          {loading && !data && <div className="traffic-skeleton-grid">{Array.from({ length: 8 }, (_, index) => <i key={index}/>)}</div>}
-        </div>
-      )}
+    <div className={`page traffic-page ${loading && !data ? "media-awaiting-period" : ""}`} ref={pageRef}>
+      {loading && <div className="media-refresh-status" role="status" aria-live="polite"><RefreshCw className="spin"/><span>{data ? "Atualizando métricas" : "Buscando o período selecionado"}</span><small>{platform === "GOOGLE_ADS" ? "Google Ads" : platform === "META_ADS" ? "Meta Ads" : "Plataformas"}</small></div>}
       <header className="traffic-head">
         <div>
           <span className="eyebrow">
@@ -1910,6 +1694,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
           </div>
         </div>
         {section !== "HISTORY" && <div className="traffic-period">
+          {platform === "GOOGLE_ADS" && canSync && <button type="button" className="secondary" disabled={loading || manualSyncing} onClick={() => void load(true, true)}><RefreshCw className={manualSyncing ? "spin" : ""}/>{manualSyncing ? "Sincronizando Google…" : "Sincronizar Google agora"}</button>}
           {(section === "CLIENTS" || section === "CAMPAIGNS") && <button type="button" className="traffic-ai-launcher" onClick={() => window.dispatchEvent(new Event("pw:open-media-ai"))}><BrainCircuit /><span>Analisar operação</span><small>IA</small></button>}
           {section === "REPORTS" && <div className="traffic-period-presets" aria-label="Períodos rápidos para relatório">
             <button type="button" onClick={() => applyReportPeriod("FIRST_HALF")}>1ª quinzena</button>
@@ -1958,6 +1743,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
             </b>
             <p>{error}</p>
           </div>
+          {availablePeriod && <button onClick={() => { setSince(availablePeriod.since); setUntil(availablePeriod.until); }}>Ver período salvo ({shortDate(availablePeriod.since)} – {shortDate(availablePeriod.until)})</button>}
           <button onClick={() => void load()}>Tentar novamente</button>
         </div>
       )}
@@ -2090,6 +1876,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
             onSinceChange={setSince}
             onUntilChange={setUntil}
             onPlatformChange={selectPlatform}
+            onAnalyze={openCampaignAnalysis}
           />
         ) : mediaMode === "CAMPAIGNS" || (mediaMode === "CLIENTS" && managementView === "CAMPAIGNS") ? (
           <CampaignReport
@@ -2166,14 +1953,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
               </div>
             </section>
             {loading && !data ? (
-              <div className="panel inline-empty">
-                <RefreshCw className="spin" />
-                <h3>Organizando os dados por cliente</h3>
-                <p>
-                  Aguarde a sincronização com a{" "}
-                  {platform === "META_ADS" ? "Meta" : "Google Ads"}.
-                </p>
-              </div>
+              <div className="media-table-placeholder" aria-hidden="true">{Array.from({ length: 5 }, (_, row) => <div key={row}><i/>{Array.from({ length: 7 }, (_, column) => <span key={column}/>)}</div>)}</div>
             ) : groups.length === 0 ? (
               <div className="panel inline-empty">
                 <Megaphone />
@@ -2408,12 +2188,15 @@ const comparisonChange = (current: number, previous: number) =>
   previous ? ((current - previous) / previous) * 100 : current ? 100 : 0;
 
 function CompiledMetric({ current, previous, format, inverse = false, neutralTrend = false }: {
-  current: number;
-  previous: number;
+  current: number | null;
+  previous: number | null;
   format: (value: number) => string;
   inverse?: boolean;
   neutralTrend?: boolean;
 }) {
+  if (current == null) return <span className="compiled-metric"><b>—</b><small>Não disponibilizado</small></span>;
+  if (previous == null) return <span className="compiled-metric"><b>{format(current)}</b><small>Sem base anterior</small></span>;
+  if (previous === 0 && current !== 0) return <span className="compiled-metric"><b>{format(current)}</b><small>Sem base percentual <em>anterior: {format(previous)}</em></small></span>;
   const change = comparisonChange(current, previous),
     improved = inverse ? change < 0 : change > 0,
     tone = neutralTrend || Math.abs(change) < .05 ? "neutral" : improved ? "good" : "bad";
@@ -2460,7 +2243,40 @@ function MediaAiInsights({ campaigns, since, until, context, scope = "CAMPAIGNS"
   </section>;
 }
 
-function CompiledReport({ campaigns, groups, platform, since, until, onSinceChange, onUntilChange, onPlatformChange }: {
+function ComparisonClientRows({ group, previousCampaigns, previousAvailable, search, onAnalyze }: { group: ClientGroup; previousCampaigns: Campaign[]; previousAvailable: boolean; search: string; onAnalyze: (campaign: Campaign) => void }) {
+  const [open,setOpen] = useState(false);
+  const name = group.client?.name || accountLabel(group.account);
+  const current = group.campaigns;
+  const accountKeys = new Set(group.accounts.map(account => `${account.platform || group.platform}:${account.id}`));
+  const previous = previousAvailable ? previousCampaigns.filter(item => accountKeys.has(`${item.platform}:${item.accountId}`)) : [];
+  const previousById = new Map(previous.map(item => [`${item.platform}:${item.accountId}:${item.id}`, item]));
+  const averageScore = (items: Campaign[]) => { const values = items.map(campaignScore).filter(value => value >= 0); return values.length ? Math.round(values.reduce((sum,value)=>sum+value,0)/values.length) : null; };
+  const campaignRows = current.filter(item => name.toLowerCase().includes(search.toLowerCase()) || item.name.toLowerCase().includes(search.toLowerCase())).slice().sort((a,b)=>a.name.localeCompare(b.name,"pt-BR",{sensitivity:"base",numeric:true}));
+  const renderRow = (items: Campaign[], oldItems: Campaign[], currency: string, campaign?: Campaign) => {
+    const total = portfolioMetrics(items)[0], old = portfolioMetrics(oldItems)[0];
+    if (!total) return null;
+    const networks = [...new Set(items.map(item=>item.platform || "META_ADS"))];
+    const active = items.filter(item=>item.status === "ACTIVE").length;
+    const urls = [...new Set(items.map(item=>item.landingPageUrl).filter((url): url is string => !!url))];
+    const metric = (key: "dailyBudget"|"impressions"|"clicks"|"ctr"|"cpc"|"leads"|"spend"|"remainingBudget", format: (value:number)=>string, tone:string, inverse=false) => <td><span className={`simple-value ${tone}`}><CompiledMetric current={total[key]} previous={previousAvailable && old ? old[key] : null} format={format} inverse={inverse} neutralTrend={key === "spend" || key === "dailyBudget" || key === "remainingBudget"}/></span></td>;
+    return <tr className={campaign ? "simple-campaign-row" : "simple-client-row"} key={campaign ? `${campaign.platform}:${campaign.id}` : currency} onClick={event=>{if(!campaign && !(event.target as HTMLElement).closest('button,a,[role="button"]') && !window.getSelection()?.toString())setOpen(value=>!value)}}>
+      <td>{campaign ? <span className="simple-child-name"><span>↳</span><b>{campaign.name}</b></span> : <div className="simple-client-name"><button type="button" className="simple-expand" aria-expanded={open} aria-label={`Campanhas de ${name}`} onClick={()=>setOpen(value=>!value)}><ChevronDown/></button><span><b>{name}</b><small>{items.length} campanhas · {currency}</small></span></div>}</td>
+      <td><span className="simple-campaign-type">{[...new Set(items.map(campaignTypeLabel))].join(" · ")}</span></td>
+      <td><span className="simple-campaign-objective">{[...new Set(items.map(campaignObjectiveLabel))].join(" · ")}</span></td>
+      <td><span className="portfolio-network-list">{networks.map(network=><span key={network} className="portfolio-network-icon" role="img" aria-label={network === "GOOGLE_ADS" ? "Google Ads" : "Meta Ads"}>{network === "GOOGLE_ADS" ? <GoogleAdsLogo/> : <MetaLogo/>}</span>)}</span></td>
+      <td><span className={`simple-status ${active ? "active" : "inactive"}`}>{active===items.length ? "Ativa" : active ? "Misto" : "Inativa"}</span></td>
+      <td>{urls.length ? urls.map(url=><LandingPageIcon key={url} url={url} status={items.some(item=>item.landingPageUrl===url && item.landingPageStatus==="INACTIVE") ? "INACTIVE" : items.filter(item=>item.landingPageUrl===url).every(item=>item.landingPageStatus==="ACTIVE") ? "ACTIVE" : "UNKNOWN"}/>) : <LandingPageIcon/>}</td>
+      {metric("dailyBudget",value=>money(value,currency),"simple-money")}{metric("impressions",number,"simple-volume")}{metric("clicks",number,"simple-clicks")}{metric("ctr",value=>`${number(value,2)}%`,"simple-rate")}{metric("cpc",value=>money(value,currency),"simple-rate",true)}{metric("leads",number,"simple-rate")}{metric("spend",value=>money(value,currency),"simple-money")}{metric("remainingBudget",value=>money(value,currency),"simple-volume")}
+      <td><CompiledMetric current={averageScore(items)} previous={old ? averageScore(oldItems) : null} format={value=>`${number(value)} / 100`}/></td>
+      <td><span className="simple-responsible"><ResponsibleAvatar user={group.responsible}/><span>{group.responsible?.name || "Não atribuído"}</span></span></td>
+      <td><button type="button" className="campaign-analyze" onClick={()=>campaign ? onAnalyze(campaign) : setOpen(value=>!value)}>{campaign ? "Analisar" : open ? "Recolher" : "Comparar"}</button></td>
+    </tr>;
+  };
+  return <article className={`simple-client-table ${open ? "open" : ""}`}><div className="simple-table-scroll"><table><colgroup><col className="simple-name-column"/>{Array.from({length:16},(_,index)=><col key={index}/>)}</colgroup><thead><tr>{["Cliente / campanha","Tipo","Objetivo","Rede","Status","Landing page","Inv. diário","Impressões","Cliques","CTR","CPC","Conversões","Custo","Saldo","Score","Responsável","Análise"].map(label=><th key={label}>{label}</th>)}</tr></thead><tbody>{[...new Set(current.map(item=>item.currency))].map(currency=>renderRow(current.filter(item=>item.currency===currency),previous.filter(item=>item.currency===currency),currency))}{open && campaignRows.map(item=>{const old=previousById.get(`${item.platform}:${item.accountId}:${item.id}`);return renderRow([item],old && old.currency===item.currency ? [old] : [],item.currency,item)})}</tbody></table></div></article>;
+}
+
+function CompiledReport({ campaigns, groups, platform, since, until, onSinceChange, onUntilChange, onPlatformChange, onAnalyze }: {
+  onAnalyze: (campaign: Campaign) => void;
   campaigns: CompiledCampaign[];
   groups: ClientGroup[];
   platform: MediaView;
@@ -2470,6 +2286,7 @@ function CompiledReport({ campaigns, groups, platform, since, until, onSinceChan
   onUntilChange: (value: string) => void;
   onPlatformChange: (value: MediaView) => void;
 }) {
+  const comparisonCache = useRef(new Map<string, { campaigns: Campaign[]; cachedAt: number }>());
   const periodLength = Math.max(1, Math.round((new Date(`${until}T12:00`).getTime() - new Date(`${since}T12:00`).getTime()) / 86400000) + 1),
     previousUntilDefault = iso(new Date(new Date(`${since}T12:00`).getTime() - 86400000)),
     previousSinceDefault = iso(new Date(new Date(`${since}T12:00`).getTime() - periodLength * 86400000));
@@ -2482,52 +2299,56 @@ function CompiledReport({ campaigns, groups, platform, since, until, onSinceChan
     [pageSize, setPageSize] = useState<20 | 40 | 60 | 80 | 100>(20),
     [loadingComparison, setLoadingComparison] = useState(false),
     [comparisonError, setComparisonError] = useState(""),
-    [selectedPortfolio, setSelectedPortfolio] = useState("");
+    [selectedPortfolio, setSelectedPortfolio] = useState("ALL");
   useEffect(() => {
     if (!groups.length) return;
-    if (!groups.some((group) => group.key === selectedPortfolio)) setSelectedPortfolio(groups[0].key);
+    if (selectedPortfolio !== "ALL" && !groups.some((group) => group.key === selectedPortfolio)) setSelectedPortfolio("ALL");
   }, [groups, selectedPortfolio]);
   useEffect(() => { setPage(1); }, [search, platform, selectedPortfolio, since, until, previousSince, previousUntil, pageSize]);
   useEffect(() => {
+    if (!campaigns.length) { setPreviousCampaigns([]); setLoadingComparison(false); return; }
     let cancelled = false;
+    const controller = new AbortController();
+    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(255_000)]);
+    const cacheKey = `${platform}:${previousSince}:${previousUntil}`;
+    const cached = comparisonCache.current.get(cacheKey);
+    if (cached && Date.now() - cached.cachedAt < 60_000) {
+      setPreviousCampaigns(cached.campaigns); setComparisonError(""); setLoadingComparison(false);
+      return () => controller.abort();
+    }
     const loadComparison = async () => {
       setLoadingComparison(true);
+      setPreviousCampaigns([]);
       setComparisonError("");
       try {
         const providers = platform === "ALL" ? (["META_ADS", "GOOGLE_ADS"] as const) : ([platform] as ("META_ADS" | "GOOGLE_ADS")[]),
           results = await Promise.all(providers.map(async (source) => {
-            let response = await fetch(`/api/media/history?platform=${source}&since=${previousSince}&until=${previousUntil}`), payload = await response.json();
+            let response = await fetch(`/api/media/history?platform=${source}&since=${previousSince}&until=${previousUntil}`, { signal }), payload = await response.json();
             if (response.status === 404) {
-              response = await fetch(`/api/media/${source === "META_ADS" ? "meta" : "google"}/campaigns?since=${previousSince}&until=${previousUntil}&comparison=1`);
-              payload = await response.json();
+              const result = await requestMediaPeriod(`/api/media/${source === "META_ADS" ? "meta" : "google"}/campaigns?since=${previousSince}&until=${previousUntil}&comparison=1`, signal);
+              response = result.response; payload = result.payload;
             }
             if (!response.ok) throw new Error(payload.message || `Não foi possível comparar ${source === "META_ADS" ? "Meta" : "Google"}.`);
             return (payload.campaigns || []).map((campaign: Campaign) => ({ ...campaign, platform: source }));
           }));
-        if (!cancelled) setPreviousCampaigns(results.flat());
+        if (!cancelled) {
+          const campaigns = results.flat();
+          comparisonCache.current.set(cacheKey, { campaigns, cachedAt: Date.now() });
+          while (comparisonCache.current.size > 4) comparisonCache.current.delete(comparisonCache.current.keys().next().value!);
+          setPreviousCampaigns(campaigns);
+        }
       } catch (cause) {
         if (!cancelled) setComparisonError(cause instanceof Error ? cause.message : "Não foi possível carregar o período comparativo.");
       } finally { if (!cancelled) setLoadingComparison(false); }
     };
     void loadComparison();
-    return () => { cancelled = true; };
-  }, [platform, previousSince, previousUntil]);
-  const selectedGroup = groups.find((group) => group.key === selectedPortfolio),
-    selectedAccountIds = new Set(selectedGroup?.accounts.map((account) => account.id) || []),
-    selectedPortfolioName = selectedGroup ? selectedGroup.client?.name || accountLabel(selectedGroup.account) : "Selecione um cliente/portfólio",
-    previousById = new Map(previousCampaigns.map((item) => [`${item.platform}:${item.accountId}:${item.id}`, item])),
-    rows = campaigns.filter((item) => selectedAccountIds.has(item.accountId) && `${item.groupName} ${item.name}`.toLowerCase().includes(search.toLowerCase())),
-    aggregate = (items: Campaign[]) => items.reduce((sum, item) => ({ spend: sum.spend + item.spend, impressions: sum.impressions + item.impressions, clicks: sum.clicks + item.clicks, leads: sum.leads + item.leads }), { spend: 0, impressions: 0, clicks: 0, leads: 0 }),
-    currentTotal = aggregate(rows),
-    matchedPrevious = rows.map((item) => previousById.get(`${item.platform}:${item.accountId}:${item.id}`)).filter(Boolean) as Campaign[],
-    previousTotal = aggregate(matchedPrevious),
-    currentCpl = currentTotal.leads ? currentTotal.spend / currentTotal.leads : 0,
-    previousCpl = previousTotal.leads ? previousTotal.spend / previousTotal.leads : 0,
-    totalPages = Math.max(1, Math.ceil(rows.length / pageSize)),
-    safePage = Math.min(page, totalPages),
-    paginatedRows = rows.slice((safePage - 1) * pageSize, safePage * pageSize),
-    visiblePortfolioGroups = groups.filter((group) => (group.client?.name || accountLabel(group.account)).toLowerCase().includes(portfolioSearch.trim().toLowerCase()));
-  return <section className="compiled-report comparison-by-portfolio">
+    return () => { cancelled = true; controller.abort(); };
+  }, [platform, previousSince, previousUntil, campaigns.length]);
+  const comparisonGroups = groups.filter(group => (selectedPortfolio === "ALL" || group.key === selectedPortfolio) && `${group.client?.name || accountLabel(group.account)} ${group.campaigns.map(item => item.name).join(" ")}`.toLowerCase().includes(search.toLowerCase())).sort((a,b) => (a.client?.name || accountLabel(a.account)).localeCompare(b.client?.name || accountLabel(b.account), "pt-BR", { sensitivity: "base", numeric: true })),
+    totalPages = Math.max(1, Math.ceil(comparisonGroups.length / pageSize)),
+    safePage = Math.min(page,totalPages),
+    paginatedGroups = comparisonGroups.slice((safePage - 1) * pageSize, safePage * pageSize);
+  return <section className="compiled-report comparison-by-portfolio simple-comparison">
     <header className="compiled-heading"><div><small>COMPARAÇÃO POR PORTFÓLIO</small><h2>Performance entre períodos</h2><p>Escolha dois intervalos e consulte cada portfólio com a mesma lógica da Gestão de mídia.</p></div><span>{groups.length} portfólios</span></header>
     <MediaPlatformSwitch platform={platform} onPlatformChange={onPlatformChange} metaDetail="Comparar campanhas da Meta" googleDetail="Comparar campanhas do Google" />
     <section className="compiled-periods">
@@ -2535,48 +2356,12 @@ function CompiledReport({ campaigns, groups, platform, since, until, onSinceChan
       <i>comparar com</i>
       <div><small>PERÍODO ANTERIOR</small><label><CalendarDays /><input type="date" value={previousSince} max={previousUntil} onChange={(event) => setPreviousSince(event.target.value)} /><span>até</span><input type="date" value={previousUntil} min={previousSince} onChange={(event) => setPreviousUntil(event.target.value)} /></label></div>
     </section>
-    <section className="compiled-client-picker">
-      <header><div><small>CLIENTES E PORTFÓLIOS</small><h3>Escolha quem você quer comparar</h3></div><label className="compiled-portfolio-search"><Search/><input value={portfolioSearch} onChange={(event)=>setPortfolioSearch(event.target.value)} placeholder="Buscar por nome…"/></label><span>{visiblePortfolioGroups.length} de {groups.length}</span></header>
-      <div>
-        {visiblePortfolioGroups.map((group) => {
-          const accountIds = new Set(group.accounts.map((account) => account.id)),
-            portfolioCampaigns = campaigns.filter((campaign) => accountIds.has(campaign.accountId)),
-            portfolioSpend = portfolioCampaigns.reduce((sum, campaign) => sum + campaign.spend, 0),
-            portfolioLeads = portfolioCampaigns.reduce((sum, campaign) => sum + campaign.leads, 0),
-            name = group.client?.name || accountLabel(group.account);
-          return (
-            <button type="button" className={selectedPortfolio === group.key ? "active" : ""} onClick={() => setSelectedPortfolio(group.key)} key={group.key}>
-              <ClientAvatar name={name} picture={group.account.profilePictureUrl} />
-              <span className="compiled-client-identity"><b>{name}</b><small>{group.accounts.length} conta(s) · {portfolioCampaigns.length} campanha(s)</small><em>{group.responsible?.name ? `Responsável: ${group.responsible.name}` : "Responsável não atribuído"}</em></span>
-              <span className="compiled-client-stat"><small>Investimento</small><b>{money(portfolioSpend, group.account.currency)}</b></span>
-              <span className="compiled-client-stat"><small>Conversões</small><b>{number(portfolioLeads)}</b></span>
-              <span className="compiled-client-open">{selectedPortfolio === group.key ? <CheckCircle2 /> : <ChevronDown />}</span>
-            </button>
-          );
-        })}
-      </div>
-    </section>
+    <div className="comparison-simple-filters"><label><Building2/><select aria-label="Cliente para comparação" value={selectedPortfolio} onChange={event => setSelectedPortfolio(event.target.value)}><option value="ALL">Todos os clientes</option>{groups.map(group => <option key={group.key} value={group.key}>{group.client?.name || accountLabel(group.account)}</option>)}</select></label><label><Search/><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Buscar cliente ou campanha…"/></label><span role="status">{loadingComparison ? "Atualizando período anterior…" : "Atual · variação · anterior"}</span></div>
     {comparisonError && <div className="traffic-error"><AlertTriangle /><div><b>Comparação indisponível</b><p>{comparisonError}</p></div></div>}
-    <div className="compiled-selected-portfolio"><span><small>PORTFÓLIO SELECIONADO</small><b>{selectedPortfolioName}</b></span><em>{rows.length} campanha{rows.length === 1 ? "" : "s"}</em></div>
-    <section className="compiled-summary">
-      <article><small>Investimento</small><CompiledMetric current={currentTotal.spend} previous={previousTotal.spend} neutralTrend format={(value) => money(value)} /></article>
-      <article><small>Cliques</small><CompiledMetric current={currentTotal.clicks} previous={previousTotal.clicks} format={(value) => number(value)} /></article>
-      <article><small>Conversões</small><CompiledMetric current={currentTotal.leads} previous={previousTotal.leads} format={(value) => number(value)} /></article>
-      <article><small>CPL</small><CompiledMetric current={currentCpl} previous={previousCpl} inverse format={(value) => value ? money(value) : "—"} /></article>
-    </section>
-    <div className="compiled-toolbar"><label><Search /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar campanha deste portfólio…" /></label><span>{loadingComparison ? <><RefreshCw className="spin" /> Comparando…</> : "Atual · variação · período anterior"}</span></div>
-    <div className="compiled-table"><table><thead><tr><th>Cliente / campanha</th><th>Plataforma</th><th>Investimento</th><th>Conversões</th><th>CPL</th><th>Alcance</th><th>Impressões</th><th>Frequência</th><th>Cliques</th><th>CTR</th><th>CPC</th><th>CPM</th></tr></thead><tbody>{paginatedRows.map((item) => {
-      const previous = previousById.get(`${item.platform}:${item.accountId}:${item.id}`),
-        currentCtr = item.impressions ? (item.clicks / item.impressions) * 100 : 0,
-        previousCtr = previous?.impressions ? (previous.clicks / previous.impressions) * 100 : 0,
-        currentCpc = item.clicks ? item.spend / item.clicks : 0,
-        previousCpc = previous?.clicks ? previous.spend / previous.clicks : 0,
-        currentCpm = item.impressions ? item.spend / item.impressions * 1000 : 0,
-        previousCpm = previous?.impressions ? previous.spend / previous.impressions * 1000 : 0;
-      return <tr key={`${item.platform}:${item.accountId}:${item.id}`}><td><b>{item.groupName}</b><small>{item.name}</small></td><td><PlatformMark platform={item.platform || "META_ADS"} /></td><td><CompiledMetric current={item.spend} previous={previous?.spend || 0} neutralTrend format={(value) => money(value, item.currency)} /></td><td><CompiledMetric current={item.leads} previous={previous?.leads || 0} format={number} /></td><td><CompiledMetric current={item.cpl || 0} previous={previous?.cpl || 0} inverse format={(value) => value ? money(value, item.currency) : "—"} /></td><td><CompiledMetric current={item.reach < 0 ? 0 : item.reach} previous={previous?.reach && previous.reach > 0 ? previous.reach : 0} format={number} /></td><td><CompiledMetric current={item.impressions} previous={previous?.impressions || 0} format={number} /></td><td><CompiledMetric current={item.frequency < 0 ? 0 : item.frequency} previous={previous?.frequency && previous.frequency > 0 ? previous.frequency : 0} neutralTrend format={(value)=>number(value,2)} /></td><td><CompiledMetric current={item.clicks} previous={previous?.clicks || 0} format={number} /></td><td><CompiledMetric current={currentCtr} previous={previousCtr} format={(value) => `${number(value, 2)}%`} /></td><td><CompiledMetric current={currentCpc} previous={previousCpc} inverse format={(value)=>value?money(value,item.currency):"—"}/></td><td><CompiledMetric current={currentCpm} previous={previousCpm} inverse format={(value)=>value?money(value,item.currency):"—"}/></td></tr>;
-    })}</tbody></table></div>
+    {paginatedGroups.map(group => <ComparisonClientRows key={group.key} group={group} previousCampaigns={previousCampaigns} previousAvailable={!loadingComparison && !comparisonError} search={search} onAnalyze={onAnalyze}/>)}
+    {!comparisonGroups.length && <div className="panel inline-empty"><Search/><h3>Nenhum cliente encontrado</h3><p>Ajuste os filtros da comparação.</p></div>}
     <footer className="campaign-pagination compiled-pagination">
-      <span>Exibindo {rows.length ? (safePage - 1) * pageSize + 1 : 0}–{Math.min(safePage * pageSize, rows.length)} de {rows.length} campanhas</span>
+      <span>Exibindo {comparisonGroups.length ? (safePage - 1) * pageSize + 1 : 0}–{Math.min(safePage * pageSize, comparisonGroups.length)} de {comparisonGroups.length} clientes</span>
       <label>Por página<select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value) as 20 | 40 | 60 | 80 | 100)}>{[20,40,60,80,100].map((size) => <option value={size} key={size}>{size}</option>)}</select></label>
       <nav aria-label="Paginação do compilado"><button type="button" disabled={safePage === 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>Anterior</button><span>Página <b>{safePage}</b> de {totalPages}</span><button type="button" disabled={safePage === totalPages} onClick={() => setPage((value) => Math.min(totalPages, value + 1))}>Próxima</button></nav>
     </footer>
@@ -2616,10 +2401,11 @@ function CampaignReport({
   onAutomaticPreviewDone?: () => void;
   onAnalysisClosed?: () => void;
 }) {
+  const userId = useContext(MediaUserContext);
   const tableRef = useRef<HTMLDivElement>(null);
   const [previousCampaigns, setPreviousCampaigns] = useState<Campaign[]>([]);
-  const persistedFilters = savedCampaignFilters();
-  const tablePreferences = savedCampaignTablePreferences();
+  const persistedFilters = savedCampaignFilters(userId);
+  const tablePreferences = savedCampaignTablePreferences(userId);
   const [search, setSearch] = useState(() => persistedFilters.search || ""),
     [objective, setObjective] = useState(() => persistedFilters.objective || "ALL"),
     [clientId, setClientId] = useState(() => initialClientId || new URLSearchParams(window.location.search).get("reportClient") || persistedFilters.clientId || "ALL"),
@@ -2655,7 +2441,7 @@ function CampaignReport({
   useEffect(() => {
     if (reportsOnly) return;
     try {
-      localStorage.setItem("pw-os-campaign-filters", JSON.stringify({ search, objective, clientId, portfolio, scope, health, review, metricFocus, sort }));
+      localStorage.setItem(mediaPreferenceKey(userId, "pw-os-campaign-filters"), JSON.stringify({ search, objective, clientId, portfolio, scope, health, review, metricFocus, sort }));
     } catch {
       // A tela continua funcional mesmo sem persistência das preferências.
     }
@@ -2663,7 +2449,7 @@ function CampaignReport({
   useEffect(() => {
     if (reportsOnly) return;
     try {
-      localStorage.setItem("pw-os-campaign-table-preferences", JSON.stringify({ compact: compactTable, visibleMetrics }));
+      localStorage.setItem(mediaPreferenceKey(userId, "pw-os-campaign-table-preferences"), JSON.stringify({ compact: compactTable, visibleMetrics }));
     } catch {
       // A tela continua funcional mesmo sem persistência das preferências.
     }
@@ -3478,20 +3264,45 @@ type ScoreExplanation = ReturnType<typeof campaignScoreBreakdown>;
 function ScoreReasonPopover({ score, label, explanation, children }: { score: number; label: string; explanation: ScoreExplanation | null; children: ReactNode }) {
   const [open,setOpen] = useState(false), [hovered,setHovered] = useState(false), [position,setPosition] = useState({ left: 12, top: 12, above: true });
   const closeTimer = useRef<number | null>(null), visible = open || hovered;
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const anchorRef = useRef<DOMRect | null>(null);
+  useLayoutEffect(() => {
+    if (!visible || !popoverRef.current || !anchorRef.current) return;
+    const anchor = anchorRef.current, box = popoverRef.current.getBoundingClientRect();
+    const below = anchor.bottom + 8;
+    const top = Math.max(12, Math.min(below + box.height <= window.innerHeight - 12 ? below : anchor.top - box.height - 8, window.innerHeight - box.height - 12));
+    const left = Math.max(12, Math.min(anchor.right - box.width, window.innerWidth - box.width - 12));
+    setPosition({ left, top, above: false });
+  }, [visible]);
+  useEffect(() => () => { if (closeTimer.current !== null) window.clearTimeout(closeTimer.current); }, []);
+  useEffect(() => {
+    if (!visible) return;
+    const close = () => { setOpen(false); setHovered(false); };
+    const keydown = (event: KeyboardEvent) => { if (event.key === "Escape") close(); };
+    window.addEventListener("keydown", keydown);
+    window.addEventListener("scroll", close, true);
+    return () => { window.removeEventListener("keydown", keydown); window.removeEventListener("scroll", close, true); };
+  }, [visible]);
   if (!explanation) return <>{children}</>;
   const tone = score < 0 ? "empty" : score >= 90 ? "good" : score >= 70 ? "warning" : "bad";
-  const place = (anchor: HTMLElement) => { const rect = anchor.getBoundingClientRect(), width = Math.min(310, window.innerWidth - 24); setPosition({ left: Math.max(12, Math.min(window.innerWidth - width - 12, rect.right - width)), top: rect.top > 300 ? rect.top - 10 : rect.bottom + 10, above: rect.top > 300 }); };
+  const place = (anchor: HTMLElement) => {
+    const rect = anchor.getBoundingClientRect(); anchorRef.current = rect;
+    if (!visible) setPosition({ left: Math.max(12, rect.right - Math.min(420, window.innerWidth - 24)), top: rect.bottom + 8, above: false });
+  };
   const enter = (anchor?: HTMLElement) => { if (closeTimer.current) window.clearTimeout(closeTimer.current); if (anchor) place(anchor); setHovered(true); };
-  const leave = () => { closeTimer.current = window.setTimeout(() => setHovered(false), 120); };
-  const popover = visible ? createPortal(<div className={`score-reason-popover score-reason-floating ${tone}`} style={{ left: position.left, top: position.top, transform: position.above ? "translateY(-100%)" : undefined }} role="tooltip" onMouseEnter={() => enter()} onMouseLeave={leave} onClick={(event) => event.stopPropagation()}>
+  const leave = () => {
+    if (closeTimer.current !== null) window.clearTimeout(closeTimer.current);
+    closeTimer.current = window.setTimeout(() => { setHovered(false); setOpen(false); closeTimer.current = null; }, 120);
+  };
+  const popover = visible ? createPortal(<div ref={popoverRef} className={`score-reason-popover score-reason-floating ${tone}`} style={{ "--score-left": `${position.left}px`, "--score-top": `${position.top}px` } as CSSProperties} role="tooltip" onMouseEnter={() => enter()} onMouseLeave={leave} onClick={(event) => event.stopPropagation()}>
       <div className="score-reason-heading"><span><small>POR QUE ESTA NOTA?</small><b>{label}</b></span><strong>{score >= 0 ? score : "—"}<small>/100</small></strong></div>
       <p>{explanation.summary}</p>
       <ScoreDimensions dimensions={explanation.dimensions} compact />
       {!!explanation.factors.length && <div className="score-reason-factors">{explanation.factors.map((factor) => <div key={factor.label} className={factor.tone}><span><b>{factor.label}</b><small>{factor.value}</small></span><strong>{factor.points >= 0 ? "+" : ""}{Math.round(factor.points)}{factor.max > 0 ? `/${factor.max}` : ""}</strong></div>)}</div>}
       <div className="score-reason-conclusion"><b>{score >= 90 ? "O que mantém alto" : "Principal leitura"}</b><span>{score >= 90 ? explanation.strengths[0] : explanation.improvements[0] || explanation.strengths[0]}</span></div>
-      <small className="score-reason-hint">Clique novamente ou pressione Esc para fechar</small>
+      <small className="score-reason-hint">Afaste o mouse ou pressione Esc para fechar</small>
     </div>, document.body) : null;
-  return <><span className={`score-reason-trigger ${open ? "open" : ""}`} onMouseEnter={(event) => enter(event.currentTarget)} onMouseLeave={leave} onClick={(event) => { event.stopPropagation(); place(event.currentTarget); setOpen((value) => !value); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); place(event.currentTarget); setOpen((value) => !value); } if (event.key === "Escape") { setOpen(false); setHovered(false); } }} role="button" tabIndex={0} aria-expanded={open} aria-label={`${label}: ${score >= 0 ? `${score} de 100` : "sem dados"}. Ver explicação`}>{children}</span>{popover}</>;
+  return <><span className={`score-reason-trigger ${open ? "open" : ""}`} onMouseEnter={(event) => enter(event.currentTarget)} onMouseLeave={leave} onClick={(event) => { event.stopPropagation(); place(event.currentTarget); setOpen((value) => !value); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); place(event.currentTarget); setOpen((value) => !value); } if (event.key === "Escape") { setOpen(false); setHovered(false); } }} onBlur={() => { setOpen(false); setHovered(false); }} role="button" tabIndex={0} aria-expanded={visible} aria-label={`${label}: ${score >= 0 ? `${score} de 100` : "sem dados"}. Ver explicação`}>{children}</span>{popover}</>;
 }
 
 function ScoreDimensions({ dimensions, compact = false }: { dimensions: ScoreExplanation["dimensions"]; compact?: boolean }) {

@@ -1,0 +1,41 @@
+.client-analysis-dialog.campaign-ad-modal{width:min(1120px,calc(100vw - 40px));max-height:90vh;display:flex;flex-direction:column;overflow:hidden;border-radius:20px}
+.client-analysis-dialog.campaign-ad-modal>header{position:relative;flex:0 0 auto;padding:24px 28px;border-bottom:1px solid var(--border)}
+.client-analysis-dialog .portfolio-client-analysis{min-height:0;overflow:auto;padding:24px 28px 32px}
+.client-analysis-overview{display:flex;align-items:center;justify-content:space-between;gap:24px;margin-bottom:24px}
+.client-analysis-eyebrow{font-size:12px;font-weight:650;color:var(--subtle)}
+.client-analysis-overview p{margin:8px 0 14px;font-size:18px;font-weight:650;color:var(--heading)}
+.client-analysis-overview p>span{margin:0 8px;color:var(--subtle)}
+.client-analysis-owner{display:flex;align-items:center;gap:9px;font-size:13px;color:var(--subtle);flex-wrap:wrap}
+.client-analysis-owner button{display:inline-flex;gap:6px;align-items:center;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--accent);font:inherit;cursor:pointer}
+.client-analysis-owner svg,.client-analysis-action svg{width:16px;height:16px}
+.client-analysis-score{display:flex;flex-direction:column;gap:5px;padding:16px 22px;min-width:160px;border:1px solid var(--border);border-radius:14px;background:var(--surface-soft);color:var(--heading)}
+.client-analysis-score>span{font-size:12px;color:var(--subtle)}
+.client-analysis-score strong{display:flex;align-items:baseline;gap:7px;font-size:36px;line-height:1.15;letter-spacing:-1px}
+.client-analysis-score strong small{font-size:13px;font-weight:500;color:var(--subtle);letter-spacing:0}
+.client-analysis-dialog .portfolio-total-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:0;background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin:0 0 28px}
+.client-analysis-dialog .portfolio-total-grid>div{padding:16px;min-width:0;border:0;border-right:1px solid var(--border);border-bottom:1px solid var(--border);background:var(--surface)}
+.client-analysis-dialog .portfolio-total-grid small{font-size:12px}.client-analysis-dialog .portfolio-total-grid b{font-size:20px;margin-top:6px;display:block}
+.client-analysis-dialog h3{font-size:17px;margin:24px 0 12px}
+.client-analysis-dialog .portfolio-analysis-campaign{display:grid;grid-template-columns:minmax(0,1fr) 110px 124px;gap:16px;align-items:center;padding:16px 0}
+.client-analysis-dialog .portfolio-analysis-campaign>b{font-size:13px;line-height:1.5;overflow-wrap:anywhere}
+.client-campaign-score{font-size:12px;color:var(--subtle);text-align:right;white-space:nowrap}
+.client-analysis-dialog .client-analysis-action{display:inline-flex;justify-content:center;align-items:center;gap:8px;min-height:36px;padding:8px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--accent);font-size:12px;font-weight:650;cursor:pointer;white-space:nowrap}
+.client-analysis-action:hover,.client-analysis-owner button:hover{background:var(--surface-soft)}
+.simple-client-table .assignment-edit-trigger.simple-edit{display:inline-flex;align-items:center;justify-content:center;gap:5px;width:auto;min-width:65px;padding:7px 9px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--accent);font-size:11px;flex-shrink:0}
+.simple-client-table .assignment-edit-trigger svg{width:14px;height:14px}
+.simple-client-table .media-account-links.editing{padding:20px;background:var(--surface-soft)}
+.simple-client-table .media-account-links.editing .media-link-summary{display:none}
+.simple-client-table .media-account-links.editing .media-link-editor{position:static;inset:auto;transform:none;width:100%;max-width:none;padding:0;border:0;border-radius:0;box-shadow:none;background:transparent}
+.simple-client-table .media-link-editor:before{display:none}
+.simple-client-table .media-link-editor h3{font-size:16px}
+.simple-client-table .media-link-editor header p{font-size:12px;margin-top:6px}
+.simple-client-table .media-link-fields{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+.simple-client-table .media-link-fields label b{font-size:12px}
+.simple-client-table .media-link-select select{min-height:44px;font-size:13px;background:var(--surface)}
+.simple-client-table .media-link-editor>footer>button{min-height:40px;font-size:12px;padding:0 16px}
+.client-analysis-dialog button:focus-visible,.simple-client-table .media-link-editor button:focus-visible,.assignment-edit-trigger:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+@media(max-width:640px){.client-analysis-dialog.campaign-ad-modal{width:calc(100vw - 20px);max-height:94vh}.client-analysis-dialog.campaign-ad-modal>header,.client-analysis-dialog .portfolio-client-analysis{padding:18px}.client-analysis-overview{align-items:stretch;flex-direction:column;gap:14px}.client-analysis-score{min-width:0}.client-analysis-dialog .portfolio-total-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.client-analysis-dialog .portfolio-analysis-campaign{grid-template-columns:1fr auto;gap:10px}.portfolio-analysis-campaign>b{grid-column:1/-1}.client-campaign-score{text-align:left}.simple-client-table .media-link-fields{grid-template-columns:1fr}}
+.client-analysis-score.good strong{color:#238356}.client-analysis-score.warning strong{color:#a77012}.client-analysis-score.bad strong{color:#bd4c4c}
+.client-analysis-dialog .portfolio-total-grid>div:nth-child(4n){border-right:0}
+.client-analysis-dialog .portfolio-total-grid>div:nth-last-child(-n+4){border-bottom:0}
+@media(max-width:640px){.client-analysis-dialog .portfolio-total-grid>div:nth-child(2n){border-right:0}.client-analysis-dialog .portfolio-total-grid>div:nth-last-child(-n+4){border-bottom:1px solid var(--border)}.client-analysis-dialog .portfolio-total-grid>div:nth-last-child(-n+2){border-bottom:0}}

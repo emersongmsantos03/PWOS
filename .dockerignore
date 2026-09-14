@@ -7,3 +7,13 @@ dist
 node_modules
 npm-debug.log*
 backups
+
+.openai
+.DS_Store
+**/.DS_Store
+**/.env
+**/.env.*
+*.log
+build
+db
+*.tsbuildinfo

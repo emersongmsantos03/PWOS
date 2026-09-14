@@ -57,7 +57,7 @@
   background: #fff7df !important;
   color: #b26a00 !important;
 }
-.platform-mark{display:inline-flex!important;align-items:center;gap:5px!important;min-height:24px;padding:3px 7px 3px 4px;border:1px solid color-mix(in srgb,var(--border) 80%,transparent);border-radius:8px;background:var(--surface);box-shadow:0 1px 4px #10233d09}.platform-mark-icon{width:19px;height:19px;flex:0 0 19px;display:grid!important;place-items:center;border-radius:5px}.platform-mark-icon svg{width:15px;height:15px;overflow:visible}.platform-mark.meta .platform-mark-icon{background:#eaf2ff;color:#0866ff}.platform-mark.meta .platform-mark-icon svg{width:17px;fill:none;stroke:currentColor;stroke-width:3.2;stroke-linecap:round;stroke-linejoin:round}.platform-mark.google .platform-mark-icon{background:#fff;border:1px solid #e8ebef}.platform-mark.google .google-blue{fill:#4285f4}.platform-mark.google .google-green{fill:#34a853}.platform-mark.google .google-yellow{fill:#fbbc04}.platform-mark-copy{display:flex!important;flex-direction:column;align-items:flex-start!important;gap:0!important}.platform-mark-copy b{color:var(--heading);font-size:7px;line-height:1.15;white-space:nowrap}.platform-mark-copy small{margin:1px 0 0!important;color:var(--subtle);font-size:4.8px!important;line-height:1.1;white-space:nowrap}
+.platform-mark{display:inline-flex!important;align-items:center;gap:5px!important;min-height:24px;padding:3px 7px 3px 4px;border:1px solid color-mix(in srgb,var(--border) 80%,transparent);border-radius:8px;background:var(--surface);box-shadow:0 1px 4px #10233d09}.platform-mark-icon{width:19px;height:19px;flex:0 0 19px;display:grid!important;place-items:center;border-radius:5px}.platform-mark-icon :is(svg,img){width:15px;height:15px;overflow:visible}.platform-mark.meta .platform-mark-icon{background:#eaf2ff;color:#0866ff}.platform-mark.meta .platform-mark-icon :is(svg,img){width:17px;fill:currentColor;stroke:none}.platform-mark.google .platform-mark-icon{background:#fff;border:1px solid #e8ebef}.platform-mark.google .google-blue{fill:#4285f4}.platform-mark.google .google-green{fill:#34a853}.platform-mark.google .google-yellow{fill:#fbbc04}.platform-mark-copy{display:flex!important;flex-direction:column;align-items:flex-start!important;gap:0!important}.platform-mark-copy b{color:var(--heading);font-size:7px;line-height:1.15;white-space:nowrap}.platform-mark-copy small{margin:1px 0 0!important;color:var(--subtle);font-size:4.8px!important;line-height:1.1;white-space:nowrap}
 .traffic-platform-switch > button.active.meta {
   border-color: #1877f2;
   box-shadow: 0 0 0 2px #1877f214;
@@ -91,9 +91,10 @@
 }
 .google-ads-symbol {
   position: relative;
+  place-items: center;
   width: 34px;
   height: 34px;
-  display: block;
+  display: grid;
   flex: 0 0 auto;
   border: 1px solid var(--border);
   border-radius: 9px;
@@ -206,3 +207,5 @@
     display: none;
   }
 }
+
+.traffic-platform-empty > .google-ads-symbol img { width: 40px; height: 40px; }

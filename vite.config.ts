@@ -1,3 +1,6 @@
+import { forEachConcurrent } from "./asyncPool";
+import { mediaConnectionSummary } from "./mediaConnectionSummary";
+import { googleOAuthReturnPage } from "./oauthCallback";
 import {
   createHash,
   createHmac,
@@ -22,6 +25,7 @@ import {
 import { once } from "node:events";
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
+import { gzipSync } from "node:zlib";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { defineConfig, loadEnv, type Plugin, type PreviewServer, type ViteDevServer } from "vite";
 import nodemailer from "nodemailer";
@@ -742,6 +746,8 @@ const hasPermission = (user: User | undefined, permission: string) => {
     !!user.roleId && !!roles.get(user.roleId)?.permissions.includes(permission)
   );
 };
+const canManageMediaConnection = (user: User | undefined, action: "authorize" | "revoke") =>
+  !!user && user.profile !== "CLIENT" && hasPermission(user, `integrations.${action}`);
 const publicUser = (user: User) => {
   const permissions =
     user.profile === "MASTER"
@@ -767,9 +773,17 @@ const body = async (request: IncomingMessage) => {
   return JSON.parse(value || "{}") as Record<string, any>;
 };
 const json = (response: ServerResponse, status: number, value: unknown) => {
+  const serialized = JSON.stringify(value),
+    acceptsGzip = !!(response as ServerResponse & { pwAcceptsGzip?: boolean })
+      .pwAcceptsGzip;
   response.statusCode = status;
   response.setHeader("Content-Type", "application/json; charset=utf-8");
-  response.end(JSON.stringify(value));
+  if (acceptsGzip && Buffer.byteLength(serialized) >= 1024) {
+    response.setHeader("Content-Encoding", "gzip");
+    response.setHeader("Vary", "Accept-Encoding");
+    return response.end(gzipSync(serialized));
+  }
+  response.end(serialized);
 };
 
 function localApi(
@@ -777,10 +791,14 @@ function localApi(
   masterPassword: string,
   metaAccessToken: string,
   metaGraphVersion: string,
+  metaAppId: string,
+  metaAppSecret: string,
+  metaRedirectUri: string,
   googleClientId: string,
   googleClientSecret: string,
   googleDeveloperToken: string,
   googleRefreshToken: string,
+  googleRedirectUri: string,
   openAiApiKey: string,
   openAiModel: string,
   azureEmailHost: string,
@@ -844,9 +862,11 @@ function localApi(
     }
   };
   const localMetaTokenPath = "data/meta-token.local.json";
+  const localMetaConnectionsPath = "data/meta-connections.local.json";
   const localGoogleDeveloperTokenPath =
     "data/google-developer-token.local.json";
   const localGoogleOAuthPath = "data/google-oauth.local.json";
+  const localMediaOAuthIdentityPath = "data/media-oauth-identities.local.json";
   const localIntegrationKeyPath = "data/integration.local.key";
   const localAiInsightsPath = "data/openai-insights.local.json";
   const localOpenAiSettingsPath = "data/openai-settings.local.json";
@@ -890,6 +910,32 @@ function localApi(
       updatedAt: new Date().toISOString(),
     };
   };
+  type MediaOAuthIdentity = {
+    id: string;
+    name: string;
+    email?: string;
+    connectedAt: string;
+  };
+  type StoredMetaConnection = MediaOAuthIdentity & {
+    accessToken: ReturnType<typeof encryptIntegrationToken>;
+  };
+  const runtimeMetaConnections = new Map<string, StoredMetaConnection>();
+  let mediaOAuthIdentities: Partial<Record<"META_ADS" | "GOOGLE_ADS", MediaOAuthIdentity>> = {};
+  try {
+    mediaOAuthIdentities = JSON.parse(
+      readFileSync(localMediaOAuthIdentityPath, "utf8"),
+    ) as typeof mediaOAuthIdentities;
+  } catch {
+    mediaOAuthIdentities = {};
+  }
+  const persistMediaOAuthIdentities = () => {
+    mkdirSync("data", { recursive: true });
+    writeFileSync(
+      localMediaOAuthIdentityPath,
+      JSON.stringify(mediaOAuthIdentities, null, 2),
+      { mode: 0o600 },
+    );
+  };
   const decryptIntegrationTokenWithKey = (payload: {
     iv: string;
     tag: string;
@@ -920,6 +966,23 @@ function localApi(
         throw stableKeyError;
       }
     }
+  };
+  const persistMetaConnections = () => {
+    mkdirSync("data", { recursive: true });
+    writeFileSync(
+      localMetaConnectionsPath,
+      JSON.stringify([...runtimeMetaConnections.values()], null, 2),
+      { mode: 0o600 },
+    );
+  };
+  const metaAccessConnections = () => {
+    const connected: Array<{ identity: MediaOAuthIdentity; token: string }> = [...runtimeMetaConnections.values()].flatMap((item) => {
+      try { return [{ identity: item, token: decryptIntegrationToken(item.accessToken) }]; }
+      catch { return []; }
+    });
+    if (runtimeMetaAccessToken && !connected.some((item) => item.token === runtimeMetaAccessToken))
+      connected.push({ identity: mediaOAuthIdentities.META_ADS || { id: "legacy", name: "Conexão Meta anterior", connectedAt: "" }, token: runtimeMetaAccessToken });
+    return connected;
   };
   type OpenAiSettings = { secret: ReturnType<typeof encryptIntegrationToken>; model: string; lastFour: string; verifiedAt: string; updatedAt: string; updatedById: string; updatedByName: string };
   let openAiSettings: OpenAiSettings | null = null;
@@ -957,6 +1020,38 @@ function localApi(
     if (!tokenResponse.ok || !tokenPayload.access_token) throw new Error(tokenPayload.error_description || "Não foi possível renovar a autorização do Google.");
     return tokenPayload.access_token;
   };
+  let googleIdentityLookup: Promise<void> | undefined;
+  let googleIdentityRetryAt = 0;
+  const resolveGoogleIdentity = async () => {
+    if (!runtimeGoogleRefreshToken || mediaOAuthIdentities.GOOGLE_ADS?.email) return;
+    if (googleIdentityLookup) return googleIdentityLookup;
+    if (Date.now() < googleIdentityRetryAt) return;
+    googleIdentityRetryAt = Date.now() + 5 * 60 * 1000;
+    const refreshToken = runtimeGoogleRefreshToken;
+    googleIdentityLookup = (async () => {
+      try {
+        const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
+          method: "POST", signal: AbortSignal.timeout(8000),
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({ client_id: runtimeGoogleClientId, client_secret: runtimeGoogleClientSecret, refresh_token: refreshToken, grant_type: "refresh_token" }),
+        });
+        const token = await tokenResponse.json() as { access_token?: string };
+        if (!tokenResponse.ok || !token.access_token) return;
+        const result = await fetch("https://openidconnect.googleapis.com/v1/userinfo", {
+          signal: AbortSignal.timeout(8000), headers: { Authorization: `Bearer ${token.access_token}` },
+        });
+        if (!result.ok) return;
+        const profile = await result.json() as { sub?: string; name?: string; email?: string };
+        if (!profile.sub || !profile.email || runtimeGoogleRefreshToken !== refreshToken) return;
+        mediaOAuthIdentities.GOOGLE_ADS = {
+          id: profile.sub, name: profile.name || profile.email, email: profile.email,
+          connectedAt: mediaOAuthIdentities.GOOGLE_ADS?.connectedAt || "",
+        };
+        persistMediaOAuthIdentities();
+      } catch { /* A identificação é opcional; uma falha não desfaz a conexão. */ }
+    })().finally(() => { googleIdentityLookup = undefined; });
+    return googleIdentityLookup;
+  };
   const emailTransport = async (userId: string) => {
     const connection = userEmailConnections.get(userId);
     if (!connection) throw new Error("Configure seu Gmail em Configurações → E-mail e SMTP antes de enviar.");
@@ -986,6 +1081,13 @@ function localApi(
     await transport.sendMail({ from: { name: azureEmailFromName || "PW OS", address: azureEmailFrom }, to: input.to, subject: input.subject, html: input.html });
   };
   const emailOAuthStates = new Map<string, { userId: string; redirectUri: string; createdAt: number }>();
+  const mediaOAuthStates = new Map<string, { provider: "google" | "meta"; userId: string; redirectUri: string; createdAt: number }>();
+  if (existsSync(localMetaConnectionsPath)) {
+    try {
+      (JSON.parse(readFileSync(localMetaConnectionsPath, "utf8")) as StoredMetaConnection[])
+        .forEach((item) => runtimeMetaConnections.set(item.id, item));
+    } catch { /* conexões inválidas podem ser refeitas pelo Master */ }
+  }
   if (existsSync(localMetaTokenPath)) {
     try {
       runtimeMetaAccessToken = decryptIntegrationToken(
@@ -994,6 +1096,10 @@ function localApi(
     } catch {
       runtimeMetaAccessToken = metaAccessToken;
     }
+  }
+  if (!runtimeMetaAccessToken && runtimeMetaConnections.size) {
+    const latest = [...runtimeMetaConnections.values()].at(-1);
+    if (latest) try { runtimeMetaAccessToken = decryptIntegrationToken(latest.accessToken); } catch {}
   }
   if (existsSync(localGoogleDeveloperTokenPath)) {
     try {
@@ -1008,6 +1114,9 @@ function localApi(
     clientId: ReturnType<typeof encryptIntegrationToken>;
     clientSecret: ReturnType<typeof encryptIntegrationToken>;
     refreshToken: ReturnType<typeof encryptIntegrationToken>;
+    accountEmail?: string;
+    accountName?: string;
+    updatedAt?: string;
   };
   if (existsSync(localGoogleOAuthPath)) {
     try {
@@ -1015,6 +1124,9 @@ function localApi(
       runtimeGoogleClientId = decryptIntegrationToken(stored.clientId);
       runtimeGoogleClientSecret = decryptIntegrationToken(stored.clientSecret);
       runtimeGoogleRefreshToken = decryptIntegrationToken(stored.refreshToken);
+      if (!mediaOAuthIdentities.GOOGLE_ADS?.email && stored.accountEmail) {
+        mediaOAuthIdentities.GOOGLE_ADS = { id: stored.accountEmail, name: stored.accountName || stored.accountEmail, email: stored.accountEmail, connectedAt: stored.updatedAt || "" };
+      }
     } catch {
       // Se o arquivo estiver inválido, as variáveis de ambiente continuam sendo a fonte de recuperação.
     }
@@ -1092,6 +1204,25 @@ function localApi(
     snapshots = [snapshot, ...snapshots.filter((item) => item.id !== snapshot.id)]
       .sort((a, b) => String(b.syncedAt).localeCompare(String(a.syncedAt))).slice(0, 800);
     writeFileSync(localMediaMetricSnapshotsPath, JSON.stringify(snapshots, null, 2), { mode: 0o600 });
+  };
+  const readMediaMetricSnapshot = (
+    platform: "META_ADS" | "GOOGLE_ADS",
+    since: string,
+    until: string,
+  ) => {
+    try {
+      const snapshots = JSON.parse(
+        readFileSync(localMediaMetricSnapshotsPath, "utf8"),
+      ) as Record<string, any>[];
+      return snapshots.find(
+        (item) =>
+          item.platform === platform &&
+          item.since === since &&
+          item.until === until,
+      );
+    } catch {
+      return undefined;
+    }
   };
   type CampaignReviewEntry = {
     action: "ANALYSIS" | "REVIEW" | "REPORT_DOWNLOADED" | "REPORT_SENT";
@@ -2022,6 +2153,8 @@ function localApi(
       server.httpServer?.once("close", () =>
         clearInterval(attachmentCleanupTimer),
       );
+      let googleDirectoryCache: { key: string; expiresAt: number; accounts: Array<{ id: string; name: string; currency: string; loginCustomerId: string; manager: boolean }> } | null = null;
+      let googleManualSyncInProgress = false;
       const mediaInternalSyncToken = randomBytes(24).toString("hex");
       let lastScheduledMediaDay = "";
       const runScheduledMediaSync = async () => {
@@ -2038,17 +2171,48 @@ function localApi(
             ["meta", localMetaDashboardCachePath, !!runtimeMetaAccessToken],
             ["google", localGoogleDashboardCachePath, !!runtimeGoogleRefreshToken && !!runtimeGoogleDeveloperToken],
           ].map(async ([provider, cachePath, configured]) => {
-            if (!configured || !existsSync(String(cachePath))) return;
+            if (!configured) return;
             try {
-              const cached = JSON.parse(readFileSync(String(cachePath), "utf8")) as {
+              const fallbackUntil = localDay,
+                fallbackSinceDate = new Date(`${localDay}T12:00:00`);
+              fallbackSinceDate.setDate(fallbackSinceDate.getDate() - 29);
+              const cached = existsSync(String(cachePath))
+                ? JSON.parse(readFileSync(String(cachePath), "utf8")) as {
                 since: string;
                 until: string;
                 syncedAt?: string;
                 cachedAt?: string;
                 payload?: { syncedAt?: string };
-              };
+                }
+                : null;
+              const lastSync = cached?.syncedAt || cached?.cachedAt || cached?.payload?.syncedAt;
+              if (lastSync) {
+                const lastSyncDay = new Intl.DateTimeFormat("en-CA", {
+                  timeZone: "America/Sao_Paulo",
+                  year: "numeric",
+                  month: "2-digit",
+                  day: "2-digit",
+                }).format(new Date(lastSync));
+                if (lastSyncDay === localDay) return;
+              }
+              const cachedSince = cached?.since,
+                cachedUntil = cached?.until,
+                cachedDuration = cachedSince && cachedUntil
+                  ? Math.max(
+                      0,
+                      Math.round(
+                        (new Date(`${cachedUntil}T12:00:00`).getTime() -
+                          new Date(`${cachedSince}T12:00:00`).getTime()) /
+                          86400000,
+                      ),
+                    )
+                  : 29,
+                rollingSince = new Date(`${localDay}T12:00:00`);
+              rollingSince.setDate(rollingSince.getDate() - cachedDuration);
+              const since = rollingSince.toISOString().slice(0, 10),
+                until = fallbackUntil;
               await fetch(
-                `http://127.0.0.1:${address.port}/api/media/${provider}/campaigns?since=${encodeURIComponent(cached.since)}&until=${encodeURIComponent(cached.until)}&refresh=1`,
+                `http://127.0.0.1:${address.port}/api/media/${provider}/campaigns?since=${encodeURIComponent(since)}&until=${encodeURIComponent(until)}&refresh=1`,
                 { headers: { "x-pw-media-background": mediaInternalSyncToken } },
               );
             } catch (cause) {
@@ -2072,6 +2236,10 @@ function localApi(
       server.httpServer?.once("close", () => clearInterval(scheduledMediaTimer));
       server.middlewares.use("/api", async (request, response) => {
         const url = request.url || "/";
+        (response as ServerResponse & { pwAcceptsGzip?: boolean }).pwAcceptsGzip =
+          /(?:^|,)\s*gzip\s*(?:,|$)/i.test(
+            String(request.headers["accept-encoding"] || ""),
+          );
         if (url === "/health" && request.method === "GET")
           return json(response, 200, { ok: true, service: "pw-os", storage: "data" });
         const sessionId = cookies(request).pw_os_session;
@@ -2156,7 +2324,7 @@ function localApi(
           const token = createSessionToken(user, portal);
           response.setHeader(
             "Set-Cookie",
-            `${portal ? "pw_client_session" : "pw_os_session"}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${Math.floor(sessionLifetimeMs / 1000)}${String(request.headers["x-forwarded-proto"] || "").includes("https") ? "; Secure" : ""}`,
+            `${portal ? "pw_client_session" : "pw_os_session"}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Math.floor(sessionLifetimeMs / 1000)}${String(request.headers["x-forwarded-proto"] || "").includes("https") ? "; Secure" : ""}`,
           );
           return json(response, 200, { user: publicUser(user) });
         }
@@ -2170,9 +2338,153 @@ function localApi(
           if (!portal && sessionId) sessions.delete(sessionId);
           response.setHeader(
             "Set-Cookie",
-            `${portal ? "pw_client_session" : "pw_os_session"}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${String(request.headers["x-forwarded-proto"] || "").includes("https") ? "; Secure" : ""}`,
+            `${portal ? "pw_client_session" : "pw_os_session"}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${String(request.headers["x-forwarded-proto"] || "").includes("https") ? "; Secure" : ""}`,
           );
           return json(response, 200, { ok: true });
+        }
+        if (url.split("?")[0] === "/integrations/google_ads/oauth/callback" && (request.method === "GET" || request.method === "POST")) {
+          response.setHeader("Cache-Control", "no-store");
+          response.setHeader("Referrer-Policy", "no-referrer");
+          const parsed = new URL(url, `http://${request.headers.host || "127.0.0.1"}`);
+          let params = parsed.searchParams;
+          if (request.method === "POST") {
+            let formBody = "";
+            for await (const chunk of request) {
+              formBody += chunk;
+              if (formBody.length > 16384) return json(response, 413, { message: "Retorno do Google inválido." });
+            }
+            params = new URLSearchParams(formBody);
+          }
+          const state = params.get("state") || "",
+            code = params.get("code") || "",
+            pending = mediaOAuthStates.get(state),
+            finish = (result: "connected" | "error", reason?: string) => {
+              response.statusCode = 303;
+              response.setHeader("Location", `/configuracoes/integracoes?oauth=google-${result}${reason ? `&oauth_reason=${encodeURIComponent(reason)}` : ""}`);
+              response.end();
+            };
+          if (!pending || pending.provider !== "google" || Date.now() - pending.createdAt > 10 * 60 * 1000)
+            return finish("error", "state");
+          if (request.method === "GET") {
+            const nonce = randomBytes(16).toString("base64");
+            response.setHeader("Content-Type", "text/html; charset=utf-8");
+            response.setHeader("Content-Security-Policy", `default-src 'none'; script-src 'nonce-${nonce}'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'`);
+            response.end(googleOAuthReturnPage({ state, code, error: params.get("error") || "" }, nonce));
+            return;
+          }
+          if (currentUser?.id !== pending.userId || !canManageMediaConnection(currentUser, "authorize")) return finish("error", "session");
+          mediaOAuthStates.delete(state);
+          if (!code || params.get("error")) return finish("error", "denied");
+          let failureReason = "token";
+          try {
+            const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
+                method: "POST",
+                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                body: new URLSearchParams({
+                  code,
+                  client_id: runtimeGoogleClientId,
+                  client_secret: runtimeGoogleClientSecret,
+                  redirect_uri: pending.redirectUri,
+                  grant_type: "authorization_code",
+                }),
+              }),
+              tokenPayload = await tokenResponse.json() as { access_token?: string; refresh_token?: string; error_description?: string };
+            if (!tokenResponse.ok || !tokenPayload.access_token || !tokenPayload.refresh_token)
+              throw new Error(tokenPayload.error_description || "O Google não liberou o acesso permanente.");
+            failureReason = "accounts";
+            const [profileResponse, accountsResponse] = await Promise.all([
+              fetch("https://openidconnect.googleapis.com/v1/userinfo", { headers: { Authorization: `Bearer ${tokenPayload.access_token}` } }),
+              fetch("https://googleads.googleapis.com/v25/customers:listAccessibleCustomers", {
+                headers: { Authorization: `Bearer ${tokenPayload.access_token}`, "developer-token": runtimeGoogleDeveloperToken },
+              }),
+            ]);
+            if (!accountsResponse.ok) throw new Error("A conta não possui acesso válido ao Google Ads.");
+            const profile = await profileResponse.json().catch(() => ({})) as { sub?: string; email?: string; name?: string };
+            const accessible = await accountsResponse.json() as { resourceNames?: string[] };
+            failureReason = "error";
+            const now = new Date().toISOString();
+            runtimeGoogleRefreshToken = tokenPayload.refresh_token;
+            mkdirSync("data", { recursive: true });
+            writeFileSync(localGoogleOAuthPath, JSON.stringify({
+              clientId: encryptIntegrationToken(runtimeGoogleClientId),
+              clientSecret: encryptIntegrationToken(runtimeGoogleClientSecret),
+              refreshToken: encryptIntegrationToken(runtimeGoogleRefreshToken),
+              accountEmail: profile.email,
+              accountName: profile.name,
+              updatedAt: now,
+            }, null, 2), { mode: 0o600 });
+            mediaOAuthIdentities.GOOGLE_ADS = {
+              id: profile.sub || accessible.resourceNames?.[0] || "google-manager",
+              name: profile.name || profile.email || "Conta administradora Google Ads",
+              email: profile.email,
+              connectedAt: now,
+            };
+            persistMediaOAuthIdentities();
+            return finish("connected");
+          } catch (cause) {
+            console.error("[Google Ads OAuth]", cause instanceof Error ? cause.message : cause);
+            return finish("error", failureReason);
+          }
+        }
+        if (url.startsWith("/integrations/meta_ads/oauth/callback") && request.method === "GET") {
+          const parsed = new URL(url, `http://${request.headers.host || "127.0.0.1"}`),
+            state = parsed.searchParams.get("state") || "",
+            code = parsed.searchParams.get("code") || "",
+            pending = mediaOAuthStates.get(state),
+            finish = (result: "connected" | "error") => {
+              response.statusCode = 302;
+              response.setHeader("Location", `/configuracoes/integracoes?oauth=meta-${result}`);
+              response.end();
+            };
+          if (!pending || pending.provider !== "meta" || Date.now() - pending.createdAt > 10 * 60 * 1000 || !code || currentUser?.id !== pending.userId || !canManageMediaConnection(currentUser, "authorize"))
+            return finish("error");
+          mediaOAuthStates.delete(state);
+          try {
+            const exchangeUrl = new URL(`https://graph.facebook.com/${metaGraphVersion}/oauth/access_token`);
+            exchangeUrl.searchParams.set("client_id", metaAppId);
+            exchangeUrl.searchParams.set("client_secret", metaAppSecret);
+            exchangeUrl.searchParams.set("redirect_uri", pending.redirectUri);
+            exchangeUrl.searchParams.set("code", code);
+            const exchangeResponse = await fetch(exchangeUrl),
+              exchange = await exchangeResponse.json() as { access_token?: string; error?: { message?: string } };
+            if (!exchangeResponse.ok || !exchange.access_token)
+              throw new Error(exchange.error?.message || "A Meta recusou a autorização.");
+            const longLivedUrl = new URL(`https://graph.facebook.com/${metaGraphVersion}/oauth/access_token`);
+            longLivedUrl.searchParams.set("grant_type", "fb_exchange_token");
+            longLivedUrl.searchParams.set("client_id", metaAppId);
+            longLivedUrl.searchParams.set("client_secret", metaAppSecret);
+            longLivedUrl.searchParams.set("fb_exchange_token", exchange.access_token);
+            const longLivedResponse = await fetch(longLivedUrl),
+              longLived = await longLivedResponse.json() as { access_token?: string };
+            const accessToken = longLivedResponse.ok && longLived.access_token
+              ? longLived.access_token
+              : exchange.access_token;
+            const profileUrl = new URL(`https://graph.facebook.com/${metaGraphVersion}/me`);
+            profileUrl.searchParams.set("fields", "id,name");
+            profileUrl.searchParams.set("access_token", accessToken);
+            const profileResponse = await fetch(profileUrl),
+              profile = await profileResponse.json() as { id?: string; name?: string; error?: { message?: string } };
+            if (!profileResponse.ok || !profile.id)
+              throw new Error(profile.error?.message || "Não foi possível validar a conta da Meta.");
+            const now = new Date().toISOString();
+            const identity: MediaOAuthIdentity = {
+              id: profile.id,
+              name: profile.name || "Conta Meta",
+              connectedAt: now,
+            };
+            runtimeMetaConnections.set(profile.id, {
+              ...identity,
+              accessToken: encryptIntegrationToken(accessToken),
+            });
+            persistMetaConnections();
+            runtimeMetaAccessToken = accessToken;
+            mediaOAuthIdentities.META_ADS = identity;
+            persistMediaOAuthIdentities();
+            return finish("connected");
+          } catch (cause) {
+            console.error("[Meta OAuth]", cause instanceof Error ? cause.message : cause);
+            return finish("error");
+          }
         }
         if (url.startsWith("/email/google/callback") && request.method === "GET") {
           const parsed = new URL(url, `http://${request.headers.host || "127.0.0.1"}`), state = parsed.searchParams.get("state") || "", code = parsed.searchParams.get("code") || "", pending = emailOAuthStates.get(state);
@@ -6528,6 +6840,44 @@ function localApi(
           return json(response, 403, {
             message: "Clientes externos não acessam a Central de Conexões.",
           });
+        if (/^\/media\/(meta|google)\/oauth\/start$/.test(url) && request.method === "POST") {
+          if (!canManageMediaConnection(currentUser, "authorize"))
+            return json(response, 403, { message: "Você precisa da permissão Central de Conexões → Autorizar para conectar as plataformas." });
+          const provider = url.includes("/meta/") ? "meta" : "google",
+            forwardedProto = String(request.headers["x-forwarded-proto"] || "http").split(",")[0].trim(),
+            origin = (appBaseUrl || `${forwardedProto}://${request.headers.host}`).replace(/\/$/, ""),
+            redirectUri = provider === "google"
+              ? googleRedirectUri || `${origin}/api/integrations/google_ads/oauth/callback`
+              : metaRedirectUri || `${origin}/api/integrations/meta_ads/oauth/callback`;
+          const requestOrigin = `${forwardedProto}://${request.headers.host}`;
+          if (new URL(redirectUri).origin !== requestOrigin)
+            return json(response, 409, { message: `Abra o PW OS em ${new URL(redirectUri).origin}, faça login e conecte ${provider === "google" ? "o Google" : "o Facebook"} novamente. O endereço atual é diferente do retorno configurado e a sessão não seria reconhecida.` });
+          if (provider === "google" && (!runtimeGoogleClientId || !runtimeGoogleClientSecret || !runtimeGoogleDeveloperToken))
+            return json(response, 409, { message: "O aplicativo Google Ads ainda não foi configurado no backend." });
+          if (provider === "meta" && (!metaAppId || !metaAppSecret))
+            return json(response, 409, { message: "O aplicativo Meta ainda não foi configurado no backend." });
+          const state = randomBytes(24).toString("hex");
+          mediaOAuthStates.set(state, { provider, userId: currentUser.id, redirectUri, createdAt: Date.now() });
+          const authUrl = provider === "google"
+            ? `https://accounts.google.com/o/oauth2/v2/auth?${new URLSearchParams({
+                client_id: runtimeGoogleClientId,
+                redirect_uri: redirectUri,
+                response_type: "code",
+                scope: "openid email profile https://www.googleapis.com/auth/adwords",
+                access_type: "offline",
+                prompt: "consent select_account",
+                include_granted_scopes: "true",
+                state,
+              })}`
+            : `https://www.facebook.com/${metaGraphVersion}/dialog/oauth?${new URLSearchParams({
+                client_id: metaAppId,
+                redirect_uri: redirectUri,
+                response_type: "code",
+                scope: "ads_read,business_management",
+                state,
+              })}`;
+          return json(response, 200, { authUrl });
+        }
         if (/^\/media\/(meta|google)\/token\/reveal$/.test(url) && request.method === "GET") {
           if (currentUser.profile !== "MASTER")
             return json(response, 403, {
@@ -6549,10 +6899,15 @@ function localApi(
             } catch {}
           }
           return json(response, 200, {
-            configured: !!runtimeMetaAccessToken,
-            storedInSystem: existsSync(localMetaTokenPath),
+            configured: metaAccessConnections().length > 0,
+            storedInSystem: runtimeMetaConnections.size > 0 || existsSync(localMetaTokenPath),
             updatedAt,
-            canManage: currentUser.profile === "MASTER",
+            oauthAvailable: !!metaAppId && !!metaAppSecret,
+            connectionMethod: runtimeMetaConnections.size ? "OAUTH" : runtimeMetaAccessToken ? "LEGACY" : "NONE",
+            identity: mediaOAuthIdentities.META_ADS || null,
+            identities: [...runtimeMetaConnections.values()].map(({ accessToken: _accessToken, ...identity }) => identity),
+            canManage: canManageMediaConnection(currentUser, "authorize"),
+            canRevoke: canManageMediaConnection(currentUser, "revoke"),
           });
         }
         if (url === "/media/meta/token" && request.method === "PATCH") {
@@ -6601,12 +6956,16 @@ function localApi(
           }
         }
         if (url === "/media/meta/token" && request.method === "DELETE") {
-          if (currentUser.profile !== "MASTER")
+          if (!canManageMediaConnection(currentUser, "revoke"))
             return json(response, 403, {
-              message: "Somente o Master pode revogar o token da Meta.",
+              message: "Você precisa da permissão Central de Conexões → Revogar para desconectar contas.",
             });
           runtimeMetaAccessToken = "";
+          runtimeMetaConnections.clear();
+          if (existsSync(localMetaConnectionsPath)) unlinkSync(localMetaConnectionsPath);
           if (existsSync(localMetaTokenPath)) unlinkSync(localMetaTokenPath);
+          delete mediaOAuthIdentities.META_ADS;
+          persistMediaOAuthIdentities();
           return json(response, 200, {
             configured: false,
             storedInSystem: false,
@@ -6616,25 +6975,47 @@ function localApi(
               "Token anterior revogado do PW OS. Agora você pode cadastrar um novo token.",
           });
         }
+        const metaConnectionMatch = url.match(/^\/media\/meta\/connections\/([^/]+)$/);
+        if (metaConnectionMatch && request.method === "DELETE") {
+          if (!canManageMediaConnection(currentUser, "revoke"))
+            return json(response, 403, { message: "Você precisa da permissão Central de Conexões → Revogar para desconectar contas." });
+          const connectionId = decodeURIComponent(metaConnectionMatch[1]);
+          if (!runtimeMetaConnections.delete(connectionId))
+            return json(response, 404, { message: "Conexão da Meta não encontrada." });
+          persistMetaConnections();
+          const remaining = [...runtimeMetaConnections.values()];
+          runtimeMetaAccessToken = metaAccessToken;
+          const latest = remaining.at(-1);
+          if (latest) try { runtimeMetaAccessToken = decryptIntegrationToken(latest.accessToken); } catch {}
+          mediaOAuthIdentities.META_ADS = remaining.at(-1);
+          persistMediaOAuthIdentities();
+          return json(response, 200, { ok: true, message: "Conta do Facebook desconectada. As demais conexões foram preservadas." });
+        }
         if (url === "/media/google/token" && request.method === "GET") {
+          await resolveGoogleIdentity();
           let updatedAt: string | null = null;
-          if (existsSync(localGoogleDeveloperTokenPath)) {
+          if (existsSync(localGoogleOAuthPath)) {
             try {
               updatedAt =
-                JSON.parse(readFileSync(localGoogleDeveloperTokenPath, "utf8"))
-                  .updatedAt || null;
+                JSON.parse(readFileSync(localGoogleOAuthPath, "utf8"))
+                  .updatedAt || mediaOAuthIdentities.GOOGLE_ADS?.connectedAt || null;
             } catch {}
           }
           return json(response, 200, {
             configured:
               !!runtimeGoogleRefreshToken && !!runtimeGoogleDeveloperToken,
-            storedInSystem: existsSync(localGoogleDeveloperTokenPath),
+            storedInSystem: existsSync(localGoogleOAuthPath),
             refreshTokenConfigured: !!runtimeGoogleRefreshToken,
             developerTokenConfigured: !!runtimeGoogleDeveloperToken,
             oauthClientConfigured:
               !!runtimeGoogleClientId && !!runtimeGoogleClientSecret,
+            oauthAvailable:
+              !!runtimeGoogleClientId && !!runtimeGoogleClientSecret && !!runtimeGoogleDeveloperToken,
+            connectionMethod: mediaOAuthIdentities.GOOGLE_ADS ? "OAUTH" : runtimeGoogleRefreshToken ? "LEGACY" : "NONE",
+            identity: mediaOAuthIdentities.GOOGLE_ADS || null,
             updatedAt,
-            canManage: currentUser.profile === "MASTER",
+            canManage: canManageMediaConnection(currentUser, "authorize"),
+            canRevoke: canManageMediaConnection(currentUser, "revoke"),
           });
         }
         if (url === "/media/google/token" && request.method === "PATCH") {
@@ -6678,25 +7059,30 @@ function localApi(
           }
         }
         if (url === "/media/google/token" && request.method === "DELETE") {
-          if (currentUser.profile !== "MASTER")
+          if (!canManageMediaConnection(currentUser, "revoke"))
             return json(response, 403, {
               message:
-                "Somente o Master pode revogar a chave da API do Google Ads.",
+                "Você precisa da permissão Central de Conexões → Revogar para desconectar contas.",
             });
-          runtimeGoogleDeveloperToken = googleDeveloperToken;
-          if (existsSync(localGoogleDeveloperTokenPath))
-            unlinkSync(localGoogleDeveloperTokenPath);
+          runtimeGoogleRefreshToken = "";
+          if (existsSync(localGoogleOAuthPath)) unlinkSync(localGoogleOAuthPath);
+          delete mediaOAuthIdentities.GOOGLE_ADS;
+          persistMediaOAuthIdentities();
           return json(response, 200, {
             configured: false,
             storedInSystem: false,
-            refreshTokenConfigured: !!runtimeGoogleRefreshToken,
-            developerTokenConfigured: !!googleDeveloperToken,
+            refreshTokenConfigured: false,
+            developerTokenConfigured: !!runtimeGoogleDeveloperToken,
             oauthClientConfigured:
               !!runtimeGoogleClientId && !!runtimeGoogleClientSecret,
+            oauthAvailable:
+              !!runtimeGoogleClientId && !!runtimeGoogleClientSecret && !!runtimeGoogleDeveloperToken,
+            connectionMethod: "NONE",
+            identity: null,
             updatedAt: null,
             canManage: true,
             message:
-              "Chave da API anterior revogada. Agora você pode cadastrar uma nova.",
+              "Login do Google Ads desconectado. Os dados já armazenados foram preservados.",
           });
         }
         if (url === "/content/meta/accounts" && request.method === "GET") {
@@ -6704,7 +7090,7 @@ function localApi(
             return json(response, 403, {
               message: "Você não possui acesso ao conteúdo.",
             });
-          if (!runtimeMetaAccessToken)
+          if (!metaAccessConnections().length)
             return json(response, 503, {
               message: "Configure o token da Meta na Central de Conexões.",
             });
@@ -6769,7 +7155,7 @@ function localApi(
             return json(response, 403, {
               message: "Você não possui acesso ao conteúdo.",
             });
-          if (!runtimeMetaAccessToken)
+          if (!metaAccessConnections().length)
             return json(response, 503, {
               message: "Configure o token da Meta na Central de Conexões.",
             });
@@ -7238,7 +7624,31 @@ function localApi(
               ? requestUrl.searchParams.get("until")!
               : today,
             forceRefresh = requestUrl.searchParams.get("refresh") === "1",
-            comparisonRequest = requestUrl.searchParams.get("comparison") === "1";
+            comparisonRequest = requestUrl.searchParams.get("comparison") === "1",
+            storedRequest = requestUrl.searchParams.get("stored") === "1";
+          const manualSync = forceRefresh && requestUrl.searchParams.get("manual") === "1";
+          const requestedSync = manualSync;
+          if (manualSync && !hasPermission(currentUser, "media.sync"))
+            return json(response, 403, { message: "Você não possui permissão para sincronizar campanhas." });
+          if (manualSync && (!runtimeGoogleRefreshToken || !runtimeGoogleDeveloperToken))
+            return json(response, 409, { message: "Conecte o Google Ads antes de sincronizar." });
+          if (!manualSync && storedRequest && existsSync(localGoogleDashboardCachePath))
+            try {
+              const cached = JSON.parse(
+                readFileSync(localGoogleDashboardCachePath, "utf8"),
+              ) as Record<string, any>;
+              if (cached.schemaVersion === 10 && cached.since === since && cached.until === until)
+                return json(response, 200, withCampaignVerifications({
+                  ...cached,
+                  cache: {
+                    status: "stored",
+                    cachedAt: cached.syncedAt,
+                    nextSyncAt: new Date(
+                      new Date(cached.syncedAt).getTime() + mediaSyncIntervalMs,
+                    ).toISOString(),
+                  },
+                }, "GOOGLE_ADS"));
+            } catch {}
           if (existsSync(localGoogleDashboardCachePath))
             try {
               const cached = JSON.parse(
@@ -7246,7 +7656,7 @@ function localApi(
               ) as Record<string, any>;
               const cacheAge = Date.now() - new Date(cached.syncedAt || 0).getTime();
               if (
-                cached.schemaVersion === 10 &&
+                !manualSync && cached.schemaVersion === 10 &&
                 cached.since === since &&
                 cached.until === until &&
                 (!forceRefresh || cacheAge < mediaManualRefreshCooldownMs)
@@ -7262,10 +7672,41 @@ function localApi(
                   },
                 }, "GOOGLE_ADS"));
             } catch {}
-          if (!backgroundSync && !hasPermission(currentUser, "media.sync"))
-            return json(response, 403, {
-              message: "Você não possui permissão para sincronizar campanhas.",
+          const storedGoogleSnapshot = readMediaMetricSnapshot(
+            "GOOGLE_ADS",
+            since,
+            until,
+          );
+          if (!manualSync && storedGoogleSnapshot) {
+            let accounts: Record<string, any>[] = [];
+            try {
+              accounts = (JSON.parse(
+                readFileSync(localGoogleDashboardCachePath, "utf8"),
+              ) as { accounts?: Record<string, any>[] }).accounts || [];
+            } catch {}
+            return json(response, 200, withCampaignVerifications({
+              schemaVersion: 10,
+              since,
+              until,
+              syncedAt: storedGoogleSnapshot.syncedAt,
+              accounts,
+              campaigns: storedGoogleSnapshot.campaigns || [],
+              cache: { status: "history", cachedAt: storedGoogleSnapshot.syncedAt },
+            }, "GOOGLE_ADS"));
+          }
+          // Abrir uma tela nunca deve consumir a cota das plataformas. Somente
+          // a rotina interna ou uma sincronização manual autorizada pode renovar os dados.
+          if (!backgroundSync && !requestedSync)
+            return json(response, 409, {
+              code: "MEDIA_PERIOD_NOT_STORED",
+              message:
+                "Este período ainda não está na base compartilhada. Um usuário com permissão de sincronização pode carregá-lo para toda a equipe. A conexão é única; não é necessário conectar a conta de cada colaborador.",
+              availablePeriod: (() => {
+                try { const saved = JSON.parse(readFileSync(localGoogleDashboardCachePath, "utf8")); return { since: saved.since, until: saved.until }; } catch { return null; }
+              })(),
             });
+          if (!backgroundSync && !hasPermission(currentUser, "media.sync"))
+            return json(response, 403, { message: "Este período ainda não foi sincronizado. Solicite a sincronização ao responsável pela mídia." });
           const cachedGoogleCampaigns = new Map<string, Record<string, any>>();
           if (existsSync(localGoogleDashboardCachePath)) try {
             const previous = JSON.parse(readFileSync(localGoogleDashboardCachePath, "utf8")) as { campaigns?: Record<string, any>[] };
@@ -7284,8 +7725,16 @@ function localApi(
               message: `Complete a conexão do Google Ads: ${missing.join(", ")}.`,
               missingCredentials: missing,
             });
+          if (requestedSync && googleManualSyncInProgress)
+            return json(response, 409, { code: "GOOGLE_SYNC_BUSY", message: "Uma sincronização do Google já está em andamento. Aguarde sua conclusão." });
+          if (requestedSync) googleManualSyncInProgress = true;
+          const syncController = new AbortController();
+          const syncDeadline = setTimeout(() => syncController.abort(), requestedSync ? 120_000 : 15 * 60_000);
+          const googleFetch = (input: string, init: RequestInit = {}) => fetch(input, {
+            ...init, signal: AbortSignal.any([syncController.signal, AbortSignal.timeout(20_000)]),
+          });
           try {
-            const oauthResponse = await fetch(
+            const oauthResponse = await googleFetch(
               "https://www.googleapis.com/oauth2/v3/token",
               {
                 method: "POST",
@@ -7306,8 +7755,7 @@ function localApi(
             };
             if (!oauthResponse.ok || !oauth.access_token)
               throw new Error(
-                oauth.error_description ||
-                  "O Google recusou a renovação do acesso OAuth.",
+                "A autorização compartilhada do Google Ads expirou ou foi revogada. O Master precisa reconectar o Google uma vez na Central de Conexões para toda a equipe. Os períodos já salvos continuam disponíveis.",
               );
             const googleHeaders = (loginCustomerId?: string) => ({
               Authorization: `Bearer ${oauth.access_token}`,
@@ -7332,15 +7780,14 @@ function localApi(
                 "O Google Ads recusou a consulta."
               );
             };
-            const accessibleResponse = await fetch(
-              "https://googleads.googleapis.com/v25/customers:listAccessibleCustomers",
-              { headers: googleHeaders() },
-            );
-            if (!accessibleResponse.ok)
-              throw new Error(await googleError(accessibleResponse));
-            const accessible = (await accessibleResponse.json()) as {
-              resourceNames?: string[];
-            };
+            const directoryKey = createHash("sha256").update(`${runtimeGoogleClientId}:${runtimeGoogleRefreshToken}`).digest("hex");
+            const cachedDirectory = !manualSync && googleDirectoryCache?.key === directoryKey && googleDirectoryCache.expiresAt > Date.now() ? googleDirectoryCache : null;
+            let accessible: { resourceNames?: string[] } = {};
+            if (!cachedDirectory) {
+              const accessibleResponse = await googleFetch("https://googleads.googleapis.com/v25/customers:listAccessibleCustomers", { headers: googleHeaders() });
+              if (!accessibleResponse.ok) throw new Error(await googleError(accessibleResponse));
+              accessible = await accessibleResponse.json() as { resourceNames?: string[] };
+            }
             const roots = (accessible.resourceNames || []).map((value) =>
               value.replace("customers/", ""),
             );
@@ -7351,13 +7798,14 @@ function localApi(
               loginCustomerId: string;
               manager: boolean;
             };
-            const accountMap = new Map<string, GoogleAccount>();
+            const accountMap = new Map<string, GoogleAccount>((cachedDirectory?.accounts || []).map(account => [account.id, account]));
+            let hierarchyComplete = true;
             const search = async (
               customerId: string,
               loginId: string,
               query: string,
             ) => {
-              const result = await fetch(
+              const result = await googleFetch(
                 `https://googleads.googleapis.com/v25/customers/${customerId}/googleAds:searchStream`,
                 {
                   method: "POST",
@@ -7371,7 +7819,7 @@ function localApi(
               }[];
               return pages.flatMap((page) => page.results || []);
             };
-            for (const rootId of roots) {
+            await forEachConcurrent(roots, 4, async (rootId) => {
               try {
                 const hierarchy = await search(
                   rootId,
@@ -7391,6 +7839,7 @@ function localApi(
                     });
                 });
               } catch {
+                hierarchyComplete = false;
                 accountMap.set(rootId, {
                   id: rootId,
                   name: `Conta Google ${rootId}`,
@@ -7399,12 +7848,13 @@ function localApi(
                   manager: false,
                 });
               }
-            }
+            });
+            if (!cachedDirectory && hierarchyComplete) googleDirectoryCache = { key: directoryKey, expiresAt: Date.now() + 10 * 60_000, accounts: [...accountMap.values()] };
             const accounts = [...accountMap.values()].filter(
                 (item) => !item.manager,
               ),
               campaigns: Record<string, any>[] = [];
-            for (const account of accounts) {
+            await forEachConcurrent(accounts, 4, async (account) => {
               const baseGoogleFields = `customer.id, customer.descriptive_name, customer.currency_code, campaign.id, campaign.name, campaign.status, campaign.advertising_channel_type, campaign.optimization_score, campaign_budget.amount_micros, campaign_budget.period, metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions, metrics.average_cpc, metrics.search_top_impression_share, metrics.search_absolute_top_impression_share`;
               let rows: Record<string, any>[];
               try {
@@ -7426,7 +7876,7 @@ function localApi(
               // métricas, não baixar novamente criativos, URLs, termos e
               // geografia de dezenas de contas. Esses detalhes permanecem no
               // cache e são renovados numa consulta normal de um novo período.
-              const loadGoogleDetails = !comparisonRequest;
+              const loadGoogleDetails = !comparisonRequest && !requestedSync;
               const landingPages = new Map<string, string>();
               const adsByCampaign = new Map<string, Record<string, any>[]>();
               if (loadGoogleDetails) try {
@@ -7702,7 +8152,8 @@ function localApi(
                   ads: adsByCampaign.get(String(campaign.id || "")) || previousCampaign?.ads || [],
                 });
               });
-            }
+            });
+            syncController.signal.throwIfAborted();
             const googleSyncedAt = new Date().toISOString(),
               googleCampaigns = withOptimizationHistory(campaigns, "GOOGLE_ADS", googleSyncedAt),
               googlePayload = {
@@ -7737,10 +8188,14 @@ function localApi(
           } catch (cause) {
             return json(response, 502, {
               message:
-                cause instanceof Error
-                  ? cause.message
-                  : "Não foi possível consultar o Google Ads.",
+                cause instanceof Error && (syncController.signal.aborted || cause.name === "TimeoutError" || cause.name === "AbortError")
+                  ? "O Google não concluiu a sincronização dentro do tempo limite. Os dados anteriores foram preservados. Tente novamente."
+                  : cause instanceof Error ? cause.message : "Não foi possível consultar o Google Ads.",
             });
+          } finally {
+            clearTimeout(syncDeadline);
+            syncController.abort();
+            if (requestedSync) googleManualSyncInProgress = false;
           }
         }
         if (
@@ -7753,7 +8208,7 @@ function localApi(
             return json(response, 403, {
               message: "Você não possui acesso às campanhas.",
             });
-          if (!runtimeMetaAccessToken)
+          if (!metaAccessConnections().length)
             return json(response, 503, {
               message: "Configure o token da Meta na Central de Conexões.",
             });
@@ -7773,7 +8228,34 @@ function localApi(
             ? requestUrl.searchParams.get("until")!
             : today;
           const forceRefresh = requestUrl.searchParams.get("refresh") === "1",
-            comparisonRequest = requestUrl.searchParams.get("comparison") === "1";
+            comparisonRequest = requestUrl.searchParams.get("comparison") === "1",
+            storedRequest = requestUrl.searchParams.get("stored") === "1";
+          if (storedRequest && existsSync(localMetaDashboardCachePath))
+            try {
+              const cached = JSON.parse(
+                readFileSync(localMetaDashboardCachePath, "utf8"),
+              ) as {
+                schemaVersion?: number;
+                cachedAt: string;
+                payload: Record<string, any>;
+                pictures?: Record<string, string>;
+              };
+              if (cached.schemaVersion === 8) {
+                Object.entries(cached.pictures || {}).forEach(([id, picture]) =>
+                  metaAccountPictures.set(id, picture),
+                );
+                return json(response, 200, withCampaignVerifications({
+                  ...cached.payload,
+                  cache: {
+                    status: "stored",
+                    cachedAt: cached.cachedAt,
+                    nextSyncAt: new Date(
+                      new Date(cached.cachedAt).getTime() + mediaSyncIntervalMs,
+                    ).toISOString(),
+                  },
+                }, "META_ADS"));
+              }
+            } catch {}
           if (existsSync(localMetaDashboardCachePath))
             try {
               const cached = JSON.parse(
@@ -7807,16 +8289,49 @@ function localApi(
                 }, "META_ADS"));
               }
             } catch {}
-          if (!backgroundSync && !hasPermission(currentUser, "media.sync"))
-            return json(response, 403, {
-              message: "Você não possui permissão para sincronizar campanhas.",
+          const storedMetaSnapshot = readMediaMetricSnapshot(
+            "META_ADS",
+            since,
+            until,
+          );
+          if (storedMetaSnapshot) {
+            let accounts: Record<string, any>[] = [];
+            try {
+              const cached = JSON.parse(
+                readFileSync(localMetaDashboardCachePath, "utf8"),
+              ) as { payload?: { accounts?: Record<string, any>[] } };
+              accounts = cached.payload?.accounts || [];
+            } catch {}
+            return json(response, 200, withCampaignVerifications({
+              schemaVersion: 8,
+              since,
+              until,
+              syncedAt: storedMetaSnapshot.syncedAt,
+              accounts,
+              campaigns: storedMetaSnapshot.campaigns || [],
+              cache: { status: "history", cachedAt: storedMetaSnapshot.syncedAt },
+            }, "META_ADS"));
+          }
+          if (!backgroundSync)
+            return json(response, 409, {
+              code: "MEDIA_PERIOD_NOT_STORED",
+              message:
+                "Este período ainda não está na base compartilhada. Um usuário com permissão de sincronização pode carregá-lo para toda a equipe. A conexão é única; não é necessário conectar a conta de cada colaborador.",
+              availablePeriod: (() => {
+                try { const saved = JSON.parse(readFileSync(localMetaDashboardCachePath, "utf8")); return { since: saved.since, until: saved.until }; } catch { return null; }
+              })(),
             });
-          const graph = async <T>(path: string) => {
+          const metaConnections = metaAccessConnections();
+          const accountTokens = new Map<string, string>();
+          const graph = async <T>(path: string, explicitToken?: string) => {
             const separator = path.includes("?") ? "&" : "?";
+            const accountId = path.replace(/^https?:\/\/[^/]+\/v[^/]+\//, "").split(/[/?]/)[0];
+            const accessToken = explicitToken || accountTokens.get(accountId) || metaConnections[0]?.token;
+            if (!accessToken) throw new Error("Nenhuma conta do Facebook está conectada.");
             const result = await fetch(
               path.startsWith("http")
                 ? path
-                : `https://graph.facebook.com/${metaGraphVersion}/${path}${separator}access_token=${encodeURIComponent(runtimeMetaAccessToken)}`,
+                : `https://graph.facebook.com/${metaGraphVersion}/${path}${separator}access_token=${encodeURIComponent(accessToken)}`,
             );
             const payload = (await result.json()) as T & {
               error?: { message?: string; code?: number };
@@ -7829,19 +8344,27 @@ function localApi(
             return payload;
           };
           try {
-            const listAll = async <T>(path: string) => {
+            const listAll = async <T>(path: string, allConnections = false) => {
               const rows: T[] = [];
-              let next: string | undefined = path;
-              while (next) {
-                const page: { data?: T[]; paging?: { next?: string } } =
-                  await graph<{ data?: T[]; paging?: { next?: string } }>(next);
-                rows.push(...(page.data || []));
-                next = page.paging?.next;
+              const sources = allConnections ? metaConnections : [metaConnections[0]];
+              for (const connection of sources) {
+                let next: string | undefined = path;
+                while (next) {
+                  const page: { data?: T[]; paging?: { next?: string } } =
+                    await graph<{ data?: T[]; paging?: { next?: string } }>(next, connection.token);
+                  for (const row of page.data || []) {
+                    const rowId = (row as { id?: string }).id;
+                    if (path.startsWith("me/adaccounts") && rowId) accountTokens.set(rowId, connection.token);
+                    if (!rowId || !rows.some((existing) => (existing as { id?: string }).id === rowId)) rows.push(row);
+                  }
+                  next = page.paging?.next;
+                }
               }
               return rows;
             };
             const accountRefs = await listAll<{ id: string }>(
               "me/adaccounts?fields=id&limit=100",
+              true,
             );
             type MetaPagePicture = {
               id: string;
@@ -7862,9 +8385,11 @@ function localApi(
             };
             const managedPages = await listAll<MetaPagePicture>(
               "me/accounts?fields=id,name,picture.type(large){url},instagram_business_account{id,username,profile_picture_url}&limit=100",
+              true,
             ).catch(() => []);
             const businessPortfolios = await listAll<MetaBusinessPortfolio>(
               "me/businesses?fields=id,name,profile_picture_uri,owned_ad_accounts.limit(500){id},client_ad_accounts.limit(500){id}&limit=100",
+              true,
             ).catch(() => []);
             const portfolioByAccount = new Map<string, MetaBusinessPortfolio>();
             businessPortfolios.forEach((portfolio) =>
@@ -8597,7 +9122,20 @@ function localApi(
           if (!hasPermission(currentUser, "integrations.view"))
             return json(response, 403, { message: "Permissão insuficiente." });
           return json(response, 200, {
-            integrations: [...integrations.values()],
+            integrations: (["META_ADS", "GOOGLE_ADS"] as const).map((platform) => {
+              const previous = [...integrations.values()].find((item) => item.platform === platform && !item.demo);
+              const configured = platform === "META_ADS" ? !!runtimeMetaAccessToken || runtimeMetaConnections.size > 0 : !!runtimeGoogleRefreshToken && !!runtimeGoogleDeveloperToken;
+              let cache: unknown = null;
+              try { cache = JSON.parse(readFileSync(platform === "META_ADS" ? localMetaDashboardCachePath : localGoogleDashboardCachePath, "utf8")); } catch { /* Sem sincronização disponível. */ }
+              return {
+                id: previous?.id || platform.toLowerCase(), platform,
+                name: platform === "META_ADS" ? "Meta Ads" : "Google Ads",
+                managerName: mediaOAuthIdentities[platform]?.name || "",
+                responsible: previous?.responsible || "", frequency: "DAILY", nextSyncAt: null,
+                status: configured ? "CONNECTED" : "DISCONNECTED", demo: false,
+                ...mediaConnectionSummary(cache, configured),
+              };
+            }),
           });
         }
         if (/^\/integrations\/(google_ads|meta_ads)\/demo$/.test(url))
@@ -8691,10 +9229,14 @@ export default defineConfig(async ({ mode, command }) => {
         masterPassword,
         env.META_ADS_ACCESS_TOKEN || "",
         env.META_ADS_GRAPH_VERSION || "v23.0",
+        env.META_ADS_APP_ID || "",
+        env.META_ADS_APP_SECRET || "",
+        env.META_ADS_REDIRECT_URI || "",
         env.GOOGLE_ADS_CLIENT_ID || "",
         env.GOOGLE_ADS_CLIENT_SECRET || "",
         env.GOOGLE_ADS_DEVELOPER_TOKEN || "",
         env.GOOGLE_ADS_REFRESH_TOKEN || "",
+        env.GOOGLE_ADS_REDIRECT_URI || "",
         env.OPENAI_API_KEY || "",
         env.OPENAI_INSIGHTS_MODEL || "gpt-5.5",
         env.AZURE_EMAIL_SMTP_HOST || "smtp.azurecomm.net",
@@ -8713,6 +9255,10 @@ export default defineConfig(async ({ mode, command }) => {
       },
       VitePWA({
         registerType: "autoUpdate",
+        workbox: {
+          // OAuth callback navigations must reach the backend, not the SPA shell.
+          navigateFallbackDenylist: [/^\/api(?:\/|\?|$)/, /^\/legal(?:\/|$)/],
+        },
         manifest: {
           name: "PW OS — Performance Workspace",
           short_name: "PW OS",

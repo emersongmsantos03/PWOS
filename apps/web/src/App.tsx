@@ -1,3 +1,4 @@
+import { MediaUserContext } from "./mediaPreferences";
 import { Component, lazy, Suspense, useEffect, useMemo, useState, type ErrorInfo, type ReactNode } from "react";
 import {
   useNavigate,
@@ -619,7 +620,7 @@ function Shell({
             </div>
           </div>
         </header>
-        <RouteRenderBoundary key={location.pathname}>
+        <MediaUserContext.Provider value={user.id} key={user.id}><RouteRenderBoundary key={location.pathname}>
         <Suspense fallback={<div className="route-skeleton" role="status"><i/><i/><i/><span>Carregando módulo…</span></div>}><Routes>
           <Route
             path="/"
@@ -731,7 +732,7 @@ function Shell({
             }
           />
         </Routes></Suspense>
-        </RouteRenderBoundary>
+        </RouteRenderBoundary></MediaUserContext.Provider>
         <MobileNav />
         {profilePanel && (
           <ProfilePanel

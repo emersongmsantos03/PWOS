@@ -1,3 +1,5 @@
+import { requestMediaPeriod } from "./mediaPeriodRequest";
+import { MetaLogo, GoogleAdsLogo } from "./PlatformLogos";
 import { useEffect, useState } from "react";
 import { Activity, AlertTriangle, AlarmClock, ArrowRight, BarChart3, BriefcaseBusiness, CalendarDays, ChartLine, Check, CheckCircle2, CircleDollarSign, ClipboardCheck, Clock3, Handshake, ListChecks, Megaphone, SearchCheck, Sparkles, Target, UserRoundCheck, Users, WalletCards } from "lucide-react";
 import { NavLink } from "react-router-dom";
@@ -26,7 +28,7 @@ const fullDate=()=>new Intl.DateTimeFormat("pt-BR",{day:"2-digit",month:"long",y
 const empty:Data={tickets:[],clients:[],tasks:[],users:[],pipelines:[],opportunities:[],events:[],finance:[],canViewFinanceValues:false};
 
 export function DashboardBoards({user}:{user:User}){
-  const [data,setData]=useState<Data>(empty),[loading,setLoading]=useState(true);
+  const [data,setData]=useState<Data>(empty),[loading,setLoading]=useState(true),[loadError,setLoadError]=useState("");
   const can=(permission:string)=>user.profile==="MASTER"||Boolean(user.permissions?.includes(permission));
   useEffect(()=>{
     const endpoints=[
@@ -39,14 +41,29 @@ export function DashboardBoards({user}:{user:User}){
       ["events","calendar.view","calendar/events"],
       ["finance","finance.view","finance"],
     ] as const;
-    Promise.all(endpoints.filter(([,permission])=>can(permission)).map(async([key,,path])=>{const response=await fetch(`/api/${path}`);return{key,ok:response.ok,data:await response.json()}}))
-      .then(results=>setData(results.reduce((next,result)=>result.ok?result.key==="finance"?{...next,finance:result.data.entries||[],canViewFinanceValues:result.data.canViewValues!==false}:{...next,[result.key]:result.data[result.key]||[]}:next,{...empty})))
-      .finally(()=>setLoading(false));
+    const controller = new AbortController();
+    let disposed = false;
+    const timeout = setTimeout(() => controller.abort(), 30000);
+    setLoading(true); setLoadError(""); setData(empty);
+    Promise.allSettled(endpoints.filter(([,permission])=>can(permission)).map(async([key,,path])=>{
+      const response=await fetch(`/api/${path}`, {signal:controller.signal});
+      if(!response.ok) throw new Error(key);
+      return {key,data:await response.json()};
+    })).then(results=>{
+      if(disposed || controller.signal.aborted) return;
+      setData(results.reduce((next,result)=>{
+        if(result.status!=="fulfilled")return next;
+        const {key,data}=result.value;
+        return key==="finance"?{...next,finance:data.entries||[],canViewFinanceValues:data.canViewValues!==false}:{...next,[key]:data[key]||[]};
+      },{...empty}));
+      if(results.some(result=>result.status==="rejected")) setLoadError("Alguns indicadores não puderam ser carregados. Atualize a página para tentar novamente.");
+    }).finally(()=>{clearTimeout(timeout);if(disposed)return;setLoading(false);if(controller.signal.aborted)setLoadError("A consulta excedeu o tempo de espera. Atualize a página para tentar novamente.");});
+    return ()=>{disposed=true;clearTimeout(timeout);controller.abort();};
   },[user.id,user.profile,user.permissions?.join("|")]);
   const executive=can("dashboard.view_executive");
   if(loading)return <div className="dashboard-loading"><Activity/> Atualizando indicadores operacionais...</div>;
   const campaignIntelligence = user.departmentName?.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().includes("inteligencia de campanha");
-  return campaignIntelligence?<CampaignIntelligenceBoard user={user} data={data}/>:executive?<ExecutiveBoard user={user} data={data}/>:<CollaboratorBoard user={user} data={data}/>;
+  return <>{loadError&&<p role="alert">{loadError}</p>}{campaignIntelligence?<CampaignIntelligenceBoard user={user} data={data}/>:executive?<ExecutiveBoard user={user} data={data}/>:<CollaboratorBoard user={user} data={data}/>}</>;
 }
 
 type BoardCampaign={id:string;accountId:string;platform?:"META_ADS"|"GOOGLE_ADS";name:string;client:string;currency?:string;status:string;dailyBudget:number;lifetimeBudget:number;remainingBudget?:number|null;spend:number;impressions:number;clicks:number;leads:number;cpl:number|null;verifiedAt?:string|null;landingPageStatus?:string|null};
@@ -77,12 +94,26 @@ const ticketUrl=(ticket:Ticket)=>`/chamados?ticket=${encodeURIComponent(ticket.i
 const agendaUrl=(event:CalendarEvent)=>`/agenda?date=${encodeURIComponent(event.startAt)}`;
 
 function CampaignIntelligenceBoard({user,data}:{user:User;data:Data}){
-  const [campaigns,setCampaigns]=useState<BoardCampaign[]>([]),[campaignLoading,setCampaignLoading]=useState(true);
+  const [campaigns,setCampaigns]=useState<BoardCampaign[]>([]),[campaignLoading,setCampaignLoading]=useState(true),[campaignError,setCampaignError]=useState("");
   useEffect(()=>{
-    const until=new Date().toISOString().slice(0,10),since=new Date(Date.now()-6*86400000).toISOString().slice(0,10);
-    Promise.all(["meta","google"].map(async provider=>{const response=await fetch(`/api/media/${provider}/campaigns?since=${since}&until=${until}`);if(!response.ok)return[];const payload=await response.json();return(payload.campaigns||[]).map((item:BoardCampaign)=>({...item,platform:provider==="meta"?"META_ADS":"GOOGLE_ADS"}))}))
-      .then(results=>setCampaigns(results.flat())).finally(()=>setCampaignLoading(false));
-  },[]);
+    const controller=new AbortController();
+    const timeout=setTimeout(()=>controller.abort(),255000);
+    let disposed=false;
+    const iso=(date:Date)=>`${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,"0")}-${String(date.getDate()).padStart(2,"0")}`;
+    const end=new Date(),start=new Date();start.setDate(end.getDate()-6);
+    const until=iso(end),since=iso(start);
+    setCampaignLoading(true);setCampaignError("");
+    Promise.allSettled(["meta","google"].map(async provider=>{
+      const {response,payload}=await requestMediaPeriod(`/api/media/${provider}/campaigns?since=${since}&until=${until}${provider==="google"?"&fetch_missing=1":""}`,controller.signal);
+      if(!response.ok)throw new Error(provider);
+      return(payload.campaigns||[]).map((item:BoardCampaign)=>({...item,platform:provider==="meta"?"META_ADS":"GOOGLE_ADS"}));
+    })).then(results=>{
+      if(disposed)return;
+      setCampaigns(results.flatMap(result=>result.status==="fulfilled"?result.value:[]));
+      if(results.some(result=>result.status==="rejected"))setCampaignError("Dados de campanhas incompletos. Consulte a Gestão de mídia para atualizar o período.");
+    }).finally(()=>{clearTimeout(timeout);if(!disposed)setCampaignLoading(false);});
+    return()=>{disposed=true;clearTimeout(timeout);controller.abort();};
+  },[user.id]);
   const active=campaigns.filter(item=>item.status==="ACTIVE"),critical=active.filter(item=>{const score=campaignHealth(item);return score>=0&&score<70}),warning=active.filter(item=>{const score=campaignHealth(item);return score>=70&&score<90}),overdueReviews=active.filter(reviewOverdue),balanceAttention=active.filter(item=>balanceRisk(item)).sort((a,b)=>{const riskA=balanceRisk(a)==="critical"?0:1,riskB=balanceRisk(b)==="critical"?0:1;const daysA=a.dailyBudget?Number(campaignBalance(a)||0)/a.dailyBudget:1,daysB=b.dailyBudget?Number(campaignBalance(b)||0)/b.dailyBudget:1;return riskA-riskB||daysA-daysB;}),healthy=active.filter(item=>{const score=campaignHealth(item);return score>=90}),todayEvents=data.events.filter(event=>(event.ownerId===user.id||event.participantIds?.includes(user.id))&&sameDay(event.startAt)).sort((a,b)=>new Date(a.startAt).getTime()-new Date(b.startAt).getTime()),myTasks=data.tasks.filter(task=>task.responsibleId===user.id&&!['DONE','CANCELLED'].includes(task.status)).sort((a,b)=>Number(overdue(b))-Number(overdue(a))),todayTasks=myTasks.filter(task=>sameDay(task.dueAt)||overdue(task)).slice(0,7),waitingD1=myTasks.filter(task=>/d\+1|aguardando resultado|validar resultado/i.test(`${task.title} ${task.status}`)),myTickets=data.tickets.filter(ticket=>ticket.assigneeId===user.id&&!['RESOLVED','CLOSED'].includes(ticket.status)),teamTickets=data.tickets.filter(ticket=>ticket.assigneeId!==user.id&&!['RESOLVED','CLOSED'].includes(ticket.status)),reportTasks=myTasks.filter(task=>/relat[oó]rio|report/i.test(task.title));
   const attention=[...critical,...warning.filter(item=>!critical.some(value=>value.id===item.id)),...overdueReviews.filter(item=>![...critical,...warning].some(value=>value.id===item.id))].slice(0,6);
   const todayLabel=new Intl.DateTimeFormat("pt-BR",{day:"2-digit",month:"2-digit",year:"numeric"}).format(new Date());
@@ -93,6 +124,8 @@ function CampaignIntelligenceBoard({user,data}:{user:User;data:Data}){
       <blockquote><Sparkles/><span>Lembre-se: o seu futuro só depende de você,<br/>e temos certeza que você é capaz.</span></blockquote>
       <aside><span><Target/></span><div><small>DEPARTAMENTO</small><b>{user.departmentName||"Inteligência de Campanhas"}</b></div><em>Liderança operacional</em></aside>
     </header>
+    {campaignError&&<p role="alert">{campaignError}</p>}
+    {campaignLoading&&<p role="status">Atualizando campanhas dos últimos 7 dias…</p>}
     <section className="ci-campaign-status" aria-label="Status das campanhas">
       <CiStatus value={critical.length} label="Críticas" detail="verificar agora" tone="critical" icon={AlertTriangle} to="/midia/hoje"/>
       <CiStatus value={warning.length} label="Em atenção" detail="score entre 70 e 89" tone="warning" icon={Activity} to="/midia/hoje"/>
@@ -118,7 +151,7 @@ function CampaignIntelligenceBoard({user,data}:{user:User;data:Data}){
 }
 function CiTitle({icon:Icon,title,action,to}:{icon:typeof Activity;title:string;action:string;to:string}){return <header className="ci-card-title"><span><Icon/></span><b>{title}</b><NavLink to={to}>{action}<ArrowRight/></NavLink></header>}
 function CiStatus({value,label,detail,tone,icon:Icon,to}:{value:number;label:string;detail:string;tone:string;icon:typeof Activity;to:string}){return <NavLink to={to} className={`ci-status ${tone}`}><span><Icon/></span><div><b>{label}</b><strong>{value}</strong><small>{detail}</small></div></NavLink>}
-function PlatformBadge({platform}:{platform?:BoardCampaign["platform"]}){const meta=platform==="META_ADS";return <span className={`ci-platform ${meta?"meta":"google"}`} title={meta?"Meta Ads":"Google Ads"}>{meta?"∞":"G"}</span>}
+function PlatformBadge({platform}:{platform?:BoardCampaign["platform"]}){const meta=platform==="META_ADS";return <span className={`ci-platform ${meta?"meta":"google"}`} title={meta?"Meta Ads":"Google Ads"}>{meta?<MetaLogo />:<GoogleAdsLogo />}</span>}
 function CiBalanceFocus({campaigns,loading}:{campaigns:BoardCampaign[];loading:boolean}){return <section className="ci-balance-focus"><header><span><CircleDollarSign/></span><div><b>Saldo que exige atenção</b><small>Somente campanhas com saldo para até quatro dias</small></div><NavLink to="/midia/gestao">Ver campanhas <ArrowRight/></NavLink></header><div className="ci-balance-list">{campaigns.length?campaigns.slice(0,6).map(item=>{const balance=campaignBalance(item)||0,days=item.dailyBudget>0?balance/item.dailyBudget:null;return <article key={`${item.platform}:${item.accountId}:${item.id}`} className={`ci-balance-row ${balanceRisk(item)}`}><PlatformBadge platform={item.platform}/><NavLink to={campaignUrl(item)} className="ci-balance-campaign"><b title={item.client||"Cliente não vinculado"}>{item.client||"Cliente não vinculado"}</b><small title={item.name}>{item.name}</small></NavLink><strong><small>Investimento diário</small>{item.dailyBudget>0?campaignMoney(item.dailyBudget,item)+"/dia":"Não informado"}</strong><strong><small>Saldo restante</small>{campaignMoney(balance,item)}{days!=null&&<em>{days<=1?"menos de 1 dia":`${Math.ceil(days)} dias`}</em>}</strong><NavLink className="ci-campaign-action analyze" to={campaignUrl(item)}><BarChart3/> Analisar</NavLink></article>}):<Empty text={loading?"Carregando saldos das campanhas…":"Nenhuma campanha com saldo em atenção."}/>}</div></section>}
 function CiOverview({icon:Icon,title,caption,tone,rows,empty,to}:{icon:typeof Activity;title:string;caption:string;tone:string;rows:string[][];empty?:string;to:string}){return <section className={`ci-overview-card ${tone}`}><header><span><Icon/></span><div><b>{title}</b><small>{caption}</small></div></header><div className="ci-overview-rows">{rows.length?rows.map((row,index)=>{const content=<><b title={row[0]}>{row[0]}</b><span title={row[1]}>{row[1]}</span><em>{row[2]}</em></>;return row[4]?<article className="ci-overview-action-row" key={`${row[0]}-${index}`}>{content}<NavLink className="ci-campaign-action verify" to={row[3]}><CheckCircle2/>{row[4]}</NavLink></article>:row[3]?<NavLink className="ci-overview-row-link" to={row[3]} key={`${row[0]}-${index}`}>{content}</NavLink>:<article key={`${row[0]}-${index}`}>{content}</article>}):<Empty text={empty||"Sem itens para exibir."}/>}</div><NavLink to={to}>Ver mais <ArrowRight/></NavLink></section>}
 function CiTickets({title,number,tickets,empty,to,secondary=false}:{title:string;number:string;tickets:Ticket[];empty:string;to:string;secondary?:boolean}){return <section className={`ci-tickets-card ${secondary?"secondary":""}`}><header><span>{number}</span><b>{title}</b><NavLink to={to}>Ver mais <ArrowRight/></NavLink></header><div className="ci-ticket-table"><div className="ci-ticket-head"><span>PRIORIDADE</span><span>CHAMADO</span><span>RESPONSÁVEL</span><span>PRAZO</span><span>STATUS</span></div>{tickets.length?tickets.slice(0,5).map(ticket=><NavLink className="ci-ticket-row" to={ticketUrl(ticket)} key={ticket.id}><i className={ticket.priority.toLowerCase()}>{ticket.priority==="URGENT"?"Urgente":ticket.priority==="HIGH"?"Alta":"Normal"}</i><b>{ticket.title}</b><span>{ticket.assigneeName||"Sem responsável"}</span><time>{formatDate(ticket.dueAt)}</time><em className={ticket.status.toLowerCase()}>{ticket.status==="IN_PROGRESS"?"Em produção":ticket.status==="WAITING"?"Aguardando":"Verificar"}</em></NavLink>):<Empty text={empty}/>}</div></section>}
@@ -141,7 +174,7 @@ function ExecutiveBoard({user,data}:{user:User;data:Data}){
   const margin=income?Math.round((income-expense)/income*100):0;
   return <div className="executive-board">
     <header className="board-greeting"><div><h1>Bom dia, {first(user.name)}! <span>👋</span></h1><p>Indicadores calculados com os registros atuais da operação.</p></div><div className="company-health"><small>ESTADO DA OPERAÇÃO</small><b><i/> {late.length?"ATENÇÃO":"SAUDÁVEL"}</b><span>{late.length?`${late.length} tarefa(s) atrasada(s)`:"Nenhuma tarefa atrasada"}</span></div><div className="board-date"><CalendarDays/><span><b>{fullDate()}</b><small>Dados atualizados agora</small></span></div></header>
-    <section className="executive-kpis"><ExecKpi icon={CircleDollarSign} label="Receita do mês" value={financeValue(income)} footer={`${financeValue(receivable)} a receber`} tone="green"/><ExecKpi icon={WalletCards} label="Caixa operacional" value={financeValue(income-expense)} footer={`${financeValue(payable)} a pagar`} tone="blue"/><ExecKpi icon={ChartLine} label="Pipeline previsto" value={brl(open.reduce((sum,item)=>sum+Number(item.potentialValue||0),0))} footer={`${open.length} negociações abertas`} tone="purple"/><ExecKpi icon={UserRoundCheck} label="Clientes ativos" value={String(activeClients)} footer={`${clients.length} clientes visíveis`} tone="cyan"/><ExecKpi icon={Target} label="Margem operacional" value={`${margin}%`} footer={`${financeValue(income-expense)} de resultado`} tone="orange"/><ExecKpi icon={Handshake} label="Pipeline comercial" value={brl(won.reduce((sum,item)=>sum+Number(item.potentialValue||0),0))} footer={`${won.length} oportunidades ganhas`} tone="cyan"/></section>
+    <section className="executive-kpis"><ExecKpi icon={CircleDollarSign} label="Receita do mês" value={financeValue(income)} footer={`${financeValue(receivable)} a receber`} tone="green"/><ExecKpi icon={WalletCards} label="Caixa operacional" value={financeValue(income-expense)} footer={`${financeValue(payable)} a pagar`} tone="blue"/><ExecKpi icon={ChartLine} label="Pipeline previsto" value={brl(open.reduce((sum,item)=>sum+Number(item.potentialValue||0),0))} footer={`${open.length} negociações abertas`} tone="purple"/><ExecKpi icon={UserRoundCheck} label="Clientes ativos" value={String(activeClients)} footer={`${clients.length} clientes visíveis`} tone="cyan"/><ExecKpi icon={Target} label="Margem operacional" value={data.canViewFinanceValues?`${margin}%`:"••••••"} footer={`${financeValue(income-expense)} de resultado`} tone="orange"/><ExecKpi icon={Handshake} label="Pipeline comercial" value={brl(won.reduce((sum,item)=>sum+Number(item.potentialValue||0),0))} footer={`${won.length} oportunidades ganhas`} tone="cyan"/></section>
     <section className="executive-health-row"><Health icon={BriefcaseBusiness} label="COMERCIAL" status={open.length?"CRESCENDO":"ESTÁVEL"} detail={`${open.length} oportunidades abertas`}/><Health icon={Activity} label="OPERAÇÃO" status={late.length?"ATENÇÃO":"EM DIA"} attention={!!late.length} detail={`${late.length} entregas atrasadas`}/><Health icon={CircleDollarSign} label="FINANCEIRO" status={payable>receivable?"ATENÇÃO":"SAUDÁVEL"} attention={payable>receivable} detail={`${monthFinance.length} lançamentos no mês`}/><Health icon={Megaphone} label="MARKETING" status="EM DIA" detail={`${clients.length} clientes acompanhados`}/><Health icon={Users} label="EQUIPE" status="PRODUTIVA" detail={`${doneToday.length} conclusões hoje`}/></section>
     <div className="executive-main-grid">
       <section className="exec-panel commercial-center"><PanelHead title="Central comercial" link="Ver funil completo" to="/crm"/><div className="exec-mini-kpis"><span><b>{open.length}</b> Leads ativos</span><span><b>{pipelines.length}</b> Funis</span><span><b>{proposals}</b> Propostas</span><span><b>{won.length}</b> Fechamentos</span></div><div className="commercial-content"><ExecTable rows={open.slice(0,7).map(item=>[item.company||item.name,stageName(item,pipelines),brl(item.potentialValue||0),item.responsibleName||"Sem responsável",item.nextAction||"Sem próxima ação"])} emptyText="Nenhuma oportunidade aberta."/><div className="sales-funnel"><b>FUNIL DE VENDAS</b>{pipelines[0]?.stages.slice(0,5).map(stage=>{const count=opportunities.filter(item=>item.stageId===stage.id).length;return <span key={stage.id}><small>{stage.name}</small><em>{count}</em><i><u style={{width:`${Math.max(10,open.length?count/open.length*100:0)}%`,background:stage.color}}/></i></span>})}{!pipelines.length&&<small>Sem funil cadastrado.</small>}</div></div></section>
