@@ -290,7 +290,7 @@ const simpleTableColumns: { label: string; width: number }[] = [
   { label: "Objetivo", width: 130 },
   { label: "Rede", width: 56 },
   { label: "Status", width: 76 },
-  { label: "Landing page", width: 68 },
+  { label: "Landing page", width: 78 },
   { label: "Inv. diário", width: 88 },
   { label: "Impressões", width: 82 },
   { label: "Cliques", width: 70 },

@@ -1,6 +1,6 @@
 .traffic-page .simple-client-table{border:1px solid var(--border);border-radius:10px;background:var(--surface);overflow:hidden;margin-bottom:14px;box-shadow:0 2px 5px #16334a05}
 .simple-table-scroll{overflow:auto}
-.simple-client-table table{width:100%;min-width:1546px;border-collapse:separate;border-spacing:0;table-layout:fixed}
+.simple-client-table table{width:100%;min-width:1556px;border-collapse:separate;border-spacing:0;table-layout:fixed}
 .simple-client-table .simple-name-column{width:190px}
 .simple-client-table th{padding:13px 4px;text-align:left;font-size:9px;text-transform:uppercase;white-space:nowrap;color:var(--subtle);background:var(--surface-soft);border-bottom:1px solid var(--border)}
 .simple-client-table td{height:72px;padding:10px 4px;border-bottom:1px solid var(--border);font-size:10px;color:var(--text);vertical-align:middle;overflow-wrap:anywhere}
