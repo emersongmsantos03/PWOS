@@ -2365,7 +2365,9 @@ function MediaAiInsights({ campaigns, since, until, context, scope = "CAMPAIGNS"
   useEffect(()=>{if(!campaigns.length)return;const timer=window.setTimeout(()=>void generate("AUTO"),900);return()=>window.clearTimeout(timer)},[signature,since,until]);
   useEffect(()=>{const open=()=>setExpandedView(true);window.addEventListener("pw:open-media-ai",open);return()=>window.removeEventListener("pw:open-media-ai",open)},[]);
   if(!campaigns.length)return null;
-  return <section className={`media-ai-insights ${insight ? `expanded verdict-${insight.verdict.toLowerCase()}` : error ? "failed" : "loading"} ${expandedView ? "report-open" : "report-compact"}`}>
+  return <>
+    {expandedView && <div className="media-ai-report-backdrop" onClick={() => setExpandedView(false)} aria-hidden="true"/>}
+    <section className={`media-ai-insights ${insight ? `expanded verdict-${insight.verdict.toLowerCase()}` : error ? "failed" : "loading"} ${expandedView ? "report-open" : "report-compact"}`}>
     <header>
       <span className="intelligence-mark" aria-hidden="true"><BrainCircuit /><i /><i /><i /></span>
       <div>
@@ -2386,7 +2388,8 @@ function MediaAiInsights({ campaigns, since, until, context, scope = "CAMPAIGNS"
       {expandedView && <div className="media-ai-columns"><article className="priority"><header><Target /><span><b>Faça primeiro</b><small>Ações em ordem de impacto</small></span></header>{insight.priorities.map((item, index) => <p key={item}><i>{index + 1}</i><span>{item}</span></p>)}</article><article className="risk"><header><AlertTriangle /><span><b>Não perca de vista</b><small>Riscos sustentados pelos dados</small></span></header>{insight.risks.map((item, index) => <p key={item}><i>{index + 1}</i><span>{item}</span></p>)}</article><article className="experiment"><header><Activity /><span><b>Teste nesta rodada</b><small>Hipóteses específicas</small></span></header>{insight.experiments.map((item, index) => <p key={item}><i>{index + 1}</i><span>{item}</span></p>)}</article></div>}
       <footer><span><CheckCircle2 />{cacheNotice}</span><small>{insight.model} · recomendações devem ser validadas pela operação</small></footer>
     </>}
-  </section>;
+    </section>
+  </>;
 }
 
 function ComparisonClientRows({ group, previousCampaigns, previousAvailable, search, onAnalyze }: { group: ClientGroup; previousCampaigns: Campaign[]; previousAvailable: boolean; search: string; onAnalyze: (campaign: Campaign) => void }) {

@@ -5,9 +5,9 @@
 .media-ai-insights.report-compact>header h3{font-size:14px}
 .media-ai-insights.report-compact>header p{margin-top:3px;font-size:9px}
 .media-ai-insights.report-compact>.media-ai-conclusion,.media-ai-insights.report-compact>.media-ai-columns,.media-ai-insights.report-compact>footer{display:none}
+.media-ai-report-backdrop{position:fixed;inset:0;z-index:1249;background:color-mix(in srgb,#000 55%,transparent);backdrop-filter:blur(6px)}
 .media-ai-insights.report-open{position:fixed;inset:4vh 4vw;z-index:1250;max-height:92vh;overflow:auto;border-radius:20px;box-shadow:0 40px 120px -20px #00000066}
-.media-ai-insights.report-open:after{position:fixed;inset:0;z-index:-1;background:color-mix(in srgb,#000 55%,transparent);backdrop-filter:blur(6px);content:""}
-.media-ai-insights.report-open>header{position:sticky;top:0;background:var(--surface)}
+.media-ai-insights.report-open>header{background:var(--surface)}
 
 .campaign-ai-on-demand{overflow:hidden;border:1px solid color-mix(in srgb,var(--accent) 25%,var(--border));border-radius:14px;background:var(--surface)}
 .campaign-ai-on-demand>header{display:grid;grid-template-columns:38px minmax(0,1fr) auto;align-items:center;gap:11px;padding:14px 16px}
