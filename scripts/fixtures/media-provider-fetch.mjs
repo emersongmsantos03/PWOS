@@ -12,7 +12,10 @@ globalThis.fetch = async (input, init = {}) => {
     if (url.pathname.endsWith(':listAccessibleCustomers')) return reply({resourceNames:['customers/123']});
     const query = JSON.parse(init.body).query;
     if (query.includes('FROM customer_client')) return reply([{results:[{customerClient:{id:'123',descriptiveName:'Shared Google',currencyCode:'BRL',manager:false}}]}]);
+    if (query.includes('FROM account_budget')) return reply([{results:[{accountBudget:{status:'APPROVED',approvedSpendingLimitMicros:'50000000',amountServedMicros:'20000000',approvedEndTimeType:'FOREVER'}}]}]);
     if (query.includes('FROM campaign ')) {
+      if (!query.includes('segments.date'))
+        return reply([{results:[{campaign:{id:'g1'},campaignBudget:{totalAmountMicros:'50000000',period:'CUSTOM_PERIOD'},metrics:{costMicros:'20000000'}}]}]);
       const since = query.match(/BETWEEN '([^']+)'/)[1];
       record('google', since);
       await new Promise(resolve => setTimeout(resolve,100));

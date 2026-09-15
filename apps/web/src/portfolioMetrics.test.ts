@@ -11,6 +11,13 @@ it("keeps currencies separate and unavailable balances unknown", () => {
   expect(totals[1].remainingBudget).toBeNull();
   expect(totals[1].balanceDays).toBeNull();
 });
+it("uses the account balance once when several campaigns share an account", () => {
+  const [total] = portfolioMetrics([
+    { ...campaign, accountId: "act_eco", accountRemainingBudget: 275.26, remainingBudget: 10 },
+    { ...campaign, accountId: "act_eco", accountRemainingBudget: 275.26, remainingBudget: 20 },
+  ]);
+  expect(total).toMatchObject({ remainingBudget: 275.26, balanceSource: "ACCOUNT" });
+});
 it("handles zero delivery, mixed budget availability and conversation results", () => {
   const [total] = portfolioMetrics([{ ...campaign, spend: 0, impressions: 0, reach: 0, clicks: 0, leads: 0, conversations: 5, lifetimeBudget: 0 }]);
   expect(total).toMatchObject({ results: 5, lifetimeBudget: null, ctr: null, cpc: null, cpm: null, conversion: null, frequency: null });

@@ -66,7 +66,7 @@ export function DashboardBoards({user}:{user:User}){
   return <>{loadError&&<p role="alert">{loadError}</p>}{campaignIntelligence?<CampaignIntelligenceBoard user={user} data={data}/>:executive?<ExecutiveBoard user={user} data={data}/>:<CollaboratorBoard user={user} data={data}/>}</>;
 }
 
-type BoardCampaign={id:string;accountId:string;platform?:"META_ADS"|"GOOGLE_ADS";name:string;client:string;currency?:string;status:string;dailyBudget:number;lifetimeBudget:number;remainingBudget?:number|null;spend:number;impressions:number;clicks:number;leads:number;cpl:number|null;verifiedAt?:string|null;landingPageStatus?:string|null};
+type BoardCampaign={id:string;accountId:string;platform?:"META_ADS"|"GOOGLE_ADS";name:string;client:string;currency?:string;status:string;dailyBudget:number;lifetimeBudget:number;remainingBudget?:number|null;accountRemainingBudget?:number|null;spend:number;impressions:number;clicks:number;leads:number;cpl:number|null;verifiedAt?:string|null;landingPageStatus?:string|null};
 const campaignHealth=(item:BoardCampaign)=>{
   if(!item.impressions&&!item.clicks&&!item.spend)return -1;
   const ctr=item.impressions?item.clicks/item.impressions*100:0;
@@ -79,13 +79,14 @@ const campaignHealth=(item:BoardCampaign)=>{
 };
 const reviewOverdue=(item:BoardCampaign)=>!item.verifiedAt||Date.now()-new Date(item.verifiedAt).getTime()>=7*86400000;
 const balanceRisk=(item:BoardCampaign)=>{
-  const balance=item.remainingBudget==null?null:Math.max(0,Number(item.remainingBudget));
+  const available=item.accountRemainingBudget ?? item.remainingBudget;
+  const balance=available==null?null:Math.max(0,Number(available));
   if(item.status!=="ACTIVE"||balance==null)return null;
   if(item.dailyBudget>0){const days=balance/item.dailyBudget;return days<=2?"critical":days<=4?"warning":null;}
   if(item.lifetimeBudget>0){const rate=balance/item.lifetimeBudget;return rate<=.15?"critical":rate<=.3?"warning":null;}
   return null;
 };
-const campaignBalance=(item:BoardCampaign)=>item.remainingBudget==null?null:Math.max(0,Number(item.remainingBudget));
+const campaignBalance=(item:BoardCampaign)=>{const available=item.accountRemainingBudget ?? item.remainingBudget;return available==null?null:Math.max(0,Number(available));};
 const campaignCurrency=(item:BoardCampaign)=>item.currency||"BRL";
 const campaignMoney=(value:number,item:BoardCampaign)=>value.toLocaleString("pt-BR",{style:"currency",currency:campaignCurrency(item),maximumFractionDigits:0});
 const campaignUrl=(item:BoardCampaign)=>`/midia/gestao?campaign=${encodeURIComponent(`${item.platform||"META_ADS"}:${item.accountId}:${item.id}`)}`;
@@ -106,7 +107,7 @@ function CampaignIntelligenceBoard({user,data}:{user:User;data:Data}){
     Promise.allSettled(["meta","google"].map(async provider=>{
       const {response,payload}=await requestMediaPeriod(`/api/media/${provider}/campaigns?since=${since}&until=${until}`,controller.signal);
       if(!response.ok)throw new Error(`${provider === "meta" ? "Meta Ads" : "Google Ads"}: ${payload.message || "Não foi possível consultar as campanhas."}`);
-      return(payload.campaigns||[]).map((item:BoardCampaign)=>({...item,platform:provider==="meta"?"META_ADS":"GOOGLE_ADS"}));
+      return(payload.campaigns||[]).map((item:BoardCampaign)=>({...item,platform:provider==="meta"?"META_ADS":"GOOGLE_ADS",accountRemainingBudget:(payload.accounts||[]).find((account:{id:string;remainingBudget?:number|null})=>account.id===item.accountId)?.remainingBudget??null}));
     })).then(results=>{
       if(disposed)return;
       setCampaigns(results.flatMap(result=>result.status==="fulfilled"?result.value:[]));

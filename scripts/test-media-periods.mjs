@@ -36,6 +36,8 @@ try {
       assert.equal(result.status,200,JSON.stringify(result.payload));
       assert.equal(result.payload.since,'2026-08-01');assert.equal(result.payload.until,'2026-08-01');
       assert.equal(result.payload.campaigns[0].spend,1);assert.equal(result.payload.accounts.length,1);
+      assert.equal(result.payload.campaigns[0].remainingBudget,null);
+      assert.equal(result.payload.accounts[0].remainingBudget,provider==='google'?30:undefined);
     }
     assert.equal(count(provider,'2026-08-01'),1,'Concurrent readers share the provider load');
     const second=await request(provider,'2026-08-02');
@@ -55,8 +57,11 @@ try {
     const saved=history.find(item=>item.platform===(provider==='meta'?'META_ADS':'GOOGLE_ADS') && item.since==='2026-08-01');
     saved.syncedAt='2021-01-01T00:00:00.000Z';
     writeFileSync(historyPath,JSON.stringify(history));
-    assert.equal((await request(provider,'2026-08-01')).status,200);
-    assert.equal(count(provider,'2026-08-01'),2,'Expired history refreshes for a reader');
+    const expired=await request(provider,'2026-08-01');
+    assert.equal(expired.status,200);
+    assert.equal(expired.payload.cache?.status,'stale','A normal load never blocks on the provider; it serves the stale snapshot instantly');
+    for(let i=0;i<50 && count(provider,'2026-08-01')<2;i++)await new Promise(r=>setTimeout(r,50));
+    assert.equal(count(provider,'2026-08-01'),2,'Expired history refreshes in the background for a reader');
     // Current month and the dashboard's last seven days hydrate without any Master session.
     const today=new Date().toISOString().slice(0,10),month=today.slice(0,8)+'01';
     const monthResponse=await fetch(base+'/media/'+provider+'/campaigns?since='+month+'&until='+today,{headers:sessions.reader});
@@ -71,6 +76,9 @@ try {
   }
   console.log('PASS: employee loads absent/current/comparison periods through shared backend credentials; exact persistent cache; concurrent requests deduplicated; view/sync restrictions and provider errors preserved.');
 } finally {
-  server.kill('SIGTERM');await new Promise(resolve=>server.once('exit',resolve));
+  server.kill('SIGTERM');await new Promise(resolve=>{
+    if(server.exitCode!==null||server.signalCode!==null)return resolve();
+    server.once('exit',resolve);
+  });
   rmSync(dir,{recursive:true,force:true});
 }

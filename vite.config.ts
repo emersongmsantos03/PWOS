@@ -1223,7 +1223,10 @@ function localApi(
   };
   // Cache entries belong to an exact platform/period, never to a user session.
   const readStoredMediaPeriod = (platform: "META_ADS" | "GOOGLE_ADS", since: string, until: string) => {
-    const schemaVersion = platform === "META_ADS" ? 8 : 10;
+    // Alterar a versão quando a semântica do saldo mudar. Assim, um snapshot
+    // antigo (que usava o orçamento da campanha da Meta) nunca é exibido como
+    // se fosse o saldo disponível da conta.
+    const schemaVersion = 11;
     let latest: Record<string, any> | undefined;
     try {
       const cached = JSON.parse(readFileSync(platform === "META_ADS" ? localMetaDashboardCachePath : localGoogleDashboardCachePath, "utf8"));
@@ -2184,6 +2187,18 @@ function localApi(
         };
       };
       const mediaInternalSyncToken = randomBytes(24).toString("hex");
+      // Entrega o snapshot persistido imediatamente e renova-o fora do caminho
+      // da requisição. O cache é compartilhado por todos os usuários e por
+      // período; portanto, uma única renovação aquece a próxima abertura.
+      const refreshMediaPeriodInBackground = (provider: "meta" | "google", since: string, until: string) => {
+        const address = server.httpServer?.address();
+        if (!address || typeof address === "string") return;
+        setTimeout(() => {
+          void fetch(`http://127.0.0.1:${address.port}/api/media/${provider}/campaigns?since=${encodeURIComponent(since)}&until=${encodeURIComponent(until)}&refresh=1`, {
+            headers: { "x-pw-media-background": mediaInternalSyncToken },
+          }).catch((cause) => console.warn(`[${provider === "meta" ? "Meta" : "Google"} Ads] Atualização em segundo plano falhou:`, cause instanceof Error ? cause.message : cause));
+        }, 0);
+      };
       let lastScheduledMediaDay = "";
       const runScheduledMediaSync = async () => {
         const saoPauloParts = Object.fromEntries(
@@ -2239,10 +2254,22 @@ function localApi(
               rollingSince.setDate(rollingSince.getDate() - cachedDuration);
               const since = rollingSince.toISOString().slice(0, 10),
                 until = fallbackUntil;
-              await fetch(
-                `http://127.0.0.1:${address.port}/api/media/${provider}/campaigns?since=${encodeURIComponent(since)}&until=${encodeURIComponent(until)}&refresh=1`,
-                { headers: { "x-pw-media-background": mediaInternalSyncToken } },
-              );
+              const monthStart = `${localDay.slice(0, 8)}01`;
+              const standardPeriods = [7, 15, 30].map((days) => {
+                const start = new Date(`${localDay}T12:00:00`);
+                start.setDate(start.getDate() - (days - 1));
+                return { since: start.toISOString().slice(0, 10), until: localDay };
+              });
+              // Além do período usado por último, deixa prontos os atalhos da
+              // interface e o mês corrente. Trocar datas comuns não precisa
+              // mais disparar a coleta pesada diante do usuário.
+              const periods = [{ since, until }, ...standardPeriods, { since: monthStart, until: localDay }]
+                .filter((period, index, values) => values.findIndex((value) => value.since === period.since && value.until === period.until) === index);
+              for (const period of periods)
+                await fetch(
+                  `http://127.0.0.1:${address.port}/api/media/${provider}/campaigns?since=${encodeURIComponent(period.since)}&until=${encodeURIComponent(period.until)}&refresh=1`,
+                  { headers: { "x-pw-media-background": mediaInternalSyncToken } },
+                );
             } catch (cause) {
               console.warn(
                 `[${provider === "meta" ? "Meta" : "Google"} Ads] Agendamento de sincronização falhou:`,
@@ -7661,10 +7688,18 @@ function localApi(
           const releasePeriod = await acquireMediaPeriod(`GOOGLE_ADS:${since}:${until}`);
           try {
           const storedGooglePeriod = readStoredMediaPeriod("GOOGLE_ADS", since, until);
-          if (storedGooglePeriod && mediaPeriodIsFresh(storedGooglePeriod, forceRefresh))
+          // Uma abertura normal de tela nunca deve esperar o Google Ads: sempre
+          // devolve o que já está salvo (mesmo desatualizado) e renova em
+          // segundo plano. Só um pedido explícito de sincronização (botão)
+          // pode aguardar uma consulta ao vivo, e mesmo assim respeita o
+          // cooldown para não martelar a API.
+          if (storedGooglePeriod && (!forceRefresh || mediaPeriodIsFresh(storedGooglePeriod, true))) {
+            if (!forceRefresh && !mediaPeriodIsFresh(storedGooglePeriod, false))
+              refreshMediaPeriodInBackground("google", since, until);
             return json(response, 200, withCampaignVerifications({
-              ...storedGooglePeriod, cache: { status: "stored", cachedAt: storedGooglePeriod.syncedAt },
+              ...storedGooglePeriod, cache: { status: mediaPeriodIsFresh(storedGooglePeriod, false) ? "stored" : "stale", cachedAt: storedGooglePeriod.syncedAt },
             }, "GOOGLE_ADS"));
+          }
           const cachedGoogleCampaigns = new Map<string, Record<string, any>>();
           if (existsSync(localGoogleDashboardCachePath)) try {
             const previous = JSON.parse(readFileSync(localGoogleDashboardCachePath, "utf8")) as { campaigns?: Record<string, any>[] };
@@ -7759,7 +7794,8 @@ function localApi(
               customerId: string,
               loginId: string,
               query: string,
-            ) => {
+              attempt = 0,
+            ): Promise<Record<string, any>[]> => {
               const result = await googleFetch(
                 `https://googleads.googleapis.com/v25/customers/${customerId}/googleAds:searchStream`,
                 {
@@ -7768,7 +7804,16 @@ function localApi(
                   body: JSON.stringify({ query }),
                 },
               );
-              if (!result.ok) throw new Error(await googleError(result));
+              if (!result.ok) {
+                // O developer token de acesso básico tem um limite curto de
+                // requisições por minuto. Um recuo com espera evita que o
+                // limite de uma conta derrube a sincronização inteira.
+                if (result.status === 429 && attempt < 3) {
+                  await new Promise((resolve) => setTimeout(resolve, 1_500 * 2 ** attempt));
+                  return search(customerId, loginId, query, attempt + 1);
+                }
+                throw new Error(await googleError(result));
+              }
               const pages = (await result.json()) as {
                 results?: Record<string, any>[];
               }[];
@@ -7808,9 +7853,10 @@ function localApi(
             const accounts = [...accountMap.values()].filter(
                 (item) => !item.manager,
               ),
-              campaigns: Record<string, any>[] = [];
+              campaigns: Record<string, any>[] = [],
+              accountRemainingBudgets = new Map<string, number | null>();
             await forEachConcurrent(accounts, 4, async (account) => {
-              const baseGoogleFields = `customer.id, customer.descriptive_name, customer.currency_code, campaign.id, campaign.name, campaign.status, campaign.advertising_channel_type, campaign.optimization_score, campaign_budget.amount_micros, campaign_budget.period, metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions, metrics.average_cpc, metrics.search_top_impression_share, metrics.search_absolute_top_impression_share`;
+              const baseGoogleFields = `customer.id, customer.descriptive_name, customer.currency_code, campaign.id, campaign.name, campaign.status, campaign.advertising_channel_type, campaign.optimization_score, campaign_budget.amount_micros, campaign_budget.total_amount_micros, campaign_budget.period, metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions, metrics.average_cpc, metrics.search_top_impression_share, metrics.search_absolute_top_impression_share`;
               let rows: Record<string, any>[];
               try {
                 rows = await search(
@@ -7826,6 +7872,78 @@ function localApi(
                   account.loginCustomerId,
                   `SELECT ${baseGoogleFields} FROM campaign WHERE segments.date BETWEEN '${since}' AND '${until}'`,
                 );
+              }
+              // Para campanhas com orçamento diário, o Google não fornece um
+              // saldo por campanha. Contas com faturamento mensal podem expor
+              // um orçamento de conta finito, cujo saldo é limite menos o
+              // valor já veiculado. Mantemos esse valor no nível da conta para
+              // não somá-lo indevidamente como se fosse de cada campanha.
+              let accountRemainingBudget: number | null = null;
+              try {
+                const accountBudgetRows = await search(
+                  account.id,
+                  account.loginCustomerId,
+                  "SELECT account_budget.status, account_budget.adjusted_spending_limit_micros, account_budget.approved_spending_limit_micros, account_budget.amount_served_micros, account_budget.approved_end_date_time, account_budget.approved_end_time_type FROM account_budget WHERE account_budget.status = 'APPROVED'",
+                );
+                const now = new Date();
+                const activeBudget = accountBudgetRows
+                  .filter((row) => {
+                    const budget = row.accountBudget || {};
+                    return budget.approvedEndTimeType === "FOREVER" || !budget.approvedEndDateTime || new Date(budget.approvedEndDateTime.replace(" ", "T")) >= now;
+                  })
+                  .sort((a, b) => String(b.accountBudget?.approvedEndDateTime || "").localeCompare(String(a.accountBudget?.approvedEndDateTime || "")))[0]?.accountBudget;
+                if (activeBudget) {
+                  const limit = Number(activeBudget.adjustedSpendingLimitMicros || activeBudget.approvedSpendingLimitMicros || 0) / 1_000_000;
+                  if (limit > 0) accountRemainingBudget = Math.max(0, limit - Number(activeBudget.amountServedMicros || 0) / 1_000_000);
+                }
+              } catch (cause) {
+                console.warn(`[Google Ads] Saldo da conta indisponível para ${account.id}:`, cause instanceof Error ? cause.message : cause);
+              }
+              accountRemainingBudgets.set(account.id, accountRemainingBudget);
+              // O orçamento total (CUSTOM_PERIOD) é o único teto de campanha
+              // que o Google Ads expõe. Para ele, o saldo precisa considerar o
+              // gasto acumulado, e não apenas o período selecionado na tela.
+              // Orçamentos diários não representam crédito disponível e por
+              // isso permanecem sem saldo, em vez de exibir uma estimativa.
+              const customBudgetCampaignIds = rows.flatMap((row) => {
+                const budget = row.campaignBudget || {}, id = String(row.campaign?.id || "");
+                return budget.period === "CUSTOM_PERIOD" && Number(budget.totalAmountMicros || 0) > 0 && id ? [id] : [];
+              });
+              const remainingBudgetByCampaign = new Map<string, number>();
+              if (customBudgetCampaignIds.length) try {
+                const idList = [...new Set(customBudgetCampaignIds)].join(",");
+                // O saldo é sempre "a partir de agora", não do período em tela:
+                // abrir um período antigo não pode mostrar um saldo antigo.
+                // Toda consulta com métricas exige um intervalo de datas — a
+                // API rejeita a query sem ele —, então buscamos o início real
+                // de cada campanha antes de somar o gasto acumulado.
+                const startDateRows = await search(
+                  account.id,
+                  account.loginCustomerId,
+                  `SELECT campaign.id, campaign.start_date_time FROM campaign WHERE campaign.id IN (${idList})`,
+                );
+                const earliestStart = startDateRows
+                  .map((row) => String(row.campaign?.startDateTime || "").slice(0, 10))
+                  .filter((value) => /^\d{4}-\d{2}-\d{2}$/.test(value))
+                  .sort()[0];
+                const lifetimeSince = earliestStart || (() => {
+                  const fallback = new Date(`${today}T12:00:00`);
+                  fallback.setFullYear(fallback.getFullYear() - 2);
+                  return fallback.toISOString().slice(0, 10);
+                })();
+                const lifetimeRows = await search(
+                  account.id,
+                  account.loginCustomerId,
+                  `SELECT campaign.id, campaign_budget.total_amount_micros, metrics.cost_micros FROM campaign WHERE campaign.id IN (${idList}) AND segments.date BETWEEN '${lifetimeSince}' AND '${today}'`,
+                );
+                lifetimeRows.forEach((lifetimeRow) => {
+                  const campaignId = String(lifetimeRow.campaign?.id || ""), budget = lifetimeRow.campaignBudget || {};
+                  const total = Number(budget.totalAmountMicros || 0) / 1_000_000;
+                  if (campaignId && total > 0)
+                    remainingBudgetByCampaign.set(campaignId, Math.max(0, total - Number(lifetimeRow.metrics?.costMicros || 0) / 1_000_000));
+                });
+              } catch (cause) {
+                console.warn(`[Google Ads] Saldo de orçamento indisponível para ${account.id}:`, cause instanceof Error ? cause.message : cause);
               }
               // Comparações e o botão de atualização precisam renovar as
               // métricas, não baixar novamente criativos, URLs, termos e
@@ -8078,6 +8196,7 @@ function localApi(
                       ? Number(budget.amountMicros || 0) / 1_000_000
                       : 0,
                   lifetimeBudget: 0,
+                  remainingBudget: remainingBudgetByCampaign.get(String(campaign.id || "")) ?? null,
                   spend,
                   reach:
                     metrics.uniqueUsers == null
@@ -8112,7 +8231,7 @@ function localApi(
             const googleSyncedAt = new Date().toISOString(),
               googleCampaigns = withOptimizationHistory(campaigns, "GOOGLE_ADS", googleSyncedAt),
               googlePayload = {
-              schemaVersion: 10,
+              schemaVersion: 11,
               since,
               until,
               syncedAt: googleSyncedAt,
@@ -8129,6 +8248,7 @@ function localApi(
                   )
                   .reduce((sum, campaign) => sum + campaign.spend, 0),
                 spendCap: 0,
+                remainingBudget: accountRemainingBudgets.get(account.id) ?? null,
               })),
               campaigns: googleCampaigns,
             };
@@ -8193,17 +8313,22 @@ function localApi(
           const releasePeriod = await acquireMediaPeriod(`META_ADS:${since}:${until}`);
           try {
           const storedMetaPeriod = readStoredMediaPeriod("META_ADS", since, until);
-          if (storedMetaPeriod && mediaPeriodIsFresh(storedMetaPeriod, forceRefresh))
+          // Mesma regra do Google: tela normal nunca espera a Meta, sempre
+          // devolve o snapshot salvo e renova em segundo plano.
+          if (storedMetaPeriod && (!forceRefresh || mediaPeriodIsFresh(storedMetaPeriod, true))) {
+            if (!forceRefresh && !mediaPeriodIsFresh(storedMetaPeriod, false))
+              refreshMediaPeriodInBackground("meta", since, until);
             return json(response, 200, withCampaignVerifications({
-              ...storedMetaPeriod, cache: { status: "stored", cachedAt: storedMetaPeriod.syncedAt },
+              ...storedMetaPeriod, cache: { status: mediaPeriodIsFresh(storedMetaPeriod, false) ? "stored" : "stale", cachedAt: storedMetaPeriod.syncedAt },
             }, "META_ADS"));
+          }
           if (!metaAccessConnections().length)
             return json(response, 503, { message: "A conexão compartilhada da Meta precisa ser configurada na Central de Conexões." });
           const metaController = new AbortController();
           const metaDeadline = setTimeout(() => metaController.abort(), 240_000);
           const metaConnections = metaAccessConnections();
           const accountTokens = new Map<string, string>();
-          const graph = async <T>(path: string, explicitToken?: string) => {
+          const graph = async <T>(path: string, explicitToken?: string, attempt = 0): Promise<T> => {
             const separator = path.includes("?") ? "&" : "?";
             const accountId = path.replace(/^https?:\/\/[^/]+\/v[^/]+\//, "").split(/[/?]/)[0];
             const accessToken = explicitToken || accountTokens.get(accountId) || metaConnections[0]?.token;
@@ -8217,11 +8342,20 @@ function localApi(
             const payload = (await result.json()) as T & {
               error?: { message?: string; code?: number };
             };
-            if (!result.ok || payload.error)
+            if (!result.ok || payload.error) {
+              // Códigos 4, 17, 32 e 613 são os limites de taxa da Meta (por app,
+              // por usuário ou por conta). Um recuo com espera evita que o
+              // limite de uma conta derrube a sincronização inteira.
+              const code = payload.error?.code;
+              if ([4, 17, 32, 613].includes(Number(code)) && attempt < 3) {
+                await new Promise((resolve) => setTimeout(resolve, 1_500 * 2 ** attempt));
+                return graph<T>(path, explicitToken, attempt + 1);
+              }
               throw new Error(
                 payload.error?.message ||
                   "A Meta recusou a consulta de campanhas.",
               );
+            }
             return payload;
           };
           try {
@@ -8658,7 +8792,7 @@ function localApi(
             const syncedAt = new Date().toISOString(),
               campaignsWithHistory = withOptimizationHistory(campaigns, "META_ADS", syncedAt),
               payload = {
-                schemaVersion: 8,
+                schemaVersion: 11,
                 since,
                 until,
                 syncedAt,
@@ -8671,6 +8805,12 @@ function localApi(
                   currency: account.currency || "BRL",
                   amountSpent: Number(account.amount_spent || 0) / 100,
                   spendCap: Number(account.spend_cap || 0) / 100,
+                  // A Graph API não expõe crédito/saldo disponível no nível da
+                  // conta: `balance` é o valor já faturável (o que se deve à
+                  // Meta), o oposto do saldo restante. Sem um saldo confiável,
+                  // não informamos saldo de conta e usamos apenas o saldo
+                  // restante por campanha (`budget_remaining`, quando a Meta o
+                  // informa).
                 })),
                 campaigns: campaignsWithHistory,
               };
@@ -8681,7 +8821,7 @@ function localApi(
                 localMetaDashboardCachePath,
                 JSON.stringify(
                   {
-                    schemaVersion: 8,
+                    schemaVersion: 11,
                     since,
                     until,
                     cachedAt: syncedAt,

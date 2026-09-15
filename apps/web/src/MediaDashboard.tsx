@@ -84,6 +84,7 @@ type Campaign = {
   dailyBudget: number;
   lifetimeBudget: number;
   remainingBudget?: number | null;
+  accountRemainingBudget?: number | null;
   spend: number;
   reach: number;
   impressions: number;
@@ -141,6 +142,7 @@ type Account = {
   currency: string;
   amountSpent: number;
   spendCap: number;
+  remainingBudget?: number | null;
 };
 type Payload = {
   schemaVersion?: number;
@@ -698,7 +700,7 @@ function ClientCampaignGroup({
                   <td><span className="simple-value simple-rate">{item.impressions > 0 ? `${number(item.clicks / item.impressions * 100,2)}%` : "—"}</span></td>
                   <td><span className="simple-value simple-rate">{item.clicks > 0 ? money(item.spend / item.clicks,item.currency) : "—"}</span></td>
                   <td><span className="simple-value simple-rate">{number(item.leads)}</span></td><td><span className="simple-value simple-money">{money(item.spend,item.currency)}</span></td>
-                  <td><span className="simple-value simple-volume">{item.remainingBudget == null ? "—" : money(Math.max(0,item.remainingBudget),item.currency)}</span></td>
+                  <td><span className="simple-value simple-volume">{item.accountRemainingBudget != null ? money(Math.max(0,item.accountRemainingBudget),item.currency) : item.remainingBudget == null ? "—" : money(Math.max(0,item.remainingBudget),item.currency)}</span></td>
                   <td><ScoreGauge score={campaignScore(item)} label="Campanha" compact campaign={item}/></td>
                   <td><span className="simple-responsible" title={selectedResponsible?.name || "Não atribuído"}><ResponsibleAvatar user={selectedResponsible}/><span>{selectedResponsible?.name || "Não atribuído"}</span></span></td>
                   <td><button type="button" className="campaign-analyze" onClick={() => onAnalyze(item)}><BarChart3/> Analisar</button></td>
@@ -1286,6 +1288,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
               ? normalizeMetaCampaignResults(campaign)
               : campaign),
             platform: source,
+            accountRemainingBudget: (payload.accounts || []).find((account: Account) => account.id === campaign.accountId)?.remainingBudget ?? null,
           }));
         }),
       };
@@ -2448,8 +2451,9 @@ function CampaignReport({
         clientName: exactClient?.name || group?.client?.name || "Cliente não vinculado",
         portfolioName: group ? accountLabel(group.account) : item.groupName,
         responsible: group?.responsible?.name || "Não atribuído",
-        balance: item.remainingBudget == null ? 0 : Math.max(0, item.remainingBudget),
-        balanceAvailable: item.remainingBudget != null,
+        balance: item.remainingBudget != null ? Math.max(0, item.remainingBudget) : group?.account.remainingBudget != null ? Math.max(0, group.account.remainingBudget) : 0,
+        balanceAvailable: item.remainingBudget != null || group?.account.remainingBudget != null,
+        balanceSource: item.remainingBudget != null ? "CAMPAIGN" : group?.account.remainingBudget != null ? "ACCOUNT" : "NONE",
       };
     });
   const rows = enrichedCampaigns
@@ -2818,7 +2822,7 @@ function CampaignReport({
                     </span>
                   </td>
                   <td>{money(item.spend, item.currency)}</td>
-                  <td><PerformanceValue value={item.balanceAvailable ? money(item.balance, item.currency) : "—"} tone={!item.balanceAvailable ? "neutral" : item.dailyBudget > 0 ? item.balance <= item.dailyBudget * 2 ? "bad" : item.balance <= item.dailyBudget * 4 ? "warning" : "good" : item.lifetimeBudget > 0 ? item.balance <= item.lifetimeBudget * .15 ? "bad" : item.balance <= item.lifetimeBudget * .3 ? "warning" : "good" : "neutral"} detail={item.balanceAvailable ? "Saldo atual informado diretamente pela plataforma" : "A plataforma não informa saldo próprio para esta campanha"} /></td>
+                  <td><PerformanceValue value={item.balanceAvailable ? money(item.balance, item.currency) : "—"} tone={!item.balanceAvailable ? "neutral" : item.dailyBudget > 0 ? item.balance <= item.dailyBudget * 2 ? "bad" : item.balance <= item.dailyBudget * 4 ? "warning" : "good" : item.lifetimeBudget > 0 ? item.balance <= item.lifetimeBudget * .15 ? "bad" : item.balance <= item.lifetimeBudget * .3 ? "warning" : "good" : "neutral"} detail={item.balanceAvailable ? item.balanceSource === "ACCOUNT" ? "Saldo da conta informado pelo Google; compartilhado entre as campanhas" : item.platform === "GOOGLE_ADS" ? "Saldo calculado com o orçamento total e gasto acumulado informados pelo Google" : "Saldo atual informado diretamente pela plataforma" : "A plataforma não informa saldo próprio para esta campanha"} /></td>
                   <td>{number(item.impressions)}</td>
                   <td>{number(item.clicks)}</td>
                   <td><PerformanceValue value={`${number(ctr, 2)}%`} tone={ctr >= 2 ? "good" : ctr >= 1 ? "warning" : "bad"} detail="CTR: verde ≥ 2%, amarelo ≥ 1%, vermelho abaixo de 1%" /></td>
