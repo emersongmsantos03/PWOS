@@ -1137,6 +1137,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
   const [query, setQuery] = useState(""),
     [status, setStatus] = useState(section === "TODAY" ? "ALL" : "ACTIVE"),
     [delivery, setDelivery] = useState("ALL"),
+    [showBoosted, setShowBoosted] = useState(false),
     [contextClient, setContextClient] = useState(() => contextClientFromUrl || savedMediaContext(userId).client || "ALL"),
     [contextResponsible, setContextResponsible] = useState(() => savedMediaContext(userId).responsible || "ALL");
   const [loading, setLoading] = useState(!data),
@@ -1475,12 +1476,13 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
             (delivery === "WITH_DATA"
               ? hasDelivery(item)
               : !hasDelivery(item))) &&
+          (showBoosted || !isBoostedPost(item)) &&
           `${item.client} ${item.name} ${portfolioId} ${item.accountId.replace(/^act_/, "")}`
             .toLowerCase()
             .includes(query.toLowerCase())
         );
       }),
-    [data, status, delivery, query, assignments, contextClient, contextResponsible],
+    [data, status, delivery, showBoosted, query, assignments, contextClient, contextResponsible],
   );
   const groups = useMemo<ClientGroup[]>(() => {
     const accountsById = new Map(
@@ -1905,35 +1907,40 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
                     placeholder="Buscar cliente ou campanha…"
                   />
                 </label>
-                <label className="traffic-filter-select">
-                  <Gauge />
-                  <select
-                    aria-label="Filtrar por status"
+                <div className="campaign-standard-filter">
+                  <SearchableSelect
+                    searchable={false}
                     value={status}
-                    onChange={(event) => setStatus(event.target.value)}
-                  >
-                    <option value="ALL">Todos os status</option>
-                    {statuses.map((item) => (
-                      <option value={item} key={item}>
-                        {statusLabel[item] || item}
-                      </option>
-                    ))}
-                  </select>
-                  <ChevronDown />
-                </label>
-                <label className="traffic-filter-select">
-                  <Activity />
-                  <select
-                    aria-label="Filtrar por entrega"
+                    onChange={setStatus}
+                    options={[
+                      { value: "ALL", label: "Todos os status" },
+                      ...statuses.map((item) => ({ value: item, label: statusLabel[item] || item })),
+                    ]}
+                  />
+                </div>
+                <div className="campaign-standard-filter">
+                  <SearchableSelect
+                    searchable={false}
                     value={delivery}
-                    onChange={(event) => setDelivery(event.target.value)}
-                  >
-                    <option value="ALL">Todas as entregas</option>
-                    <option value="WITH_DATA">Com entrega</option>
-                    <option value="NO_DATA">Sem entrega</option>
-                  </select>
-                  <ChevronDown />
-                </label>
+                    onChange={setDelivery}
+                    options={[
+                      { value: "ALL", label: "Todas as entregas" },
+                      { value: "WITH_DATA", label: "Com entrega" },
+                      { value: "NO_DATA", label: "Sem entrega" },
+                    ]}
+                  />
+                </div>
+                <div className="campaign-standard-filter traffic-filter-boosted">
+                  <SearchableSelect
+                    searchable={false}
+                    value={showBoosted ? "SHOW" : "HIDE"}
+                    onChange={(value) => setShowBoosted(value === "SHOW")}
+                    options={[
+                      { value: "HIDE", label: "Ocultar impulsionamentos" },
+                      { value: "SHOW", label: "Mostrar impulsionamentos" },
+                    ]}
+                  />
+                </div>
               </div>
             </section>
             {loading && !data ? (

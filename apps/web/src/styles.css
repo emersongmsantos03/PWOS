@@ -583,9 +583,7 @@ html[data-theme="dark"] .executive-board .board-kpi>b,html[data-theme="dark"] .e
 @media(max-width:1180px){.commercial-content{grid-template-columns:1fr}.sales-funnel{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}.sales-funnel>b{grid-column:1/-1}.ai-council>div{grid-template-columns:repeat(2,minmax(0,1fr))}.ai-next-action{grid-column:1/-1}}
 @media(max-width:760px){.sales-funnel{grid-template-columns:1fr}.sales-funnel>b{grid-column:auto}.ai-council>div{grid-template-columns:1fr}.ai-next-action{grid-column:auto}}
 
-.desktop-sidebar-toggle{display:grid;place-items:center;width:36px;height:36px;border-radius:9px;border:1px solid var(--border);background:var(--surface-soft);color:var(--text);margin-right:14px}
-.desktop-sidebar-toggle:hover{color:var(--orange)}
-.desktop-sidebar-toggle svg{width:18px}
+.desktop-sidebar-toggle{margin-right:14px}
 @media(min-width:761px){
   .sidebar{transition:transform .2s}
   main{transition:margin-left .2s}

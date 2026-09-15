@@ -1,9 +1,9 @@
 .traffic-page .simple-client-table{border:1px solid var(--border);border-radius:10px;background:var(--surface);overflow:hidden;margin-bottom:14px;box-shadow:0 2px 5px #16334a05}
 .simple-table-scroll{overflow:auto}
-.simple-client-table table{width:100%;min-width:1660px;border-collapse:separate;border-spacing:0;table-layout:fixed}
-.simple-client-table .simple-name-column{width:240px}
-.simple-client-table th{padding:15px 7px;text-align:left;font-size:9px;text-transform:uppercase;white-space:nowrap;color:var(--subtle);background:var(--surface-soft);border-bottom:1px solid var(--border)}
-.simple-client-table td{height:72px;padding:12px 7px;border-bottom:1px solid var(--border);font-size:10px;color:var(--text);vertical-align:middle;overflow-wrap:anywhere}
+.simple-client-table table{width:100%;min-width:1360px;border-collapse:separate;border-spacing:0;table-layout:fixed}
+.simple-client-table .simple-name-column{width:196px}
+.simple-client-table th{padding:13px 4px;text-align:left;font-size:9px;text-transform:uppercase;white-space:nowrap;color:var(--subtle);background:var(--surface-soft);border-bottom:1px solid var(--border)}
+.simple-client-table td{height:72px;padding:10px 4px;border-bottom:1px solid var(--border);font-size:10px;color:var(--text);vertical-align:middle;overflow-wrap:anywhere}
 .simple-client-table tbody tr:last-child td{border-bottom:0}
 .simple-client-table .simple-campaign-row td{background:color-mix(in srgb,var(--surface-soft) 55%,var(--surface));height:62px}
 .simple-client-table .simple-client-name{display:flex;align-items:center;gap:7px}
@@ -26,7 +26,7 @@
 .simple-client-table .score-gauge.compact{min-width:0!important;width:auto!important;padding:0!important;border:0!important}.simple-client-table .score-gauge-label,.simple-client-table .score-gauge-coverage{display:none}.simple-client-table .score-gauge{font-size:10px}
 .simple-client-table .campaign-assets-row td{padding:16px;background:var(--surface);height:auto}
 
-.simple-client-table .simple-value{display:inline-block;padding:7px 6px;border-radius:6px;white-space:nowrap;font-weight:600;font-variant-numeric:tabular-nums}
+.simple-client-table .simple-value{display:inline-block;padding:6px 5px;border-radius:6px;white-space:nowrap;font-weight:600;font-variant-numeric:tabular-nums}
 .simple-client-table .simple-campaign-row .simple-value{box-shadow:0 0 0 1px #ffffff30}
 .simple-client-table td .score-gauge>small,.simple-client-table td .score-gauge>strong{display:none}
 .simple-client-table td .score-gauge-number{padding:6px!important;border-radius:6px!important;min-width:0!important;display:flex;align-items:baseline;gap:2px}
@@ -77,7 +77,10 @@ body .score-reason-popover.score-reason-floating{left:var(--score-left,12px)!imp
 .simple-comparison .comparison-simple-filters{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:12px;border:1px solid var(--border);border-radius:9px;background:var(--surface);margin-bottom:14px}
 .comparison-simple-filters label{display:flex;align-items:center;gap:8px;padding:8px;border:1px solid var(--border);border-radius:7px;color:var(--subtle)}
 .comparison-simple-filters label svg{width:15px;height:15px}.comparison-simple-filters input,.comparison-simple-filters select{border:0;background:transparent;color:var(--text);font-size:11px;min-width:180px}.comparison-simple-filters>span{margin-left:auto;font-size:10px;color:var(--subtle)}
-.simple-comparison .simple-client-table table{min-width:1920px}
+.simple-comparison .simple-client-table table{min-width:1580px}
+
+.traffic-filters .traffic-filter-boosted{flex:0 1 220px;min-width:190px;max-width:260px}
+
 .simple-comparison .simple-value{white-space:normal;display:block;padding:7px}
 .simple-comparison .compiled-metric{display:flex;flex-direction:column;gap:4px}.simple-comparison .compiled-metric>b{font-size:11px;white-space:nowrap}.simple-comparison .compiled-metric>small{font-size:9px;line-height:1.5}.simple-comparison .compiled-metric em{display:block;font-size:8px;font-style:normal;color:var(--subtle)}
 .simple-comparison .compiled-metric .good{color:#22844f}.simple-comparison .compiled-metric .bad{color:#c54a4a}.simple-comparison .compiled-metric .neutral{color:var(--subtle)}

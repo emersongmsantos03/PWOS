@@ -414,19 +414,19 @@ function Shell({
       <main>
         <header className="topbar">
           <button
-            className="desktop-sidebar-toggle"
-            onClick={() => setSidebarCollapsed((value) => !value)}
-            aria-label={sidebarCollapsed ? "Abrir menu lateral" : "Fechar menu lateral"}
-            title={sidebarCollapsed ? "Abrir menu lateral" : "Fechar menu lateral"}
-          >
-            {sidebarCollapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
-          </button>
-          <button
             className="menu"
             onClick={() => setMenu(true)}
             aria-label="Abrir menu"
           >
             <Menu />
+          </button>
+          <button
+            className="theme-toggle desktop-sidebar-toggle"
+            onClick={() => setSidebarCollapsed((value) => !value)}
+            aria-label={sidebarCollapsed ? "Abrir menu lateral" : "Fechar menu lateral"}
+            title={sidebarCollapsed ? "Abrir menu lateral" : "Fechar menu lateral"}
+          >
+            {sidebarCollapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
           </button>
           <div className="search">
             <Search />
