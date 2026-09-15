@@ -988,10 +988,14 @@ function TvRotationBoard({
     const fit = () => {
       el.style.transform = "none";
       el.style.width = "100%";
-      const available = window.innerHeight - el.getBoundingClientRect().top - 20;
+      const parentWidth = el.parentElement?.clientWidth || window.innerWidth;
+      const availableHeight = window.innerHeight - el.getBoundingClientRect().top - 20;
+      const contentWidth = el.scrollWidth;
       const contentHeight = el.scrollHeight;
-      if (contentHeight > available && available > 0) {
-        const scale = Math.max(available / contentHeight, 0.42);
+      const widthScale = contentWidth > parentWidth && parentWidth > 0 ? parentWidth / contentWidth : 1;
+      const heightScale = contentHeight > availableHeight && availableHeight > 0 ? availableHeight / contentHeight : 1;
+      const scale = Math.max(Math.min(widthScale, heightScale), 0.42);
+      if (scale < 1) {
         el.style.transform = `scale(${scale})`;
         el.style.transformOrigin = "top left";
         el.style.width = `${100 / scale}%`;

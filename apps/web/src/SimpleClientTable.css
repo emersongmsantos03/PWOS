@@ -24,6 +24,7 @@
 .simple-client-table .simple-responsible{display:flex;align-items:center;gap:5px;font-size:9px}.simple-responsible>span:last-child{line-height:1.3}
 .simple-client-table .campaign-analyze{font-size:10px;min-height:28px;padding:5px 8px;border:1px solid color-mix(in srgb,var(--accent) 35%,var(--border));border-radius:6px;background:color-mix(in srgb,var(--accent) 5%,var(--surface));color:var(--accent);white-space:nowrap}.simple-client-table .campaign-analyze svg{width:12px;height:12px}
 .simple-client-table .score-gauge.compact{min-width:0!important;width:auto!important;padding:0!important;border:0!important}.simple-client-table .score-gauge-label,.simple-client-table .score-gauge-coverage{display:none}.simple-client-table .score-gauge{font-size:10px}
+.simple-client-table .score-gauge-number{min-width:0!important;min-height:0!important;margin:0!important;padding:6px 8px!important;border-radius:6px!important}.simple-client-table .score-gauge-number b{font-size:11px!important}.simple-client-table .score-gauge-number em{font-size:7px!important}
 .simple-client-table .campaign-assets-row td{padding:16px;background:var(--surface);height:auto}
 
 .simple-client-table .simple-value{display:inline-block;padding:6px 5px;border-radius:6px;white-space:nowrap;font-weight:600;font-variant-numeric:tabular-nums}
