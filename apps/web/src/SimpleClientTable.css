@@ -1,7 +1,7 @@
 .traffic-page .simple-client-table{border:1px solid var(--border);border-radius:10px;background:var(--surface);overflow:hidden;margin-bottom:14px;box-shadow:0 2px 5px #16334a05}
 .simple-table-scroll{overflow:auto}
-.simple-client-table table{width:100%;min-width:1360px;border-collapse:separate;border-spacing:0;table-layout:fixed}
-.simple-client-table .simple-name-column{width:196px}
+.simple-client-table table{width:100%;min-width:1546px;border-collapse:separate;border-spacing:0;table-layout:fixed}
+.simple-client-table .simple-name-column{width:190px}
 .simple-client-table th{padding:13px 4px;text-align:left;font-size:9px;text-transform:uppercase;white-space:nowrap;color:var(--subtle);background:var(--surface-soft);border-bottom:1px solid var(--border)}
 .simple-client-table td{height:72px;padding:10px 4px;border-bottom:1px solid var(--border);font-size:10px;color:var(--text);vertical-align:middle;overflow-wrap:anywhere}
 .simple-client-table tbody tr:last-child td{border-bottom:0}
@@ -77,10 +77,59 @@ body .score-reason-popover.score-reason-floating{left:var(--score-left,12px)!imp
 .simple-comparison .comparison-simple-filters{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:12px;border:1px solid var(--border);border-radius:9px;background:var(--surface);margin-bottom:14px}
 .comparison-simple-filters label{display:flex;align-items:center;gap:8px;padding:8px;border:1px solid var(--border);border-radius:7px;color:var(--subtle)}
 .comparison-simple-filters label svg{width:15px;height:15px}.comparison-simple-filters input,.comparison-simple-filters select{border:0;background:transparent;color:var(--text);font-size:11px;min-width:180px}.comparison-simple-filters>span{margin-left:auto;font-size:10px;color:var(--subtle)}
-.simple-comparison .simple-client-table table{min-width:1580px}
+.simple-comparison .simple-client-table table{min-width:1800px}
 
 .traffic-filters .traffic-filter-boosted{flex:0 1 220px;min-width:190px;max-width:260px}
 
 .simple-comparison .simple-value{white-space:normal;display:block;padding:7px}
+
+/* Painel de TV (tela cheia): um cliente por vez, tudo maior para ler de longe. */
+.tv-board{padding:4px 0 24px;max-width:none}
+.tv-board-head{display:flex;align-items:center;gap:18px;margin-bottom:18px}
+.tv-board-platform{padding:9px 18px;border-radius:999px;background:var(--surface);border:1px solid var(--border);color:var(--heading);font-size:15px;font-weight:800}
+.tv-board-progress{color:var(--subtle);font-size:15px;font-weight:700}
+.tv-board-timer{width:180px;height:6px;border-radius:3px;background:var(--divider);overflow:hidden;margin-left:auto}
+.tv-board-timer i{display:block;height:100%;width:0;background:var(--accent);animation:tv-board-progress 8s linear forwards}
+@keyframes tv-board-progress{from{width:0}to{width:100%}}
+.tv-board .simple-client-table{font-size:16px}
+.tv-board .simple-table-scroll{max-height:calc(100vh - 160px)}
+.tv-board .simple-client-table col{width:auto!important}
+.tv-board .simple-client-table col:nth-child(1){width:195px!important}
+.tv-board .simple-client-table col:nth-child(2){width:120px!important}
+.tv-board .simple-client-table col:nth-child(3){width:114px!important}
+.tv-board .simple-client-table col:nth-child(4){width:58px!important}
+.tv-board .simple-client-table col:nth-child(5){width:95px!important}
+.tv-board .simple-client-table col:nth-child(6){width:125px!important}
+.tv-board .simple-client-table col:nth-child(7){width:115px!important}
+.tv-board .simple-client-table col:nth-child(8){width:108px!important}
+.tv-board .simple-client-table col:nth-child(9){width:78px!important}
+.tv-board .simple-client-table col:nth-child(10){width:87px!important}
+.tv-board .simple-client-table col:nth-child(11){width:95px!important}
+.tv-board .simple-client-table col:nth-child(12){width:112px!important}
+.tv-board .simple-client-table col:nth-child(13){width:125px!important}
+.tv-board .simple-client-table col:nth-child(14){width:122px!important}
+.tv-board .simple-client-table col:nth-child(15){width:100px!important}
+.tv-board .simple-client-table col:nth-child(16){width:118px!important}
+.tv-board .simple-client-table col:nth-child(17){width:78px!important}
+.tv-board .simple-client-table table{min-width:0;width:100%}
+.tv-board .simple-client-table td,.tv-board .simple-client-table th{overflow:hidden;text-overflow:ellipsis}
+.tv-board .simple-client-table .simple-client-name b,.tv-board .simple-client-table .simple-child-name b,.tv-board .simple-client-table .simple-campaign-objective,.tv-board .simple-client-table .simple-responsible span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
+.tv-board .simple-client-table .simple-value,.tv-board .simple-client-table .simple-campaign-type,.tv-board .simple-client-table .simple-status,.tv-board .simple-client-table .campaign-state{display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.page:has(.tv-board){max-width:none;padding-left:16px;padding-right:16px}
+.tv-board .simple-client-table th{padding:18px 10px;font-size:13px}
+.tv-board .simple-client-table td{height:96px;padding:16px 10px;font-size:15px}
+.tv-board .simple-client-table .simple-client-name b,.tv-board .simple-client-table .simple-child-name b{font-size:19px}
+.tv-board .simple-client-table .simple-client-name small{font-size:13px}
+.tv-board .simple-client-table .simple-value{padding:10px 9px;font-size:15px;border-radius:9px}
+.tv-board .simple-client-table .simple-campaign-type,.tv-board .simple-client-table .simple-campaign-objective{font-size:13px}
+.tv-board .simple-client-table .simple-responsible{font-size:13px}
+.tv-board .simple-client-table .simple-responsible .avatar{width:32px;height:32px}
+.tv-board .simple-client-table .campaign-analyze{font-size:14px;padding:8px 12px}
+.tv-board .simple-client-table td .score-gauge-number{white-space:nowrap;min-width:0!important}
+.tv-board .simple-client-table td .score-gauge-number b{font-size:18px!important}
+.tv-board .simple-client-table td .score-gauge-number em{font-size:11px!important}
+.tv-board .simple-client-table .portfolio-network-icon,.tv-board .simple-client-table .portfolio-network-icon img{width:32px;height:32px}
+.tv-board .simple-client-table .simple-expand,.tv-board .simple-client-table .simple-edit{width:34px;height:36px}
+.tv-board .simple-client-table .simple-expand svg,.tv-board .simple-client-table .simple-edit svg{width:18px;height:18px}
 .simple-comparison .compiled-metric{display:flex;flex-direction:column;gap:4px}.simple-comparison .compiled-metric>b{font-size:11px;white-space:nowrap}.simple-comparison .compiled-metric>small{font-size:9px;line-height:1.5}.simple-comparison .compiled-metric em{display:block;font-size:8px;font-style:normal;color:var(--subtle)}
 .simple-comparison .compiled-metric .good{color:#22844f}.simple-comparison .compiled-metric .bad{color:#c54a4a}.simple-comparison .compiled-metric .neutral{color:var(--subtle)}

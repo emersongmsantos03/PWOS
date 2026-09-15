@@ -282,6 +282,45 @@ const hasDelivery = (item: Campaign) =>
   item.conversations > 0;
 const isBoostedPost = (item: Campaign) =>
   /^(publica[cç][aã]o|instagram post|facebook post)|impulsion/i.test(item.name);
+// Cada coluna tem a largura mínima que o próprio rótulo do cabeçalho precisa
+// (com table-layout:fixed, uma largura menor faz o texto do th vazar em cima
+// da coluna vizinha em vez de quebrar ou cortar).
+const simpleTableColumns: { label: string; width: number }[] = [
+  { label: "Tipo", width: 90 },
+  { label: "Objetivo", width: 130 },
+  { label: "Rede", width: 56 },
+  { label: "Status", width: 76 },
+  { label: "Landing page", width: 68 },
+  { label: "Inv. diário", width: 88 },
+  { label: "Impressões", width: 82 },
+  { label: "Cliques", width: 70 },
+  { label: "CTR", width: 60 },
+  { label: "CPC", width: 72 },
+  { label: "Conversões", width: 90 },
+  { label: "Custo", width: 88 },
+  { label: "Saldo", width: 92 },
+  { label: "Score", width: 78 },
+  { label: "Responsável", width: 120 },
+  { label: "Análise", width: 96 },
+];
+const SimpleTableHead = () => (
+  <>
+    <colgroup>
+      <col className="simple-name-column" />
+      {simpleTableColumns.map((column) => (
+        <col key={column.label} style={{ width: column.width }} />
+      ))}
+    </colgroup>
+    <thead>
+      <tr>
+        <th>Cliente / campanha</th>
+        {simpleTableColumns.map((column) => (
+          <th key={column.label}>{column.label}</th>
+        ))}
+      </tr>
+    </thead>
+  </>
+);
 type PerformanceTone = "good" | "warning" | "bad" | "neutral";
 const scoreTone = (score: number): PerformanceTone =>
   score < 0 ? "neutral" : score >= 90 ? "good" : score >= 70 ? "warning" : "bad";
@@ -659,8 +698,7 @@ function ClientCampaignGroup({
     <article className={`simple-client-table ${open ? "open" : ""}`}>
       <div className="simple-table-scroll">
         <table>
-          <colgroup><col className="simple-name-column"/>{Array.from({length:16}, (_,index) => <col key={index}/>)}</colgroup>
-          <thead><tr>{["Cliente / campanha", "Tipo", "Objetivo", "Rede", "Status", "Landing page", "Inv. diário", "Impressões", "Cliques", "CTR", "CPC", "Conversões", "Custo", "Saldo", "Score", "Responsável", "Análise"].map(label => <th key={label}>{label}</th>)}</tr></thead>
+          <SimpleTableHead />
           <tbody>
           {(portfolioMetrics(group.campaigns)).map((total) => {
             const amount = (value: number | null) => value == null ? "—" : money(value,total.currency);
@@ -909,6 +947,69 @@ function ClientCampaignGroup({
   );
 }
 
+// Painel de TV: mostra um cliente por vez, com todas as colunas do cliente
+// normal (nada é resumido), em letra grande, girando sozinho a cada 8s.
+// Só existe dentro do modo tela cheia — a tela normal continua igual.
+function TvRotationBoard({
+  group,
+  index,
+  total,
+  clients,
+  users,
+  onAssign,
+  periodDays,
+  onAnalyze,
+  onVerify,
+  canManage,
+  platformLabel,
+}: {
+  group: ClientGroup;
+  index: number;
+  total: number;
+  clients: Client[];
+  users: User[];
+  platformLabel: string;
+  periodDays: number;
+  onAnalyze: (campaign: Campaign) => void;
+  onVerify: (campaign: Campaign) => Promise<void>;
+  canManage: boolean;
+  onAssign: (
+    platform: "META_ADS" | "GOOGLE_ADS",
+    accountIds: string[],
+    clientId: string,
+    responsibleId: string,
+    identitySource: Assignment["identitySource"],
+  ) => Promise<void>;
+}) {
+  return (
+    <section className="tv-board">
+      <header className="tv-board-head">
+        <span className="tv-board-platform">{platformLabel}</span>
+        <span className="tv-board-progress">Cliente {index + 1} de {total}</span>
+        {total > 1 && (
+          <div className="tv-board-timer" aria-hidden="true">
+            <i key={group.key} />
+          </div>
+        )}
+      </header>
+      <ClientCampaignGroup
+        key={group.key}
+        group={group}
+        initialOpen
+        clients={clients}
+        users={users}
+        onAssign={onAssign}
+        platform={group.platform}
+        showPlatform
+        canManage={canManage}
+        periodDays={periodDays}
+        onAnalyze={onAnalyze}
+        onVerify={onVerify}
+      />
+    </section>
+  );
+}
+
 function ClientAccessModal({
   client,
   users,
@@ -1130,7 +1231,6 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
       error: string;
     } | null>(null),
     [canManageAssignments, setCanManageAssignments] = useState(false),
-    [canSync, setCanSync] = useState(false),
     [comparisonCampaigns, setComparisonCampaigns] = useState<Campaign[]>([]);
   const [since, setSince] = useState(() => reportClientFromUrl ? initialReportPeriod().since : safeSavedMediaPeriod(userId).since),
     [until, setUntil] = useState(() => reportClientFromUrl ? initialReportPeriod().until : safeSavedMediaPeriod(userId).until);
@@ -1144,6 +1244,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
     [error, setError] = useState(""),
     [manualSyncing, setManualSyncing] = useState(false),
     [isFullscreen, setIsFullscreen] = useState(false),
+    [tvIndex, setTvIndex] = useState(0),
     [todayPage, setTodayPage] = useState(1),
     [accountsPage, setAccountsPage] = useState(1);
   useEffect(() => {
@@ -1159,6 +1260,9 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
     document.addEventListener("fullscreenchange", updateFullscreenState);
     return () => document.removeEventListener("fullscreenchange", updateFullscreenState);
   }, []);
+  useEffect(() => {
+    if (isFullscreen) setTvIndex(0);
+  }, [isFullscreen]);
   const toggleFullscreen = async () => {
     try {
       if (document.fullscreenElement) await document.exitFullscreen();
@@ -1257,7 +1361,6 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
         const assignmentPayload = await assignmentsResponse.json();
         setAssignments(assignmentPayload.assignments || []);
         setCanManageAssignments(!!assignmentPayload.canManage);
-        setCanSync(!!assignmentPayload.canSync);
       }
       if (requestId !== loadRequestRef.current) return;
       if (!successful.length)
@@ -1548,6 +1651,14 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
       })
       .sort((a, b) => (a.client?.name || accountLabel(a.account)).localeCompare(b.client?.name || accountLabel(b.account), "pt-BR", { sensitivity: "base", numeric: true }));
   }, [filtered, data, clients, users, assignments]);
+  // Modo TV: em tela cheia, gira sozinho por todos os clientes (não só a
+  // página atual da lista) para caber cada um por inteiro, com letra grande,
+  // sem faltar ninguém.
+  useEffect(() => {
+    if (!isFullscreen || groups.length < 2) return;
+    const timer = window.setInterval(() => setTvIndex((current) => current + 1), 8_000);
+    return () => window.clearInterval(timer);
+  }, [isFullscreen, groups.length]);
   const statuses = [
     ...new Set((data?.campaigns || []).map((item) => item.status)),
   ];
@@ -1681,7 +1792,6 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
           </div>
         </div>
         {section !== "HISTORY" && <div className="traffic-period">
-          {platform === "GOOGLE_ADS" && canSync && <button type="button" className="secondary" disabled={loading || manualSyncing} onClick={() => void load(true, true)}><RefreshCw className={manualSyncing ? "spin" : ""}/>{manualSyncing ? "Sincronizando Google…" : "Sincronizar Google agora"}</button>}
           {(section === "CLIENTS" || section === "CAMPAIGNS") && <button type="button" className="traffic-ai-launcher" onClick={() => window.dispatchEvent(new Event("pw:open-media-ai"))}><BrainCircuit /><span>Analisar operação</span><small>IA</small></button>}
           {section === "REPORTS" && <div className="traffic-period-presets" aria-label="Períodos rápidos para relatório">
             <button type="button" onClick={() => applyReportPeriod("FIRST_HALF")}>1ª quinzena</button>
@@ -1882,6 +1992,28 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
               setManagementView("PORTFOLIOS");
             } : undefined}
           />
+        ) : isFullscreen ? (
+          groups.length ? (
+            <TvRotationBoard
+              group={groups[tvIndex % groups.length]}
+              index={tvIndex % groups.length}
+              total={groups.length}
+              clients={clients}
+              users={users}
+              onAssign={saveAssignment}
+              periodDays={periodDays}
+              onAnalyze={openCampaignAnalysis}
+              onVerify={markCampaignAnalyzed}
+              canManage={canManageAssignments}
+              platformLabel={platform === "GOOGLE_ADS" ? "Google Ads" : platform === "META_ADS" ? "Meta Ads" : "Todas as mídias"}
+            />
+          ) : (
+            <div className="panel inline-empty">
+              <Megaphone />
+              <h3>Nenhum cliente encontrado</h3>
+              <p>Ajuste os filtros ou o período selecionado.</p>
+            </div>
+          )
         ) : (
           <>
             <section className="media-operation-pulse" aria-label="Resumo das prioridades operacionais">
@@ -2263,7 +2395,7 @@ function ComparisonClientRows({ group, previousCampaigns, previousAvailable, sea
       <td><button type="button" className="campaign-analyze" onClick={()=>campaign ? onAnalyze(campaign) : setOpen(value=>!value)}>{campaign ? "Analisar" : open ? "Recolher" : "Comparar"}</button></td>
     </tr>;
   };
-  return <article className={`simple-client-table ${open ? "open" : ""}`}><div className="simple-table-scroll"><table><colgroup><col className="simple-name-column"/>{Array.from({length:16},(_,index)=><col key={index}/>)}</colgroup><thead><tr>{["Cliente / campanha","Tipo","Objetivo","Rede","Status","Landing page","Inv. diário","Impressões","Cliques","CTR","CPC","Conversões","Custo","Saldo","Score","Responsável","Análise"].map(label=><th key={label}>{label}</th>)}</tr></thead><tbody>{[...new Set(current.map(item=>item.currency))].map(currency=>renderRow(current.filter(item=>item.currency===currency),previous.filter(item=>item.currency===currency),currency))}{open && campaignRows.map(item=>{const old=previousById.get(`${item.platform}:${item.accountId}:${item.id}`);return renderRow([item],old && old.currency===item.currency ? [old] : [],item.currency,item)})}</tbody></table></div></article>;
+  return <article className={`simple-client-table ${open ? "open" : ""}`}><div className="simple-table-scroll"><table><SimpleTableHead /><tbody>{[...new Set(current.map(item=>item.currency))].map(currency=>renderRow(current.filter(item=>item.currency===currency),previous.filter(item=>item.currency===currency),currency))}{open && campaignRows.map(item=>{const old=previousById.get(`${item.platform}:${item.accountId}:${item.id}`);return renderRow([item],old && old.currency===item.currency ? [old] : [],item.currency,item)})}</tbody></table></div></article>;
 }
 
 function CompiledReport({ campaigns, groups, platform, since, until, onSinceChange, onUntilChange, onPlatformChange, onAnalyze }: {
