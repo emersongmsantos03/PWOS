@@ -615,7 +615,7 @@ function campaignTypeLabel(campaign: Campaign) {
   return isBoostedPost(campaign) ? "Impulsionada" : "Campanha";
 }
 function campaignObjectiveLabel(campaign: Campaign) {
-  return campaign.platform === "GOOGLE_ADS" ? "Não disponibilizado" : objectiveLabel(campaign.objective);
+  return objectiveLabel(campaign.objective);
 }
 
 function LandingPageIcon({ url, status }: { url?: string | null; status?: Campaign["landingPageStatus"] }) {
@@ -709,7 +709,7 @@ function ClientCampaignGroup({
             }}>
               <td><div className="simple-client-name"><button type="button" className="simple-expand" aria-expanded={open} aria-label={`${open ? "Recolher" : "Expandir"} campanhas de ${name}`} onClick={() => setOpen(value => !value)}><ChevronDown/></button><span><b title={name}>{name}</b><small>{group.campaigns.length} campanhas · {total.currency}</small></span>{canManage && <button type="button" className="simple-edit assignment-edit-trigger" title="Editar cliente e responsável" aria-label={`Editar vínculo de ${name}`} onClick={editAssignment}><Settings2/> <span>Editar</span></button>}</div></td>
               <td><span className="simple-campaign-type">{[...new Set(group.campaigns.map(item => campaignTypeLabel(item)))].join(" · ") || "—"}</span></td>
-              <td><span className="simple-campaign-objective" title="Objetivos informados pela plataforma; o Google não disponibiliza o objetivo selecionado na interface.">{[...new Set(group.campaigns.map(campaignObjectiveLabel))].join(" · ") || "—"}</span></td>
+              <td><span className="simple-campaign-objective" title="Meta informa o objetivo de criação da campanha; o Google não expõe esse dado pela API, então mostramos o tipo de campanha.">{[...new Set(group.campaigns.map(campaignObjectiveLabel))].join(" · ") || "—"}</span></td>
               <td><span className="portfolio-network-list">{groupPlatforms.map(network => <span key={network} className="portfolio-network-icon" role="img" aria-label={network === "GOOGLE_ADS" ? "Google Ads" : "Meta Ads"} title={network === "GOOGLE_ADS" ? "Google Ads" : "Meta Ads"}>{network === "GOOGLE_ADS" ? <GoogleAdsLogo/> : <MetaLogo/>}</span>)}</span></td>
               <td><span className={`simple-status ${group.active ? "active" : "inactive"}`}>{group.active === group.campaigns.length ? "Ativa" : group.active > 0 ? "Misto" : "Inativa"}</span></td>
               <td>{[...new Set(group.campaigns.map(item => item.landingPageUrl).filter((url): url is string => !!url))].map(url => {
@@ -729,7 +729,7 @@ function ClientCampaignGroup({
                 <tr className={`simple-campaign-row ${scoreTone(campaignScore(item))}`}>
                   <td><span className="simple-child-name"><span aria-hidden="true">↳</span><b title={item.name}>{item.name}</b></span><button type="button" className="campaign-assets-trigger" onClick={() => setOpenCampaignId(current => current === item.id ? "" : item.id)}><Eye/> {openCampaignId === item.id ? "Fechar anúncios" : "Ver anúncios"}</button></td>
                   <td><span className="simple-campaign-type">{campaignTypeLabel(item)}</span></td>
-                  <td><span className="simple-campaign-objective" title={item.platform === "GOOGLE_ADS" ? "O Google não disponibiliza pela API o objetivo selecionado na interface." : "Objetivo informado pela Meta"}>{campaignObjectiveLabel(item)}</span></td>
+                  <td><span className="simple-campaign-objective" title={item.platform === "GOOGLE_ADS" ? "O Google não expõe pela API o objetivo selecionado na interface; exibimos o tipo de campanha." : "Objetivo informado pela Meta"}>{campaignObjectiveLabel(item)}</span></td>
                   <td><span className="portfolio-network-icon" role="img" aria-label={item.platform === "GOOGLE_ADS" ? "Google Ads" : "Meta Ads"} title={item.platform === "GOOGLE_ADS" ? "Google Ads" : "Meta Ads"}>{item.platform === "GOOGLE_ADS" ? <GoogleAdsLogo/> : <MetaLogo/>}</span></td>
                   <td><CampaignDeliveryStatus campaign={item}/></td>
                   <td><LandingPageIcon url={item.landingPageUrl} status={item.landingPageStatus}/></td>
@@ -981,6 +981,27 @@ function TvRotationBoard({
     identitySource: Assignment["identitySource"],
   ) => Promise<void>;
 }) {
+  const scaleRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = scaleRef.current;
+    if (!el) return;
+    const fit = () => {
+      el.style.transform = "none";
+      el.style.width = "100%";
+      const available = window.innerHeight - el.getBoundingClientRect().top - 20;
+      const contentHeight = el.scrollHeight;
+      if (contentHeight > available && available > 0) {
+        const scale = Math.max(available / contentHeight, 0.42);
+        el.style.transform = `scale(${scale})`;
+        el.style.transformOrigin = "top left";
+        el.style.width = `${100 / scale}%`;
+      }
+    };
+    fit();
+    const frame = window.requestAnimationFrame(fit);
+    window.addEventListener("resize", fit);
+    return () => { window.cancelAnimationFrame(frame); window.removeEventListener("resize", fit); };
+  }, [group.key, total]);
   return (
     <section className="tv-board">
       <header className="tv-board-head">
@@ -992,20 +1013,22 @@ function TvRotationBoard({
           </div>
         )}
       </header>
-      <ClientCampaignGroup
-        key={group.key}
-        group={group}
-        initialOpen
-        clients={clients}
-        users={users}
-        onAssign={onAssign}
-        platform={group.platform}
-        showPlatform
-        canManage={canManage}
-        periodDays={periodDays}
-        onAnalyze={onAnalyze}
-        onVerify={onVerify}
-      />
+      <div className="tv-board-scale" ref={scaleRef}>
+        <ClientCampaignGroup
+          key={group.key}
+          group={group}
+          initialOpen
+          clients={clients}
+          users={users}
+          onAssign={onAssign}
+          platform={group.platform}
+          showPlatform
+          canManage={canManage}
+          periodDays={periodDays}
+          onAnalyze={onAnalyze}
+          onVerify={onVerify}
+        />
+      </div>
     </section>
   );
 }
@@ -1825,7 +1848,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
             {isFullscreen ? <Minimize2 /> : <Maximize2 />}
             {isFullscreen ? "Sair da tela cheia" : "Tela cheia"}
           </button>
-          <span className="traffic-auto-sync"><RefreshCw/><span><b>Sincronização automática</b><small>Diariamente às 04:00</small></span></span>
+          <span className="traffic-auto-sync" title="Sincronização automática diariamente às 04:00"><RefreshCw/><b>Sincroniza às 04:00</b></span>
         </div>}
       </header>
       {(section === "CLIENTS" || section === "CAMPAIGNS") && <div className="media-ai-top-instance"><MediaAiBoundary><MediaAiInsights campaigns={allCampaigns} since={since} until={until} context="Gestão de mídia · visão geral" /></MediaAiBoundary></div>}

@@ -91,8 +91,9 @@ body .score-reason-popover.score-reason-floating{left:var(--score-left,12px)!imp
 .tv-board-timer{width:180px;height:6px;border-radius:3px;background:var(--divider);overflow:hidden;margin-left:auto}
 .tv-board-timer i{display:block;height:100%;width:0;background:var(--accent);animation:tv-board-progress 8s linear forwards}
 @keyframes tv-board-progress{from{width:0}to{width:100%}}
+.tv-board-scale{transform-origin:top left;transition:transform .25s ease}
 .tv-board .simple-client-table{font-size:16px}
-.tv-board .simple-table-scroll{max-height:calc(100vh - 160px)}
+.tv-board .simple-table-scroll{overflow:visible}
 .tv-board .simple-client-table col{width:auto!important}
 .tv-board .simple-client-table col:nth-child(1){width:195px!important}
 .tv-board .simple-client-table col:nth-child(2){width:120px!important}

@@ -191,11 +191,9 @@ html[data-theme="dark"] .traffic-page .campaign-state.active { border-color: #28
 }
 .traffic-page .traffic-ai-launcher svg { width: 16px; }
 .traffic-page .traffic-ai-launcher small { padding: 2px 4px; border-radius: 4px; background: color-mix(in srgb, var(--media-action) 12%, transparent); font-size: 6px; letter-spacing: .04em; }
-.traffic-page .traffic-auto-sync { display:inline-flex;align-items:center;gap:7px;min-height:38px;padding:0 11px;border:1px solid var(--media-line);border-radius:9px;background:var(--media-panel);color:var(--media-muted) }
+.traffic-page .traffic-auto-sync { display:inline-flex;flex:none;align-items:center;gap:7px;height:44px;padding:0 14px;border:1px solid var(--media-line);border-radius:10px;background:var(--media-panel);color:var(--media-muted);white-space:nowrap }
 .traffic-page .traffic-auto-sync>svg { width:14px;color:#2a9b6f }
-.traffic-page .traffic-auto-sync>span { display:flex;flex-direction:column }
-.traffic-page .traffic-auto-sync b { color:var(--media-ink);font-size:7px }
-.traffic-page .traffic-auto-sync small { margin-top:1px;font-size:6px }
+.traffic-page .traffic-auto-sync b { color:var(--media-ink);font-size:11px;font-weight:700 }
 .traffic-page .traffic-ai-launcher:hover { border-color: var(--media-action); background: color-mix(in srgb, var(--media-action) 11%, var(--media-panel)); }
 .traffic-page .traffic-period:has(.traffic-ai-launcher) { width: auto; min-width: 0; }
 .traffic-page .media-context-bar { gap: 10px; }
