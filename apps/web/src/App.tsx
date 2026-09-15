@@ -23,6 +23,8 @@ import {
   ChevronDown,
   CircleDollarSign,
   Download,
+  PanelLeftClose,
+  PanelLeftOpen,
   FileText,
   FileSignature,
   Gauge,
@@ -228,6 +230,13 @@ function Shell({
   const navigate = useNavigate();
   const location = useLocation();
   const [menu, setMenu] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem("pw-os-sidebar-collapsed") === "1";
+    } catch {
+      return false;
+    }
+  });
   const [mediaMenuOpen, setMediaMenuOpen] = useState(() => location.pathname.startsWith("/midia"));
   const [accountMenu, setAccountMenu] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
@@ -245,6 +254,13 @@ function Shell({
     document.documentElement.style.colorScheme = theme;
     localStorage.setItem("pw-os-theme", theme);
   }, [theme]);
+  useEffect(() => {
+    try {
+      localStorage.setItem("pw-os-sidebar-collapsed", sidebarCollapsed ? "1" : "0");
+    } catch {
+      /* preferência de sidebar é apenas conveniência local */
+    }
+  }, [sidebarCollapsed]);
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -340,8 +356,8 @@ function Shell({
   const firstAccessiblePath = visibleNav[0]?.to || "/ajuda";
 
   return (
-    <div className="app-shell">
-      <aside className={menu ? "sidebar open" : "sidebar"}>
+    <div className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
+      <aside className={`sidebar${menu ? " open" : ""}`}>
         <Brand />
         <button
           className="close-menu"
@@ -397,6 +413,14 @@ function Shell({
       )}
       <main>
         <header className="topbar">
+          <button
+            className="desktop-sidebar-toggle"
+            onClick={() => setSidebarCollapsed((value) => !value)}
+            aria-label={sidebarCollapsed ? "Abrir menu lateral" : "Fechar menu lateral"}
+            title={sidebarCollapsed ? "Abrir menu lateral" : "Fechar menu lateral"}
+          >
+            {sidebarCollapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
+          </button>
           <button
             className="menu"
             onClick={() => setMenu(true)}

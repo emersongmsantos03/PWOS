@@ -7814,9 +7814,22 @@ function localApi(
                 }
                 throw new Error(await googleError(result));
               }
-              const pages = (await result.json()) as {
-                results?: Record<string, any>[];
-              }[];
+              const raw = await result.text();
+              let pages: { results?: Record<string, any>[] }[];
+              try {
+                pages = JSON.parse(raw);
+              } catch {
+                // O endpoint de streaming às vezes devolve um corpo que não é
+                // JSON (ex.: o texto plano "stream timeout") quando a consulta
+                // demora demais do lado do Google. Repetir resolve a maioria
+                // dos casos; sem isso, a sincronização inteira falhava com um
+                // erro de parsing em vez de uma mensagem compreensível.
+                if (attempt < 3) {
+                  await new Promise((resolve) => setTimeout(resolve, 1_500 * 2 ** attempt));
+                  return search(customerId, loginId, query, attempt + 1);
+                }
+                throw new Error(`O Google Ads não respondeu a tempo (${raw.slice(0, 80) || "resposta vazia"}).`);
+              }
               return pages.flatMap((page) => page.results || []);
             };
             await forEachConcurrent(roots, 4, async (rootId) => {
