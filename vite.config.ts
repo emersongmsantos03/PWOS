@@ -1,6 +1,23 @@
 import { forEachConcurrent } from "./asyncPool";
 import { mediaConnectionSummary } from "./mediaConnectionSummary";
-import { isMediaSnapshotFresh, saoPauloDay } from "./mediaFreshness";
+import { addDays, isMediaSnapshotFresh, saoPauloDay } from "./mediaFreshness";
+import {
+  GoogleApiError,
+  GoogleQuotaError,
+  applyDailyRows,
+  buildGooglePeriod,
+  coversPeriod,
+  dayRange,
+  emptyGoogleDailyStore,
+  googleCampaignKey,
+  googleQuotaBlockedMessage,
+  isPermanentGoogleAccountError,
+  markDaysSynced,
+  parseGoogleRetryAfterSeconds,
+  planSyncRanges,
+  type GoogleDailyStore,
+  type GoogleDayRow,
+} from "./googleDailyStore";
 import { googleOAuthReturnPage } from "./oauthCallback";
 import {
   createHash,
@@ -19,6 +36,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  renameSync,
   statSync,
   unlinkSync,
   writeFileSync,
@@ -1321,6 +1339,539 @@ function localApi(
     }
     return result;
   };
+  type GoogleSearchFn = (customerId: string, loginId: string, query: string) => Promise<Record<string, any>[]>;
+  type GoogleAccountDetails = {
+    landingPages: Map<string, string>;
+    adsByCampaign: Map<string, Record<string, any>[]>;
+    landingPageStatuses: Map<string, LandingPageStatus>;
+    searchTermsByCampaign: Map<string, Array<{ term: string; clicks: number; impressions: number; leads: number; spend: number }>>;
+    geographyByCampaign: Map<string, Array<{ name: string; level: "REGION" | "CITY" | "NEIGHBORHOOD"; leads: number; clicks: number; spend: number }>>;
+  };
+  const emptyGoogleAccountDetails = (): GoogleAccountDetails => ({
+    landingPages: new Map(), adsByCampaign: new Map(), landingPageStatuses: new Map(),
+    searchTermsByCampaign: new Map(), geographyByCampaign: new Map(),
+  });
+  // Anúncios, criativos, páginas de destino, termos de busca e geografia de uma
+  // conta. São cerca de dez consultas, por isso só a coleta diária as executa.
+  const collectGoogleAccountDetails = async (
+    search: GoogleSearchFn,
+    account: { id: string; loginCustomerId: string },
+    since: string,
+    until: string,
+  ): Promise<GoogleAccountDetails> => {
+      const landingPages = new Map<string, string>();
+      const adsByCampaign = new Map<string, Record<string, any>[]>();
+      try {
+        const adRows = await search(
+          account.id,
+          account.loginCustomerId,
+          `SELECT campaign.id, ad_group.name, ad_group_ad.status, ad_group_ad.ad.id, ad_group_ad.ad.name, ad_group_ad.ad.type, ad_group_ad.ad.final_urls, ad_group_ad.ad.image_ad.image_url, ad_group_ad.ad.image_ad.preview_image_url, ad_group_ad.ad.responsive_search_ad.headlines, ad_group_ad.ad.responsive_search_ad.descriptions, ad_group_ad.ad.responsive_display_ad.headlines, ad_group_ad.ad.responsive_display_ad.long_headline, ad_group_ad.ad.responsive_display_ad.descriptions, metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions FROM ad_group_ad WHERE segments.date BETWEEN '${since}' AND '${until}'`,
+        );
+        adRows.forEach((adRow) => {
+          const campaignId = String(adRow.campaign?.id || ""), wrapper = adRow.adGroupAd || {}, ad = wrapper.ad || {}, metrics = adRow.metrics || {};
+          if (!campaignId || !ad.id) return;
+          const rsa = ad.responsiveSearchAd || {}, rda = ad.responsiveDisplayAd || {}, image = ad.imageAd || {},
+            textAssets = [...(rsa.headlines || []), ...(rsa.descriptions || []), ...(rda.headlines || []), ...(rda.descriptions || []), ...(rda.longHeadline ? [rda.longHeadline] : [])]
+              .map((asset: any) => asset?.text).filter(Boolean),
+            creatives = [
+              ...(image.imageUrl || image.previewImageUrl ? [{ type: "IMAGE", url: image.imageUrl || null, thumbnailUrl: image.previewImageUrl || image.imageUrl || null }] : []),
+              ...textAssets.map((value: string) => ({ type: "TEXT", text: value })),
+            ],
+            normalized = {
+              id: String(ad.id), name: ad.name || `Anúncio ${ad.id}`, status: wrapper.status || "UNKNOWN",
+              groupName: adRow.adGroup?.name || null, format: ad.type || null,
+              landingPageUrl: ad.finalUrls?.[0] || null, previewUrl: image.previewImageUrl || null,
+              headline: textAssets[0] || null, body: textAssets[1] || null,
+              spend: Number(metrics.costMicros || 0) / 1_000_000,
+              impressions: Number(metrics.impressions || 0), clicks: Number(metrics.clicks || 0), results: Number(metrics.conversions || 0), creatives,
+            };
+          adsByCampaign.set(campaignId, [...(adsByCampaign.get(campaignId) || []), normalized]);
+        });
+      } catch (cause) {
+        console.warn(`[Google Ads] Anúncios/criativos indisponíveis para ${account.id}:`, cause instanceof Error ? cause.message : cause);
+      }
+      try {
+        const responsiveImageRows = await search(
+          account.id,
+          account.loginCustomerId,
+          "SELECT campaign.id, ad_group_ad_asset_view.ad_group_ad, asset.id, asset.name, asset.type, asset.image_asset.full_size.url FROM ad_group_ad_asset_view WHERE ad_group_ad_asset_view.enabled = TRUE",
+        );
+        responsiveImageRows.forEach((assetRow) => {
+          const campaignId = String(assetRow.campaign?.id || ""),
+            adResource = String(assetRow.adGroupAdAssetView?.adGroupAd || ""),
+            adId = adResource.split("~").at(-1) || "",
+            asset = assetRow.asset || {}, imageUrl = asset.imageAsset?.fullSize?.url;
+          if (!campaignId || !adId || asset.type !== "IMAGE" || !imageUrl) return;
+          const ad = (adsByCampaign.get(campaignId) || []).find((item) => item.id === adId);
+          if (!ad) return;
+          const creativeId = String(asset.id || imageUrl);
+          if (!ad.creatives.some((creative: any) => creative.id === creativeId || creative.url === imageUrl))
+            ad.creatives.unshift({ id: creativeId, name: asset.name || null, type: "IMAGE", url: imageUrl, thumbnailUrl: imageUrl });
+        });
+      } catch (cause) {
+        console.warn(`[Google Ads] Imagens de anúncios responsivos indisponíveis para ${account.id}:`, cause instanceof Error ? cause.message : cause);
+      }
+      try {
+        const campaignImageRows = await search(account.id, account.loginCustomerId, "SELECT campaign.id, asset.id, asset.name, asset.type, asset.image_asset.full_size.url FROM campaign_asset WHERE campaign_asset.status != 'REMOVED' AND asset.type = 'IMAGE'");
+        const imagesByCampaign = new Map<string, Record<string, any>[]>();
+        campaignImageRows.forEach((assetRow) => {
+          const campaignId = String(assetRow.campaign?.id || ""), asset = assetRow.asset || {}, imageUrl = asset.imageAsset?.fullSize?.url;
+          if (!campaignId || !imageUrl) return;
+          const creative = { id: String(asset.id || imageUrl), name: asset.name || null, type: "IMAGE", url: imageUrl, thumbnailUrl: imageUrl };
+          imagesByCampaign.set(campaignId, [...(imagesByCampaign.get(campaignId) || []), creative]);
+        });
+        imagesByCampaign.forEach((images, campaignId) => {
+          const ads = adsByCampaign.get(campaignId) || [], target = ads.length === 1 ? ads[0] : null;
+          if (target) {
+            images.forEach((creative) => { if (!target.creatives.some((current: any) => current.id === creative.id || current.url === creative.url)) target.creatives.unshift(creative); });
+            target.previewUrl ||= images[0]?.thumbnailUrl || null;
+          } else {
+            const unique = images.filter((creative, index) => images.findIndex((item) => item.id === creative.id || item.url === creative.url) === index);
+            adsByCampaign.set(campaignId, [...ads, { id: `campaign-assets-${campaignId}`, name: "Recursos visuais da campanha", status: "ACTIVE", groupName: null, format: "IMAGENS DA CAMPANHA", landingPageUrl: null, previewUrl: unique[0]?.thumbnailUrl || null, headline: null, body: null, spend: 0, impressions: 0, clicks: 0, results: 0, creatives: unique }]);
+          }
+        });
+      } catch (cause) {
+        console.warn(`[Google Ads] Imagens vinculadas à campanha indisponíveis para ${account.id}:`, cause instanceof Error ? cause.message : cause);
+      }
+      try {
+        const assetGroupImageRows = await search(
+          account.id,
+          account.loginCustomerId,
+          "SELECT campaign.id, asset_group.id, asset_group.name, asset.id, asset.name, asset.type, asset.image_asset.full_size.url FROM asset_group_asset",
+        );
+        const performanceMaxAds = new Map<string, Record<string, any>>();
+        assetGroupImageRows.forEach((assetRow) => {
+          const campaignId = String(assetRow.campaign?.id || ""), assetGroup = assetRow.assetGroup || {}, asset = assetRow.asset || {}, imageUrl = asset.imageAsset?.fullSize?.url;
+          if (!campaignId || !assetGroup.id || asset.type !== "IMAGE" || !imageUrl) return;
+          const key = `${campaignId}:${assetGroup.id}`, current = performanceMaxAds.get(key) || {
+            id: `asset-group-${assetGroup.id}`, name: assetGroup.name || `Grupo de recursos ${assetGroup.id}`, status: "ACTIVE", groupName: assetGroup.name || null, format: "PERFORMANCE MAX",
+            landingPageUrl: null, previewUrl: imageUrl, headline: null, body: null, spend: 0, impressions: 0, clicks: 0, results: 0, creatives: [],
+          }, creativeId = String(asset.id || imageUrl);
+          if (!current.creatives.some((creative: any) => creative.id === creativeId || creative.url === imageUrl))
+            current.creatives.push({ id: creativeId, name: asset.name || null, type: "IMAGE", url: imageUrl, thumbnailUrl: imageUrl });
+          performanceMaxAds.set(key, current);
+        });
+        performanceMaxAds.forEach((ad, key) => {
+          const campaignId = key.split(":")[0], existing = adsByCampaign.get(campaignId) || [];
+          if (!existing.some((item) => item.id === ad.id)) adsByCampaign.set(campaignId, [...existing, ad]);
+        });
+      } catch (cause) {
+        console.warn(`[Google Ads] Imagens de Performance Max indisponíveis para ${account.id}:`, cause instanceof Error ? cause.message : cause);
+      }
+      try {
+        const landingRows = await search(
+          account.id,
+          account.loginCustomerId,
+          "SELECT campaign.id, ad_group_ad.ad.final_urls FROM ad_group_ad WHERE campaign.status = 'ENABLED'",
+        );
+        landingRows.forEach((landingRow) => {
+          const campaignId = String(landingRow.campaign?.id || ""),
+            candidate = landingRow.adGroupAd?.ad?.finalUrls?.[0];
+          if (campaignId && typeof candidate === "string" && /^https?:\/\//i.test(candidate) && !landingPages.has(campaignId))
+            landingPages.set(campaignId, candidate);
+        });
+      } catch {
+        /* Alguns formatos de campanha não expõem URLs no nível do anúncio. */
+      }
+      try {
+        const assetGroupRows = await search(
+          account.id,
+          account.loginCustomerId,
+          "SELECT campaign.id, asset_group.final_urls FROM asset_group WHERE campaign.status = 'ENABLED'",
+        );
+        assetGroupRows.forEach((assetGroupRow) => {
+          const campaignId = String(assetGroupRow.campaign?.id || ""),
+            candidate = assetGroupRow.assetGroup?.finalUrls?.[0];
+          if (campaignId && typeof candidate === "string" && /^https?:\/\//i.test(candidate) && !landingPages.has(campaignId))
+            landingPages.set(campaignId, candidate);
+        });
+      } catch {
+        /* Consulta complementar exclusiva para campanhas Performance Max. */
+      }
+      const landingPageStatuses = new Map<string, LandingPageStatus>(),
+        landingPageEntries = [...landingPages];
+      for (let offset = 0; offset < landingPageEntries.length; offset += 10) {
+        const checks = await Promise.all(
+          landingPageEntries.slice(offset, offset + 10).map(async ([campaignId, landingPage]) => [
+            campaignId,
+            await validatePublicLandingPage(landingPage),
+          ] as const),
+        );
+        checks.forEach(([campaignId, result]) => landingPageStatuses.set(campaignId, result));
+      }
+      const searchTermsByCampaign = new Map<string, Array<{ term: string; clicks: number; impressions: number; leads: number; spend: number }>>();
+      try {
+        const termRows = await search(account.id, account.loginCustomerId, `SELECT campaign.id, search_term_view.search_term, metrics.impressions, metrics.clicks, metrics.conversions, metrics.cost_micros FROM search_term_view WHERE segments.date BETWEEN '${since}' AND '${until}'`);
+        termRows.forEach((termRow) => {
+          const campaignId = String(termRow.campaign?.id || ""), term = String(termRow.searchTermView?.searchTerm || "").trim();
+          if (!campaignId || !term) return;
+          const items = searchTermsByCampaign.get(campaignId) || [], metrics = termRow.metrics || {};
+          items.push({ term, impressions: Number(metrics.impressions || 0), clicks: Number(metrics.clicks || 0), leads: Number(metrics.conversions || 0), spend: Number(metrics.costMicros || 0) / 1_000_000 });
+          searchTermsByCampaign.set(campaignId, items);
+        });
+        searchTermsByCampaign.forEach((items, campaignId) => searchTermsByCampaign.set(campaignId, items.sort((a, b) => b.clicks - a.clicks || b.impressions - a.impressions).slice(0, 15)));
+      } catch {
+        /* Termos existem apenas para campanhas Google compatíveis com pesquisa. */
+      }
+      const geographyByCampaign = new Map<string, Array<{ name: string; level: "REGION" | "CITY" | "NEIGHBORHOOD"; leads: number; clicks: number; spend: number }>>();
+      try {
+        const geoRows = await search(
+            account.id,
+            account.loginCustomerId,
+            `SELECT campaign.id, segments.geo_target_most_specific_location, segments.geo_target_postal_code, segments.geo_target_city, segments.geo_target_region, metrics.conversions, metrics.clicks, metrics.cost_micros FROM geographic_view WHERE segments.date BETWEEN '${since}' AND '${until}'`,
+          ),
+          geoResources = [...new Set(geoRows.flatMap((geoRow) => [geoRow.segments?.geoTargetMostSpecificLocation, geoRow.segments?.geoTargetPostalCode, geoRow.segments?.geoTargetCity, geoRow.segments?.geoTargetRegion]).filter(Boolean))] as string[],
+          geoNames = new Map<string, string>(),
+          geoTypes = new Map<string, string>();
+        for (let offset = 0; offset < geoResources.length; offset += 100) {
+          const resources = geoResources.slice(offset, offset + 100),
+            constants = await search(
+              account.id,
+              account.loginCustomerId,
+              `SELECT geo_target_constant.resource_name, geo_target_constant.name, geo_target_constant.canonical_name, geo_target_constant.target_type FROM geo_target_constant WHERE geo_target_constant.resource_name IN (${resources.map((resource) => `'${resource.replaceAll("'", "\\'")}'`).join(",")})`,
+            );
+          constants.forEach((constantRow) => {
+            const constant = constantRow.geoTargetConstant || {};
+            if (constant.resourceName) {
+              geoNames.set(constant.resourceName, constant.canonicalName || constant.name || constant.resourceName);
+              geoTypes.set(constant.resourceName, constant.targetType || "");
+            }
+          });
+        }
+        const postalLabels = new Map<string, { name: string; level: "CITY" | "NEIGHBORHOOD" }>(),
+          postalResources = [...new Set(geoRows.map((geoRow) => geoRow.segments?.geoTargetPostalCode).filter(Boolean))] as string[];
+        for (let offset = 0; offset < postalResources.length; offset += 12) {
+          const resolved = await Promise.all(postalResources.slice(offset, offset + 12).map(async (resource) => {
+            const label = geoNames.get(resource) || "",
+              zip = label.match(/\b\d{5}(?:-?\d{3})?\b/)?.[0]?.replace(/\D/g, "");
+            if (!zip) return [resource, null] as const;
+            const address = await resolveBrazilianPostalLocation(zip);
+            return [resource, address.neighborhood
+              ? { name: `${address.neighborhood}${address.city ? ` · ${address.city}` : ""}`, level: "NEIGHBORHOOD" as const }
+              : address.city ? { name: address.city, level: "CITY" as const } : null] as const;
+          }));
+          resolved.forEach(([resource, location]) => { if (location) postalLabels.set(resource, location); });
+        }
+        geoRows.forEach((geoRow) => {
+          const campaignId = String(geoRow.campaign?.id || ""),
+            cityResource = geoRow.segments?.geoTargetCity,
+            regionResource = geoRow.segments?.geoTargetRegion,
+            postalResource = geoRow.segments?.geoTargetPostalCode,
+            specificResource = geoRow.segments?.geoTargetMostSpecificLocation;
+          if (!campaignId) return;
+          const entries = geographyByCampaign.get(campaignId) || [],
+            postalLocation = postalResource ? postalLabels.get(postalResource) : undefined,
+            metrics = {
+            leads: Number(geoRow.metrics?.conversions || 0),
+            clicks: Number(geoRow.metrics?.clicks || 0),
+            spend: Number(geoRow.metrics?.costMicros || 0) / 1_000_000,
+            };
+          if (cityResource)
+            entries.push({ name: geoNames.get(cityResource) || cityResource.replace("geoTargetConstants/", "Local "), level: "CITY", ...metrics });
+          else if (regionResource)
+            entries.push({ name: geoNames.get(regionResource) || regionResource.replace("geoTargetConstants/", "Local "), level: "REGION", ...metrics });
+          const specificType = specificResource ? (geoTypes.get(specificResource) || "").toLowerCase() : "";
+          if (specificResource && specificType.includes("neighborhood"))
+            entries.push({ name: geoNames.get(specificResource) || "Bairro não identificado", level: "NEIGHBORHOOD", ...metrics });
+          else if (postalLocation?.level === "NEIGHBORHOOD")
+            entries.push({ name: postalLocation.name, level: "NEIGHBORHOOD", ...metrics });
+          geographyByCampaign.set(campaignId, entries);
+        });
+      } catch {
+        /* O recorte geográfico pode ser restrito pela conta ou tipo de campanha. */
+      }
+  return { landingPages, adsByCampaign, landingPageStatuses, searchTermsByCampaign, geographyByCampaign };
+  };
+
+  // ---------- Histórico diário do Google Ads ----------
+  // Cada dia fica salvo. Períodos são montados somando os dias guardados, e só a
+  // coleta diária (ou o botão Sincronizar) fala com o Google. Regras em googleDailyStore.ts.
+  const localGoogleDailyPath = "data/google-daily-history.local.json";
+  const googleBackfillDays = 365;
+  const googleChunkDays = 31;
+  const sleepMs = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+  const loadGoogleDailyStore = (): GoogleDailyStore => {
+    if (!existsSync(localGoogleDailyPath)) return emptyGoogleDailyStore();
+    try {
+      const parsed = JSON.parse(readFileSync(localGoogleDailyPath, "utf8")) as GoogleDailyStore;
+      if (parsed?.version !== 1) throw new Error("versão desconhecida do histórico");
+      return { ...emptyGoogleDailyStore(), ...parsed };
+    } catch (cause) {
+      // Preserva o arquivo para análise em vez de sobrescrevê-lo com um histórico vazio.
+      try { renameSync(localGoogleDailyPath, `${localGoogleDailyPath}.corrupt-${Date.now()}`); } catch { /* segue com histórico vazio */ }
+      console.error("[Google Ads] Histórico diário ilegível; será reconstruído:", cause instanceof Error ? cause.message : cause);
+      return emptyGoogleDailyStore();
+    }
+  };
+  let googleDaily = loadGoogleDailyStore();
+  let googleManualSyncAt = 0;
+  const saveGoogleDaily = () => {
+    mkdirSync("data", { recursive: true });
+    const temporary = `${localGoogleDailyPath}.tmp`;
+    writeFileSync(temporary, JSON.stringify(googleDaily), { mode: 0o600 });
+    renameSync(temporary, localGoogleDailyPath);
+  };
+  const googleQuotaBlockedSeconds = () => {
+    const until = Date.parse(googleDaily.quotaBlockedUntil || "");
+    return Number.isFinite(until) ? Math.max(0, Math.ceil((until - Date.now()) / 1000)) : 0;
+  };
+  const markGoogleQuotaBlocked = (seconds: number) => {
+    googleDaily.quotaBlockedUntil = new Date(Date.now() + seconds * 1000).toISOString();
+    try { saveGoogleDaily(); } catch (cause) { console.error("[Google Ads] Não foi possível salvar o bloqueio de cota:", cause instanceof Error ? cause.message : cause); }
+  };
+  type GoogleDirectoryAccount = { id: string; name: string; currency: string; loginCustomerId: string };
+  let googleDailyDirectory: { key: string; expiresAt: number; accounts: GoogleDirectoryAccount[] } | null = null;
+  const withGoogleClient = async <T>(task: (client: { search: GoogleSearchFn; listAccounts: (refresh: boolean) => Promise<GoogleDirectoryAccount[]> }) => Promise<T>): Promise<T> => {
+    const blocked = googleQuotaBlockedSeconds();
+    if (blocked > 0) throw new GoogleQuotaError(googleQuotaBlockedMessage(googleDaily.quotaBlockedUntil!), blocked);
+    if (!runtimeGoogleClientId || !runtimeGoogleClientSecret || !runtimeGoogleRefreshToken || !runtimeGoogleDeveloperToken)
+      throw new GoogleApiError("Complete a conexão do Google Ads na Central de Conexões.", 503);
+    const controller = new AbortController();
+    const deadline = setTimeout(() => controller.abort(), 20 * 60_000);
+    try {
+      const accessToken = await googleAccessToken(runtimeGoogleRefreshToken);
+      const headers = (loginCustomerId?: string) => ({
+        Authorization: `Bearer ${accessToken}`,
+        "developer-token": runtimeGoogleDeveloperToken,
+        "Content-Type": "application/json",
+        ...(loginCustomerId ? { "login-customer-id": loginCustomerId } : {}),
+      });
+      const googleFetch = (input: string, init: RequestInit = {}) =>
+        fetch(input, { ...init, signal: AbortSignal.any([controller.signal, AbortSignal.timeout(60_000)]) });
+      // Lê a recusa do Google. Quando a cota diária esgota, o Google informa em quantos
+      // segundos ela volta; insistir antes disso é inútil e só atrasa a coleta.
+      const rejected = async (result: Response) => {
+        const payload = await result.json().catch(() => ({})) as {
+          error?: { message?: string; details?: Array<{ errors?: Array<{ message?: string; details?: { quotaErrorDetails?: { rateName?: string; rateScope?: string; retryDelay?: string } } }> }> };
+        };
+        const first = payload.error?.details?.flatMap((detail) => detail.errors || [])[0];
+        const message = first?.message || payload.error?.message ||
+          (result.status === 429 ? "O Google Ads atingiu o limite de requisições (HTTP 429)." : `O Google Ads recusou a consulta (HTTP ${result.status}).`);
+        const quota = first?.details?.quotaErrorDetails;
+        const seconds = Number.parseInt(String(quota?.retryDelay || ""), 10) || parseGoogleRetryAfterSeconds(message);
+        return { message, seconds, quotaLabel: quota ? `${quota.rateName || "cota"} · ${quota.rateScope || "?"}` : "" };
+      };
+      const failOnLongQuota = (status: number, info: { message: string; seconds: number | null; quotaLabel: string }) => {
+        if (status !== 429 || !info.seconds || info.seconds <= 90) return;
+        markGoogleQuotaBlocked(info.seconds);
+        console.error(`[Google Ads] Cota diária esgotada${info.quotaLabel ? ` (${info.quotaLabel})` : ""}: ${info.message}`);
+        throw new GoogleQuotaError(googleQuotaBlockedMessage(googleDaily.quotaBlockedUntil!), info.seconds);
+      };
+      const search: GoogleSearchFn = async (customerId, loginId, query) => {
+        for (let attempt = 0; ; attempt += 1) {
+          const blockedNow = googleQuotaBlockedSeconds();
+          if (blockedNow > 0) throw new GoogleQuotaError(googleQuotaBlockedMessage(googleDaily.quotaBlockedUntil!), blockedNow);
+          const result = await googleFetch(`https://googleads.googleapis.com/v25/customers/${customerId}/googleAds:searchStream`, {
+            method: "POST", headers: headers(loginId), body: JSON.stringify({ query }),
+          });
+          if (!result.ok) {
+            const info = await rejected(result);
+            failOnLongQuota(result.status, info);
+            if (result.status === 429 && attempt < 4) { await sleepMs(Math.min((info.seconds ?? 2 * 2 ** attempt) * 1000, 30_000)); continue; }
+            throw new GoogleApiError(info.message, result.status);
+          }
+          const raw = await result.text();
+          let pages: unknown;
+          try { pages = JSON.parse(raw); } catch { pages = null; }
+          if (Array.isArray(pages)) return (pages as Array<{ results?: Record<string, any>[] }>).flatMap((page) => page.results || []);
+          // O endpoint de streaming às vezes devolve texto plano ("stream timeout"). Repetir resolve a maioria.
+          if (attempt < 3) { await sleepMs(1_500 * 2 ** attempt); continue; }
+          throw new GoogleApiError(`O Google Ads não respondeu a tempo (${raw.slice(0, 80) || "resposta vazia"}).`, 504);
+        }
+      };
+      const listAccounts = async (refresh: boolean): Promise<GoogleDirectoryAccount[]> => {
+        const key = createHash("sha256").update(`${runtimeGoogleClientId}:${runtimeGoogleRefreshToken}`).digest("hex");
+        if (!refresh && googleDailyDirectory?.key === key && googleDailyDirectory.expiresAt > Date.now()) return googleDailyDirectory.accounts;
+        const accessible = await googleFetch("https://googleads.googleapis.com/v25/customers:listAccessibleCustomers", { headers: headers() });
+        if (!accessible.ok) {
+          const info = await rejected(accessible);
+          failOnLongQuota(accessible.status, info);
+          throw new GoogleApiError(info.message, accessible.status);
+        }
+        const roots = (((await accessible.json()) as { resourceNames?: string[] }).resourceNames || []).map((value) => value.replace("customers/", ""));
+        const found = new Map<string, GoogleDirectoryAccount & { manager: boolean }>();
+        let complete = true;
+        await forEachConcurrent(roots, 4, async (rootId) => {
+          try {
+            const rows = await search(rootId, rootId, "SELECT customer_client.id, customer_client.descriptive_name, customer_client.currency_code, customer_client.manager, customer_client.status FROM customer_client WHERE customer_client.status != 'CANCELED'");
+            rows.forEach((row) => {
+              const item = row.customerClient || {}, id = String(item.id || "");
+              if (id) found.set(id, { id, name: item.descriptiveName || `Conta Google ${id}`, currency: item.currencyCode || "BRL", loginCustomerId: rootId, manager: !!item.manager });
+            });
+          } catch (cause) {
+            if (cause instanceof GoogleQuotaError) throw cause;
+            complete = false;
+            found.set(rootId, { id: rootId, name: `Conta Google ${rootId}`, currency: "BRL", loginCustomerId: rootId, manager: false });
+          }
+        });
+        const accounts = [...found.values()].filter((account) => !account.manager).map(({ manager: _manager, ...account }) => account);
+        if (complete) googleDailyDirectory = { key, expiresAt: Date.now() + 6 * 60 * 60_000, accounts };
+        return accounts;
+      };
+      return await task({ search, listAccounts });
+    } finally {
+      clearTimeout(deadline);
+      controller.abort();
+    }
+  };
+  type GoogleDailySyncResult = { complete: boolean; ranges: number };
+  const collectGoogleDaily = (mode: "daily" | "manual"): Promise<GoogleDailySyncResult> => withGoogleClient(async ({ search, listAccounts }) => {
+    const startedAt = new Date(), nowIso = startedAt.toISOString(), today = saoPauloDay(startedAt);
+    // A coleta manual só reconcilia os dias recentes: quem clica no botão espera a resposta.
+    const ranges = planSyncRanges({
+      store: googleDaily, today,
+      backfillDays: mode === "daily" ? googleBackfillDays : 30,
+      reconcileDays: mode === "daily" ? 7 : 3,
+      chunkDays: googleChunkDays,
+    });
+    let complete = true;
+    try {
+      const accounts = await listAccounts(mode === "manual");
+      // 1) Métricas por dia. Uma consulta por conta traz o intervalo inteiro, então
+      //    buscar 1 dia ou 7 custa o mesmo número de chamadas.
+      for (const range of ranges) {
+        let rangeComplete = true;
+        await forEachConcurrent(accounts, 4, async (account) => {
+          try {
+            const rows = await search(account.id, account.loginCustomerId,
+              `SELECT segments.date, campaign.id, metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions, metrics.search_top_impression_share, metrics.search_absolute_top_impression_share FROM campaign WHERE segments.date BETWEEN '${range.since}' AND '${range.until}'`);
+            const share = (value: unknown) => (value == null ? null : Number.isFinite(Number(value)) ? Number(value) : null);
+            applyDailyRows(googleDaily, account.id, range.since, range.until, rows.flatMap((row) => {
+              const metrics = row.metrics || {}, day = String(row.segments?.date || ""), campaignId = String(row.campaign?.id || "");
+              const data: GoogleDayRow = [
+                Number(metrics.costMicros || 0), Number(metrics.impressions || 0), Number(metrics.clicks || 0), Number(metrics.conversions || 0),
+                share(metrics.searchTopImpressionShare), share(metrics.searchAbsoluteTopImpressionShare),
+              ];
+              return day && campaignId && (data[0] || data[1] || data[2] || data[3]) ? [{ day, campaignId, row: data }] : [];
+            }));
+          } catch (cause) {
+            if (cause instanceof GoogleQuotaError) throw cause;
+            if (isPermanentGoogleAccountError(cause)) {
+              console.warn(`[Google Ads] Conta ${account.id} ignorada na coleta diária:`, cause instanceof Error ? cause.message : cause);
+              return;
+            }
+            rangeComplete = false;
+            console.warn(`[Google Ads] Métricas indisponíveis para ${account.id} (${range.since} a ${range.until}):`, cause instanceof Error ? cause.message : cause);
+          }
+        });
+        if (rangeComplete) markDaysSynced(googleDaily, range.since, range.until, nowIso); else complete = false;
+        saveGoogleDaily();
+      }
+      // 2) Cadastro atual: nome, situação, orçamentos e saldos (não dependem de período).
+      await forEachConcurrent(accounts, 4, async (account) => {
+        try {
+          const rows = await search(account.id, account.loginCustomerId,
+            "SELECT customer.id, customer.descriptive_name, customer.currency_code, campaign.id, campaign.name, campaign.status, campaign.advertising_channel_type, campaign.optimization_score, campaign_budget.amount_micros, campaign_budget.total_amount_micros, campaign_budget.period FROM campaign");
+          let accountRemaining: number | null = null;
+          try {
+            const budgetRows = await search(account.id, account.loginCustomerId,
+              "SELECT account_budget.status, account_budget.adjusted_spending_limit_micros, account_budget.approved_spending_limit_micros, account_budget.amount_served_micros, account_budget.approved_end_date_time, account_budget.approved_end_time_type FROM account_budget WHERE account_budget.status = 'APPROVED'");
+            const activeBudget = budgetRows
+              .filter((row) => {
+                const budget = row.accountBudget || {};
+                return budget.approvedEndTimeType === "FOREVER" || !budget.approvedEndDateTime || new Date(budget.approvedEndDateTime.replace(" ", "T")) >= startedAt;
+              })
+              .sort((a, b) => String(b.accountBudget?.approvedEndDateTime || "").localeCompare(String(a.accountBudget?.approvedEndDateTime || "")))[0]?.accountBudget;
+            if (activeBudget) {
+              const limit = Number(activeBudget.adjustedSpendingLimitMicros || activeBudget.approvedSpendingLimitMicros || 0) / 1_000_000;
+              if (limit > 0) accountRemaining = Math.max(0, limit - Number(activeBudget.amountServedMicros || 0) / 1_000_000);
+            }
+          } catch (cause) {
+            if (cause instanceof GoogleQuotaError) throw cause;
+            console.warn(`[Google Ads] Saldo da conta indisponível para ${account.id}:`, cause instanceof Error ? cause.message : cause);
+          }
+          // Orçamento total (período personalizado): o saldo considera todo o gasto acumulado.
+          const customIds = [...new Set(rows.flatMap((row) => {
+            const budget = row.campaignBudget || {}, id = String(row.campaign?.id || "");
+            return budget.period === "CUSTOM_PERIOD" && Number(budget.totalAmountMicros || 0) > 0 && id ? [id] : [];
+          }))];
+          const remainingByCampaign = new Map<string, number>();
+          if (customIds.length) try {
+            const idList = customIds.join(",");
+            const startRows = await search(account.id, account.loginCustomerId, `SELECT campaign.id, campaign.start_date_time FROM campaign WHERE campaign.id IN (${idList})`);
+            const earliestStart = startRows.map((row) => String(row.campaign?.startDateTime || "").slice(0, 10)).filter((value) => /^\d{4}-\d{2}-\d{2}$/.test(value)).sort()[0];
+            const lifetimeSince = earliestStart || addDays(today, -730);
+            const lifetimeRows = await search(account.id, account.loginCustomerId,
+              `SELECT campaign.id, campaign_budget.total_amount_micros, metrics.cost_micros FROM campaign WHERE campaign.id IN (${idList}) AND segments.date BETWEEN '${lifetimeSince}' AND '${today}'`);
+            lifetimeRows.forEach((lifetimeRow) => {
+              const id = String(lifetimeRow.campaign?.id || ""), total = Number(lifetimeRow.campaignBudget?.totalAmountMicros || 0) / 1_000_000;
+              if (id && total > 0) remainingByCampaign.set(id, Math.max(0, total - Number(lifetimeRow.metrics?.costMicros || 0) / 1_000_000));
+            });
+          } catch (cause) {
+            if (cause instanceof GoogleQuotaError) throw cause;
+            console.warn(`[Google Ads] Saldo de orçamento indisponível para ${account.id}:`, cause instanceof Error ? cause.message : cause);
+          }
+          googleDaily.accounts[account.id] = { id: account.id, name: account.name, currency: account.currency, loginCustomerId: account.loginCustomerId, remainingBudget: accountRemaining };
+          rows.forEach((row) => {
+            const campaign = row.campaign || {}, budget = row.campaignBudget || {}, id = String(campaign.id || "");
+            if (!id) return;
+            const key = googleCampaignKey(account.id, id);
+            googleDaily.campaigns[key] = {
+              ...googleDaily.campaigns[key],
+              id, accountId: account.id,
+              client: row.customer?.descriptiveName || account.name,
+              currency: row.customer?.currencyCode || account.currency,
+              name: campaign.name || `Campanha ${id}`,
+              objective: campaign.advertisingChannelType || "GOOGLE_ADS",
+              status: campaign.status === "ENABLED" ? "ACTIVE" : campaign.status === "REMOVED" ? "DELETED" : campaign.status || "PAUSED",
+              dailyBudget: budget.period === "DAILY" ? Number(budget.amountMicros || 0) / 1_000_000 : 0,
+              remainingBudget: remainingByCampaign.get(id) ?? null,
+              optimizationStatus: campaign.optimizationScore == null ? null : `${Math.round(Number(campaign.optimizationScore) * 100)}% otimizada`,
+            };
+          });
+        } catch (cause) {
+          if (cause instanceof GoogleQuotaError) throw cause;
+          // Sem o cadastro, campanhas novas ficariam de fora da tela: a coleta será repetida.
+          complete = false;
+          console.warn(`[Google Ads] Cadastro de campanhas indisponível para ${account.id}:`, cause instanceof Error ? cause.message : cause);
+        }
+      });
+      // 3) Detalhes (anúncios, criativos, termos, geografia): só na coleta diária e só
+      //    para contas que tiveram veiculação nos últimos 30 dias.
+      if (mode === "daily") {
+        const detailsSince = addDays(today, -29), withDelivery = new Set<string>();
+        for (const day of dayRange(detailsSince, today))
+          for (const [key, data] of Object.entries(googleDaily.days[day] || {}))
+            if (data[0] > 0 || data[1] > 0) withDelivery.add(key.slice(0, key.indexOf(":")));
+        await forEachConcurrent(accounts.filter((account) => withDelivery.has(account.id)), 3, async (account) => {
+          const details = await collectGoogleAccountDetails(search, account, detailsSince, today);
+          for (const [key, meta] of Object.entries(googleDaily.campaigns)) {
+            if (meta.accountId !== account.id) continue;
+            googleDaily.campaigns[key] = {
+              ...meta,
+              landingPageStatus: details.landingPageStatuses.get(meta.id) || meta.landingPageStatus || "UNKNOWN",
+              landingPageUrl: details.landingPages.get(meta.id) || meta.landingPageUrl || null,
+              geography: details.geographyByCampaign.get(meta.id) || meta.geography || [],
+              searchTerms: details.searchTermsByCampaign.get(meta.id) || meta.searchTerms || [],
+              ads: details.adsByCampaign.get(meta.id) || meta.ads || [],
+            };
+          }
+        });
+      }
+      // Os detalhes engolem erros por conta; se a cota esgotou no meio, a coleta não está completa.
+      if (googleQuotaBlockedSeconds() > 0) complete = false;
+      googleDaily.lastSyncedAt = nowIso;
+      withOptimizationHistory(
+        Object.values(googleDaily.campaigns).map((campaign) => ({ id: campaign.id, accountId: `google_${campaign.accountId}`, optimizationStatus: campaign.optimizationStatus })),
+        "GOOGLE_ADS", nowIso,
+      ).forEach((item) => {
+        const key = googleCampaignKey(String(item.accountId).replace(/^google_/, ""), String(item.id));
+        if (googleDaily.campaigns[key]) googleDaily.campaigns[key].optimizationHistory = item.optimizationHistory;
+      });
+      // Mantém o arquivo de painel (usado por notificações e pelo resumo da Central) atualizado.
+      mkdirSync("data", { recursive: true });
+      writeFileSync(localGoogleDashboardCachePath, JSON.stringify(buildGooglePeriod(googleDaily, addDays(today, -29), today), null, 2), { mode: 0o600 });
+      return { complete, ranges: ranges.length };
+    } finally {
+      saveGoogleDaily();
+    }
+  });
+  let googleDailySyncRun: Promise<GoogleDailySyncResult> | null = null;
+  // Coletas simultâneas (rotina das 04:00 e botão) compartilham a mesma execução.
+  const runGoogleDailySync = (mode: "daily" | "manual") => {
+    googleDailySyncRun ||= collectGoogleDaily(mode).finally(() => { googleDailySyncRun = null; });
+    return googleDailySyncRun;
+  };
   const localMasterProfilePath = "data/master-profile.local.json";
   const localMasterUserPath = "data/master-user.local.json";
   const localDepartmentsPath = "data/departments.local.json";
@@ -2201,97 +2752,98 @@ function localApi(
         };
       };
       const mediaInternalSyncToken = randomBytes(24).toString("hex");
-      // Coleta diária. Roda no backend, sem depender de nenhum usuário logado, e é
-      // o único caminho automático que consulta o Google/Meta. Abrir a tela apenas
-      // lê o histórico salvo; o botão Sincronizar (media.sync) é o outro caminho.
-      const scheduledMediaMaxAttempts = 4;
-      const scheduledMediaRetryDelayMs = 30 * 60 * 1000;
-      let lastScheduledMediaDay = "";
-      let scheduledMediaAttemptDay = "";
-      let scheduledMediaAttempts = 0;
-      let scheduledMediaNextAttemptAt = 0;
-      let scheduledMediaRunning = false;
-      const runScheduledMediaSync = async () => {
-        // O intervalo dispara a cada minuto; uma coleta longa não pode ser
-        // iniciada de novo por cima de si mesma.
-        if (scheduledMediaRunning) return;
-        const now = new Date(),
-          localDay = saoPauloDay(now),
-          localHour = Number(new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", hour: "2-digit", hourCycle: "h23" }).format(now));
-        if (localHour < 4 || lastScheduledMediaDay === localDay || Date.now() < scheduledMediaNextAttemptAt) return;
+      // Coleta diária. Roda no backend, sem depender de nenhum usuário logado, e é o
+      // único caminho automático que consulta o Google/Meta. Abrir a tela apenas lê o
+      // histórico salvo; o botão Sincronizar (media.sync) é o outro caminho.
+      // Cada plataforma tem o próprio estado: a falha de uma não consome as tentativas
+      // da outra.
+      const scheduledMaxAttempts = 4;
+      const scheduledRetryDelayMs = 30 * 60 * 1000;
+      const scheduledState = {
+        meta: { doneDay: "", attemptDay: "", attempts: 0, nextAttemptAt: 0, running: false },
+        google: { doneDay: "", attemptDay: "", attempts: 0, nextAttemptAt: 0, running: false },
+      };
+      // A Meta segue guardando o período inteiro: coleta os períodos de uso comum.
+      const collectMetaPeriods = async (localDay: string) => {
         const address = server.httpServer?.address();
-        if (!address || typeof address === "string") return;
-        if (scheduledMediaAttemptDay !== localDay) { scheduledMediaAttemptDay = localDay; scheduledMediaAttempts = 0; }
-        scheduledMediaRunning = true;
-        scheduledMediaAttempts += 1;
-        const syncProvider = async (provider: "meta" | "google", cachePath: string) => {
-          try {
-            const cached = existsSync(cachePath)
-              ? JSON.parse(readFileSync(cachePath, "utf8")) as { since?: string; until?: string }
-              : null;
-            const cachedSince = cached?.since,
-              cachedUntil = cached?.until,
-              cachedDuration = cachedSince && cachedUntil
-                ? Math.max(0, Math.round((new Date(`${cachedUntil}T12:00:00`).getTime() - new Date(`${cachedSince}T12:00:00`).getTime()) / 86400000))
-                : 29,
-              rollingSince = new Date(`${localDay}T12:00:00`);
-            rollingSince.setDate(rollingSince.getDate() - cachedDuration);
-            const monthStart = `${localDay.slice(0, 8)}01`;
-            const standardPeriods = [7, 15, 30].map((days) => {
-              const start = new Date(`${localDay}T12:00:00`);
-              start.setDate(start.getDate() - (days - 1));
-              return { since: start.toISOString().slice(0, 10), until: localDay };
-            });
-            // Além do período usado por último, deixa prontos os atalhos da
-            // interface e o mês corrente. Trocar datas comuns não precisa
-            // mais disparar a coleta diante do usuário.
-            const periods = [{ since: rollingSince.toISOString().slice(0, 10), until: localDay }, ...standardPeriods, { since: monthStart, until: localDay }]
-              .filter((period, index, values) => values.findIndex((value) => value.since === period.since && value.until === period.until) === index);
-            for (const [index, period] of periods.entries()) {
-              // Só o primeiro período do Google baixa anúncios, criativos, termos e
-              // geografia; os demais reaproveitam esses detalhes e coletam apenas as
-              // métricas, para não esgotar a cota da API.
-              const detailsFlag = provider === "google" && index === 0 ? "&details=1" : "";
-              const response = await fetch(
-                `http://127.0.0.1:${address.port}/api/media/${provider}/campaigns?since=${encodeURIComponent(period.since)}&until=${encodeURIComponent(period.until)}&refresh=1${detailsFlag}`,
-                { headers: { "x-pw-media-background": mediaInternalSyncToken } },
-              );
-              const payload = await response.json().catch(() => ({})) as { message?: string; syncWarning?: string };
-              // Uma resposta 200 com `syncWarning` é o histórico antigo servido porque
-              // a plataforma falhou: não conta como coleta concluída.
-              if (!response.ok || payload.syncWarning)
-                throw new Error(payload.syncWarning || payload.message || `HTTP ${response.status}`);
-            }
-            return true;
-          } catch (cause) {
-            console.warn(
-              `[${provider === "meta" ? "Meta" : "Google"} Ads] Coleta diária falhou (tentativa ${scheduledMediaAttempts}/${scheduledMediaMaxAttempts}):`,
-              cause instanceof Error ? cause.message : cause,
-            );
-            return false;
-          }
-        };
-        try {
-          const results = await Promise.all(
-            ([
-              ["meta", localMetaDashboardCachePath, !!runtimeMetaAccessToken],
-              ["google", localGoogleDashboardCachePath, !!runtimeGoogleRefreshToken && !!runtimeGoogleDeveloperToken],
-            ] as const).map(([provider, cachePath, configured]) => configured ? syncProvider(provider, cachePath) : Promise.resolve(true)),
+        if (!address || typeof address === "string") throw new Error("Servidor ainda não está pronto.");
+        const cached = existsSync(localMetaDashboardCachePath)
+          ? JSON.parse(readFileSync(localMetaDashboardCachePath, "utf8")) as { since?: string; until?: string }
+          : null;
+        const cachedSince = cached?.since,
+          cachedUntil = cached?.until,
+          cachedDuration = cachedSince && cachedUntil
+            ? Math.max(0, Math.round((new Date(`${cachedUntil}T12:00:00`).getTime() - new Date(`${cachedSince}T12:00:00`).getTime()) / 86400000))
+            : 29,
+          rollingSince = new Date(`${localDay}T12:00:00`);
+        rollingSince.setDate(rollingSince.getDate() - cachedDuration);
+        const standardPeriods = [7, 15, 30].map((days) => {
+          const start = new Date(`${localDay}T12:00:00`);
+          start.setDate(start.getDate() - (days - 1));
+          return { since: start.toISOString().slice(0, 10), until: localDay };
+        });
+        const periods = [{ since: rollingSince.toISOString().slice(0, 10), until: localDay }, ...standardPeriods, { since: `${localDay.slice(0, 8)}01`, until: localDay }]
+          .filter((period, index, values) => values.findIndex((value) => value.since === period.since && value.until === period.until) === index);
+        for (const period of periods) {
+          const response = await fetch(
+            `http://127.0.0.1:${address.port}/api/media/meta/campaigns?since=${encodeURIComponent(period.since)}&until=${encodeURIComponent(period.until)}&refresh=1`,
+            { headers: { "x-pw-media-background": mediaInternalSyncToken } },
           );
-          if (results.every(Boolean)) {
-            lastScheduledMediaDay = localDay;
-            console.info(`[Mídia] Coleta diária de ${localDay} concluída.`);
-          } else if (scheduledMediaAttempts >= scheduledMediaMaxAttempts) {
-            // Esgotadas as tentativas do dia, a tela segue com o último histórico
-            // salvo e o botão Sincronizar continua disponível.
-            lastScheduledMediaDay = localDay;
-            console.error(`[Mídia] Coleta diária de ${localDay} não foi concluída após ${scheduledMediaMaxAttempts} tentativas.`);
-          } else {
-            scheduledMediaNextAttemptAt = Date.now() + scheduledMediaRetryDelayMs;
-          }
-        } finally {
-          scheduledMediaRunning = false;
+          const payload = await response.json().catch(() => ({})) as { message?: string; syncWarning?: string };
+          // Uma resposta 200 com `syncWarning` é o histórico antigo servido porque a
+          // plataforma falhou: não conta como coleta concluída.
+          if (!response.ok || payload.syncWarning)
+            throw new Error(payload.syncWarning || payload.message || `HTTP ${response.status}`);
         }
+      };
+      const runScheduledProvider = async (provider: "meta" | "google", localDay: string) => {
+        const state = scheduledState[provider], label = provider === "meta" ? "Meta" : "Google";
+        if (state.running || state.doneDay === localDay || Date.now() < state.nextAttemptAt) return;
+        const configured = provider === "meta"
+          ? !!runtimeMetaAccessToken
+          : !!runtimeGoogleRefreshToken && !!runtimeGoogleDeveloperToken;
+        if (!configured) { state.doneDay = localDay; return; }
+        if (provider === "google") {
+          // Cota diária esgotada: espera até o horário informado pelo Google, sem gastar tentativas.
+          const blockedFor = googleQuotaBlockedSeconds();
+          if (blockedFor > 0) { state.nextAttemptAt = Date.now() + (blockedFor + 60) * 1000; return; }
+        }
+        if (state.attemptDay !== localDay) { state.attemptDay = localDay; state.attempts = 0; }
+        state.running = true;
+        state.attempts += 1;
+        let ok = false;
+        try {
+          if (provider === "google") ok = (await runGoogleDailySync("daily")).complete;
+          else { await collectMetaPeriods(localDay); ok = true; }
+        } catch (cause) {
+          if (cause instanceof GoogleQuotaError) {
+            state.attempts -= 1;
+            state.nextAttemptAt = Date.now() + (cause.retryAfterSeconds + 60) * 1000;
+            console.warn(`[${label} Ads] Coleta diária adiada: ${cause.message}`);
+            state.running = false;
+            return;
+          }
+          console.warn(`[${label} Ads] Coleta diária falhou (tentativa ${state.attempts}/${scheduledMaxAttempts}):`, cause instanceof Error ? cause.message : cause);
+        }
+        state.running = false;
+        if (ok) {
+          state.doneDay = localDay;
+          console.info(`[${label} Ads] Coleta diária de ${localDay} concluída.`);
+        } else if (state.attempts >= scheduledMaxAttempts) {
+          // Esgotadas as tentativas do dia, a tela segue com o último histórico salvo
+          // e o botão Sincronizar continua disponível.
+          state.doneDay = localDay;
+          console.error(`[${label} Ads] Coleta diária de ${localDay} não foi concluída após ${scheduledMaxAttempts} tentativas.`);
+        } else {
+          state.nextAttemptAt = Date.now() + scheduledRetryDelayMs;
+        }
+      };
+      const runScheduledMediaSync = async () => {
+        const now = new Date(),
+          localHour = Number(new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", hour: "2-digit", hourCycle: "h23" }).format(now));
+        if (localHour < 4) return;
+        const localDay = saoPauloDay(now);
+        await Promise.all([runScheduledProvider("meta", localDay), runScheduledProvider("google", localDay)]);
       };
       const scheduledMediaTimer = setInterval(
         () => void runScheduledMediaSync(),
@@ -2326,6 +2878,8 @@ function localApi(
         if (url.startsWith("/media/history") && request.method === "GET") {
           if (!currentUser || !hasPermission(currentUser, "media.view")) return json(response, 403, { message: "Você não possui acesso ao histórico de mídia." });
           const requestUrl = new URL(request.url || "", "http://localhost"), platform = requestUrl.searchParams.get("platform"), since = requestUrl.searchParams.get("since"), until = requestUrl.searchParams.get("until");
+          if (platform === "GOOGLE_ADS" && since && until && coversPeriod(googleDaily, since, until, saoPauloDay(new Date())))
+            return json(response, 200, { source: "DATABASE", ...buildGooglePeriod(googleDaily, since, until) });
           const snapshot = readMediaSnapshots().find((item) => item.platform === platform && item.since === since && item.until === until);
           if (!snapshot) return json(response, 404, { message: "Este período ainda não foi armazenado no histórico.", campaigns: [] });
           return json(response, 200, { source: "DATABASE", ...snapshot });
@@ -7696,6 +8250,24 @@ function localApi(
             return json(response, 403, { message: "Você não possui permissão para sincronizar campanhas." });
           if (since > until)
             return json(response, 400, { message: "O início do período deve ser anterior ou igual ao fim." });
+          // Histórico diário: se todos os dias do período já foram coletados, a resposta
+          // é montada somando os dias salvos, sem consultar o Google. O botão Sincronizar
+          // (media.sync) faz antes uma coleta leve dos dias recentes, respeitando o
+          // intervalo mínimo entre atualizações manuais.
+          let googleDailyWarning: string | undefined;
+          if (forceRefresh && !backgroundSync && Date.now() - googleManualSyncAt >= mediaManualRefreshCooldownMs) {
+            googleManualSyncAt = Date.now();
+            try { await runGoogleDailySync("manual"); }
+            catch (cause) { googleDailyWarning = cause instanceof Error ? cause.message : "Não foi possível atualizar agora."; }
+          }
+          if (coversPeriod(googleDaily, since, until, saoPauloDay(new Date()))) {
+            const period = buildGooglePeriod(googleDaily, since, until);
+            return json(response, 200, withCampaignVerifications({
+              ...period,
+              cache: { status: "stored", cachedAt: period.syncedAt },
+              ...(googleDailyWarning ? { syncWarning: googleDailyWarning } : {}),
+            }, "GOOGLE_ADS"));
+          }
           const releasePeriod = await acquireMediaPeriod(`GOOGLE_ADS:${since}:${until}`);
           try {
           const storedGooglePeriod = readStoredMediaPeriod("GOOGLE_ADS", since, until);
@@ -7715,6 +8287,13 @@ function localApi(
               ...storedGooglePeriod, cache: { status: mediaPeriodIsFresh(storedGooglePeriod, false) ? "stored" : "stale", cachedAt: storedGooglePeriod.syncedAt },
             }, "GOOGLE_ADS"));
           }
+          // Com a cota diária esgotada, consultar o Google só falha e atrasa a resposta.
+          if (googleQuotaBlockedSeconds() > 0)
+            return json(response, 429, {
+              code: "GOOGLE_QUOTA_BLOCKED",
+              message: googleQuotaBlockedMessage(googleDaily.quotaBlockedUntil!),
+              retryAfterSeconds: googleQuotaBlockedSeconds(),
+            });
           const cachedGoogleCampaigns = new Map<string, Record<string, any>>();
           if (existsSync(localGoogleDashboardCachePath)) try {
             const previous = JSON.parse(readFileSync(localGoogleDashboardCachePath, "utf8")) as { campaigns?: Record<string, any>[] };
@@ -7825,11 +8404,18 @@ function localApi(
                 // O developer token de acesso básico tem um limite curto de
                 // requisições por minuto. Um recuo com espera evita que o
                 // limite de uma conta derrube a sincronização inteira.
-                if (result.status === 429 && attempt < 4) {
+                const message = await googleError(result),
+                  retryAfter = result.status === 429 ? parseGoogleRetryAfterSeconds(message) : null;
+                // Cota diária esgotada: o Google informa em quantos segundos ela volta.
+                // Repetir antes disso é inútil; registra o bloqueio para todo o sistema.
+                if (retryAfter && retryAfter > 90) {
+                  markGoogleQuotaBlocked(retryAfter);
+                  console.error(`[Google Ads] Cota diária esgotada: ${message}`);
+                } else if (result.status === 429 && attempt < 4) {
                   await new Promise((resolve) => setTimeout(resolve, 2_000 * 2 ** attempt));
                   return search(customerId, loginId, query, attempt + 1);
                 }
-                throw new Error(await googleError(result));
+                throw new Error(message);
               }
               const raw = await result.text();
               let pages: { results?: Record<string, any>[] }[];
@@ -7981,227 +8567,9 @@ function localApi(
               // demais casos os detalhes já salvos são reaproveitados.
               const accountHasDelivery = rows.some((row) => Number(row.metrics?.costMicros || 0) > 0 || Number(row.metrics?.impressions || 0) > 0);
               const loadGoogleDetails = backgroundSync && requestUrl.searchParams.get("details") === "1" && !comparisonRequest && accountHasDelivery;
-              const landingPages = new Map<string, string>();
-              const adsByCampaign = new Map<string, Record<string, any>[]>();
-              if (loadGoogleDetails) try {
-                const adRows = await search(
-                  account.id,
-                  account.loginCustomerId,
-                  `SELECT campaign.id, ad_group.name, ad_group_ad.status, ad_group_ad.ad.id, ad_group_ad.ad.name, ad_group_ad.ad.type, ad_group_ad.ad.final_urls, ad_group_ad.ad.image_ad.image_url, ad_group_ad.ad.image_ad.preview_image_url, ad_group_ad.ad.responsive_search_ad.headlines, ad_group_ad.ad.responsive_search_ad.descriptions, ad_group_ad.ad.responsive_display_ad.headlines, ad_group_ad.ad.responsive_display_ad.long_headline, ad_group_ad.ad.responsive_display_ad.descriptions, metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions FROM ad_group_ad WHERE segments.date BETWEEN '${since}' AND '${until}'`,
-                );
-                adRows.forEach((adRow) => {
-                  const campaignId = String(adRow.campaign?.id || ""), wrapper = adRow.adGroupAd || {}, ad = wrapper.ad || {}, metrics = adRow.metrics || {};
-                  if (!campaignId || !ad.id) return;
-                  const rsa = ad.responsiveSearchAd || {}, rda = ad.responsiveDisplayAd || {}, image = ad.imageAd || {},
-                    textAssets = [...(rsa.headlines || []), ...(rsa.descriptions || []), ...(rda.headlines || []), ...(rda.descriptions || []), ...(rda.longHeadline ? [rda.longHeadline] : [])]
-                      .map((asset: any) => asset?.text).filter(Boolean),
-                    creatives = [
-                      ...(image.imageUrl || image.previewImageUrl ? [{ type: "IMAGE", url: image.imageUrl || null, thumbnailUrl: image.previewImageUrl || image.imageUrl || null }] : []),
-                      ...textAssets.map((value: string) => ({ type: "TEXT", text: value })),
-                    ],
-                    normalized = {
-                      id: String(ad.id), name: ad.name || `Anúncio ${ad.id}`, status: wrapper.status || "UNKNOWN",
-                      groupName: adRow.adGroup?.name || null, format: ad.type || null,
-                      landingPageUrl: ad.finalUrls?.[0] || null, previewUrl: image.previewImageUrl || null,
-                      headline: textAssets[0] || null, body: textAssets[1] || null,
-                      spend: Number(metrics.costMicros || 0) / 1_000_000,
-                      impressions: Number(metrics.impressions || 0), clicks: Number(metrics.clicks || 0), results: Number(metrics.conversions || 0), creatives,
-                    };
-                  adsByCampaign.set(campaignId, [...(adsByCampaign.get(campaignId) || []), normalized]);
-                });
-              } catch (cause) {
-                console.warn(`[Google Ads] Anúncios/criativos indisponíveis para ${account.id}:`, cause instanceof Error ? cause.message : cause);
-              }
-              if (loadGoogleDetails) try {
-                const responsiveImageRows = await search(
-                  account.id,
-                  account.loginCustomerId,
-                  "SELECT campaign.id, ad_group_ad_asset_view.ad_group_ad, asset.id, asset.name, asset.type, asset.image_asset.full_size.url FROM ad_group_ad_asset_view WHERE ad_group_ad_asset_view.enabled = TRUE",
-                );
-                responsiveImageRows.forEach((assetRow) => {
-                  const campaignId = String(assetRow.campaign?.id || ""),
-                    adResource = String(assetRow.adGroupAdAssetView?.adGroupAd || ""),
-                    adId = adResource.split("~").at(-1) || "",
-                    asset = assetRow.asset || {}, imageUrl = asset.imageAsset?.fullSize?.url;
-                  if (!campaignId || !adId || asset.type !== "IMAGE" || !imageUrl) return;
-                  const ad = (adsByCampaign.get(campaignId) || []).find((item) => item.id === adId);
-                  if (!ad) return;
-                  const creativeId = String(asset.id || imageUrl);
-                  if (!ad.creatives.some((creative: any) => creative.id === creativeId || creative.url === imageUrl))
-                    ad.creatives.unshift({ id: creativeId, name: asset.name || null, type: "IMAGE", url: imageUrl, thumbnailUrl: imageUrl });
-                });
-              } catch (cause) {
-                console.warn(`[Google Ads] Imagens de anúncios responsivos indisponíveis para ${account.id}:`, cause instanceof Error ? cause.message : cause);
-              }
-              if (loadGoogleDetails) try {
-                const campaignImageRows = await search(account.id, account.loginCustomerId, "SELECT campaign.id, asset.id, asset.name, asset.type, asset.image_asset.full_size.url FROM campaign_asset WHERE campaign_asset.status != 'REMOVED' AND asset.type = 'IMAGE'");
-                const imagesByCampaign = new Map<string, Record<string, any>[]>();
-                campaignImageRows.forEach((assetRow) => {
-                  const campaignId = String(assetRow.campaign?.id || ""), asset = assetRow.asset || {}, imageUrl = asset.imageAsset?.fullSize?.url;
-                  if (!campaignId || !imageUrl) return;
-                  const creative = { id: String(asset.id || imageUrl), name: asset.name || null, type: "IMAGE", url: imageUrl, thumbnailUrl: imageUrl };
-                  imagesByCampaign.set(campaignId, [...(imagesByCampaign.get(campaignId) || []), creative]);
-                });
-                imagesByCampaign.forEach((images, campaignId) => {
-                  const ads = adsByCampaign.get(campaignId) || [], target = ads.length === 1 ? ads[0] : null;
-                  if (target) {
-                    images.forEach((creative) => { if (!target.creatives.some((current: any) => current.id === creative.id || current.url === creative.url)) target.creatives.unshift(creative); });
-                    target.previewUrl ||= images[0]?.thumbnailUrl || null;
-                  } else {
-                    const unique = images.filter((creative, index) => images.findIndex((item) => item.id === creative.id || item.url === creative.url) === index);
-                    adsByCampaign.set(campaignId, [...ads, { id: `campaign-assets-${campaignId}`, name: "Recursos visuais da campanha", status: "ACTIVE", groupName: null, format: "IMAGENS DA CAMPANHA", landingPageUrl: null, previewUrl: unique[0]?.thumbnailUrl || null, headline: null, body: null, spend: 0, impressions: 0, clicks: 0, results: 0, creatives: unique }]);
-                  }
-                });
-              } catch (cause) {
-                console.warn(`[Google Ads] Imagens vinculadas à campanha indisponíveis para ${account.id}:`, cause instanceof Error ? cause.message : cause);
-              }
-              if (loadGoogleDetails) try {
-                const assetGroupImageRows = await search(
-                  account.id,
-                  account.loginCustomerId,
-                  "SELECT campaign.id, asset_group.id, asset_group.name, asset.id, asset.name, asset.type, asset.image_asset.full_size.url FROM asset_group_asset",
-                );
-                const performanceMaxAds = new Map<string, Record<string, any>>();
-                assetGroupImageRows.forEach((assetRow) => {
-                  const campaignId = String(assetRow.campaign?.id || ""), assetGroup = assetRow.assetGroup || {}, asset = assetRow.asset || {}, imageUrl = asset.imageAsset?.fullSize?.url;
-                  if (!campaignId || !assetGroup.id || asset.type !== "IMAGE" || !imageUrl) return;
-                  const key = `${campaignId}:${assetGroup.id}`, current = performanceMaxAds.get(key) || {
-                    id: `asset-group-${assetGroup.id}`, name: assetGroup.name || `Grupo de recursos ${assetGroup.id}`, status: "ACTIVE", groupName: assetGroup.name || null, format: "PERFORMANCE MAX",
-                    landingPageUrl: null, previewUrl: imageUrl, headline: null, body: null, spend: 0, impressions: 0, clicks: 0, results: 0, creatives: [],
-                  }, creativeId = String(asset.id || imageUrl);
-                  if (!current.creatives.some((creative: any) => creative.id === creativeId || creative.url === imageUrl))
-                    current.creatives.push({ id: creativeId, name: asset.name || null, type: "IMAGE", url: imageUrl, thumbnailUrl: imageUrl });
-                  performanceMaxAds.set(key, current);
-                });
-                performanceMaxAds.forEach((ad, key) => {
-                  const campaignId = key.split(":")[0], existing = adsByCampaign.get(campaignId) || [];
-                  if (!existing.some((item) => item.id === ad.id)) adsByCampaign.set(campaignId, [...existing, ad]);
-                });
-              } catch (cause) {
-                console.warn(`[Google Ads] Imagens de Performance Max indisponíveis para ${account.id}:`, cause instanceof Error ? cause.message : cause);
-              }
-              if (loadGoogleDetails) try {
-                const landingRows = await search(
-                  account.id,
-                  account.loginCustomerId,
-                  "SELECT campaign.id, ad_group_ad.ad.final_urls FROM ad_group_ad WHERE campaign.status = 'ENABLED'",
-                );
-                landingRows.forEach((landingRow) => {
-                  const campaignId = String(landingRow.campaign?.id || ""),
-                    candidate = landingRow.adGroupAd?.ad?.finalUrls?.[0];
-                  if (campaignId && typeof candidate === "string" && /^https?:\/\//i.test(candidate) && !landingPages.has(campaignId))
-                    landingPages.set(campaignId, candidate);
-                });
-              } catch {
-                /* Alguns formatos de campanha não expõem URLs no nível do anúncio. */
-              }
-              if (loadGoogleDetails) try {
-                const assetGroupRows = await search(
-                  account.id,
-                  account.loginCustomerId,
-                  "SELECT campaign.id, asset_group.final_urls FROM asset_group WHERE campaign.status = 'ENABLED'",
-                );
-                assetGroupRows.forEach((assetGroupRow) => {
-                  const campaignId = String(assetGroupRow.campaign?.id || ""),
-                    candidate = assetGroupRow.assetGroup?.finalUrls?.[0];
-                  if (campaignId && typeof candidate === "string" && /^https?:\/\//i.test(candidate) && !landingPages.has(campaignId))
-                    landingPages.set(campaignId, candidate);
-                });
-              } catch {
-                /* Consulta complementar exclusiva para campanhas Performance Max. */
-              }
-              const landingPageStatuses = new Map<string, LandingPageStatus>(),
-                landingPageEntries = [...landingPages];
-              for (let offset = 0; offset < landingPageEntries.length; offset += 10) {
-                const checks = await Promise.all(
-                  landingPageEntries.slice(offset, offset + 10).map(async ([campaignId, landingPage]) => [
-                    campaignId,
-                    await validatePublicLandingPage(landingPage),
-                  ] as const),
-                );
-                checks.forEach(([campaignId, result]) => landingPageStatuses.set(campaignId, result));
-              }
-              const searchTermsByCampaign = new Map<string, Array<{ term: string; clicks: number; impressions: number; leads: number; spend: number }>>();
-              if (loadGoogleDetails) try {
-                const termRows = await search(account.id, account.loginCustomerId, `SELECT campaign.id, search_term_view.search_term, metrics.impressions, metrics.clicks, metrics.conversions, metrics.cost_micros FROM search_term_view WHERE segments.date BETWEEN '${since}' AND '${until}'`);
-                termRows.forEach((termRow) => {
-                  const campaignId = String(termRow.campaign?.id || ""), term = String(termRow.searchTermView?.searchTerm || "").trim();
-                  if (!campaignId || !term) return;
-                  const items = searchTermsByCampaign.get(campaignId) || [], metrics = termRow.metrics || {};
-                  items.push({ term, impressions: Number(metrics.impressions || 0), clicks: Number(metrics.clicks || 0), leads: Number(metrics.conversions || 0), spend: Number(metrics.costMicros || 0) / 1_000_000 });
-                  searchTermsByCampaign.set(campaignId, items);
-                });
-                searchTermsByCampaign.forEach((items, campaignId) => searchTermsByCampaign.set(campaignId, items.sort((a, b) => b.clicks - a.clicks || b.impressions - a.impressions).slice(0, 15)));
-              } catch {
-                /* Termos existem apenas para campanhas Google compatíveis com pesquisa. */
-              }
-              const geographyByCampaign = new Map<string, Array<{ name: string; level: "REGION" | "CITY" | "NEIGHBORHOOD"; leads: number; clicks: number; spend: number }>>();
-              if (loadGoogleDetails) try {
-                const geoRows = await search(
-                    account.id,
-                    account.loginCustomerId,
-                    `SELECT campaign.id, segments.geo_target_most_specific_location, segments.geo_target_postal_code, segments.geo_target_city, segments.geo_target_region, metrics.conversions, metrics.clicks, metrics.cost_micros FROM geographic_view WHERE segments.date BETWEEN '${since}' AND '${until}'`,
-                  ),
-                  geoResources = [...new Set(geoRows.flatMap((geoRow) => [geoRow.segments?.geoTargetMostSpecificLocation, geoRow.segments?.geoTargetPostalCode, geoRow.segments?.geoTargetCity, geoRow.segments?.geoTargetRegion]).filter(Boolean))] as string[],
-                  geoNames = new Map<string, string>(),
-                  geoTypes = new Map<string, string>();
-                for (let offset = 0; offset < geoResources.length; offset += 100) {
-                  const resources = geoResources.slice(offset, offset + 100),
-                    constants = await search(
-                      account.id,
-                      account.loginCustomerId,
-                      `SELECT geo_target_constant.resource_name, geo_target_constant.name, geo_target_constant.canonical_name, geo_target_constant.target_type FROM geo_target_constant WHERE geo_target_constant.resource_name IN (${resources.map((resource) => `'${resource.replaceAll("'", "\\'")}'`).join(",")})`,
-                    );
-                  constants.forEach((constantRow) => {
-                    const constant = constantRow.geoTargetConstant || {};
-                    if (constant.resourceName) {
-                      geoNames.set(constant.resourceName, constant.canonicalName || constant.name || constant.resourceName);
-                      geoTypes.set(constant.resourceName, constant.targetType || "");
-                    }
-                  });
-                }
-                const postalLabels = new Map<string, { name: string; level: "CITY" | "NEIGHBORHOOD" }>(),
-                  postalResources = [...new Set(geoRows.map((geoRow) => geoRow.segments?.geoTargetPostalCode).filter(Boolean))] as string[];
-                for (let offset = 0; offset < postalResources.length; offset += 12) {
-                  const resolved = await Promise.all(postalResources.slice(offset, offset + 12).map(async (resource) => {
-                    const label = geoNames.get(resource) || "",
-                      zip = label.match(/\b\d{5}(?:-?\d{3})?\b/)?.[0]?.replace(/\D/g, "");
-                    if (!zip) return [resource, null] as const;
-                    const address = await resolveBrazilianPostalLocation(zip);
-                    return [resource, address.neighborhood
-                      ? { name: `${address.neighborhood}${address.city ? ` · ${address.city}` : ""}`, level: "NEIGHBORHOOD" as const }
-                      : address.city ? { name: address.city, level: "CITY" as const } : null] as const;
-                  }));
-                  resolved.forEach(([resource, location]) => { if (location) postalLabels.set(resource, location); });
-                }
-                geoRows.forEach((geoRow) => {
-                  const campaignId = String(geoRow.campaign?.id || ""),
-                    cityResource = geoRow.segments?.geoTargetCity,
-                    regionResource = geoRow.segments?.geoTargetRegion,
-                    postalResource = geoRow.segments?.geoTargetPostalCode,
-                    specificResource = geoRow.segments?.geoTargetMostSpecificLocation;
-                  if (!campaignId) return;
-                  const entries = geographyByCampaign.get(campaignId) || [],
-                    postalLocation = postalResource ? postalLabels.get(postalResource) : undefined,
-                    metrics = {
-                    leads: Number(geoRow.metrics?.conversions || 0),
-                    clicks: Number(geoRow.metrics?.clicks || 0),
-                    spend: Number(geoRow.metrics?.costMicros || 0) / 1_000_000,
-                    };
-                  if (cityResource)
-                    entries.push({ name: geoNames.get(cityResource) || cityResource.replace("geoTargetConstants/", "Local "), level: "CITY", ...metrics });
-                  else if (regionResource)
-                    entries.push({ name: geoNames.get(regionResource) || regionResource.replace("geoTargetConstants/", "Local "), level: "REGION", ...metrics });
-                  const specificType = specificResource ? (geoTypes.get(specificResource) || "").toLowerCase() : "";
-                  if (specificResource && specificType.includes("neighborhood"))
-                    entries.push({ name: geoNames.get(specificResource) || "Bairro não identificado", level: "NEIGHBORHOOD", ...metrics });
-                  else if (postalLocation?.level === "NEIGHBORHOOD")
-                    entries.push({ name: postalLocation.name, level: "NEIGHBORHOOD", ...metrics });
-                  geographyByCampaign.set(campaignId, entries);
-                });
-              } catch {
-                /* O recorte geográfico pode ser restrito pela conta ou tipo de campanha. */
-              }
+              const { landingPages, adsByCampaign, landingPageStatuses, searchTermsByCampaign, geographyByCampaign } = loadGoogleDetails
+                ? await collectGoogleAccountDetails(search, account, since, until)
+                : emptyGoogleAccountDetails();
               rows.forEach((row) => {
                 const campaign = row.campaign || {},
                   metrics = row.metrics || {},
@@ -8298,6 +8666,12 @@ function localApi(
                 cache: { status: "stale", cachedAt: storedGooglePeriod.syncedAt },
                 syncWarning: cause instanceof Error ? cause.message : "O Google está temporariamente indisponível.",
               }, "GOOGLE_ADS"));
+            if (googleQuotaBlockedSeconds() > 0)
+              return json(response, 429, {
+                code: "GOOGLE_QUOTA_BLOCKED",
+                message: googleQuotaBlockedMessage(googleDaily.quotaBlockedUntil!),
+                retryAfterSeconds: googleQuotaBlockedSeconds(),
+              });
             return json(response, 502, {
               message:
                 cause instanceof Error && (syncController.signal.aborted || cause.name === "TimeoutError" || cause.name === "AbortError")

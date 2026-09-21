@@ -27,6 +27,36 @@ interno) e apenas em contas com veiculação no período, para respeitar a cota 
 5 minutos entre elas). `stored=1` e `fetch_missing=1` de clientes antigos não impedem o
 carregamento de um período ausente.
 
+## Google Ads: histórico diário
+
+O Google não guarda mais um cache por período. Cada dia fica salvo (gasto, impressões, cliques
+e conversões por campanha) em `data/google-daily-history.local.json`, e qualquer período pedido
+pela tela é montado **somando os dias já guardados**, sem consultar o Google. Trocar datas,
+comparar períodos e abrir a tela por vários usuários não gera nenhuma chamada.
+
+A coleta diária das 04:00 (São Paulo) busca só o que pode mudar: os últimos 7 dias (hoje ainda
+parcial; os anteriores se ajustam por atraso de conversões) e qualquer dia que falte. Uma consulta
+por conta traz o intervalo inteiro, então buscar 1 ou 7 dias custa o mesmo número de chamadas.
+Na primeira execução ela reúne 12 meses de histórico, em blocos de 31 dias, do mais recente ao
+mais antigo; se for interrompida, continua de onde parou. Um dia só conta como salvo quando todas
+as contas foram coletadas nele.
+
+- **Botão Sincronizar** (`media.sync`): coleta leve dos 3 últimos dias, no mínimo 5 minutos entre
+  cliques. Não baixa anúncios nem criativos.
+- **Detalhes** (anúncios, criativos, termos de busca, geografia, páginas de destino): renovados
+  uma vez por dia, só em contas com veiculação nos últimos 30 dias. Mostram a janela de 30 dias,
+  não o período escolhido.
+- **Alcance e frequência** não somam entre dias e aparecem como indisponíveis. A "posição no
+  leilão" é a média das parcelas diárias ponderada pelas impressões (aproximação).
+- **Período fora do histórico** (mais antigo que o início coletado) usa o caminho antigo: consulta
+  pontual do período exato, apenas com métricas.
+- **Cota diária esgotada:** quando o Google responde "Retry in N seconds", o horário de liberação
+  é salvo, nenhuma nova chamada é feita até lá e a tela mostra a mensagem com o horário. O log
+  registra qual cota esgotou (`[Google Ads] Cota diária esgotada (...)`). A coleta diária espera
+  esse horário em vez de repetir a cada 30 minutos.
+
+Meta continua guardando períodos inteiros, pelas regras da seção anterior.
+
 A interface preserva as datas escolhidas. Um erro da plataforma nunca devolve dados
 de outro intervalo. Se existir cache do período exato, ele pode ser retornado com
 um aviso de desatualização; sem cache, a resposta informa a falha da conexão ou da API.
@@ -47,6 +77,7 @@ npm run build
 node scripts/test-shared-media.mjs
 node scripts/test-media-periods.mjs
 node scripts/test-media-permissions.mjs
+node scripts/test-google-daily.mjs
 ```
 
 Os testes usam servidores e dados temporários. O teste de períodos substitui as APIs
