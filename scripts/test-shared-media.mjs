@@ -12,7 +12,7 @@ symlinkSync(join(root, 'dist'), join(dir, 'dist'));
 const write = (name, value) => writeFileSync(join(dir, 'data', name), JSON.stringify(value));
 write('users.local.json', [{ id: 'employee', name: 'Test employee', email: 'employee@example.invalid', profile: 'EMPLOYEE', role: 'Reader', roleId: 'reader', permissionOverrides: { 'media.view': 'ALLOW', 'media.sync': 'DENY' }, salt: 'test', passwordHash: scryptSync(password, 'test', 64).toString('hex'), mustChangePassword: false }]);
 write('roles.local.json', [{ id: 'reader', name: 'Reader', level: 1, permissions: ['media.view'] }]);
-const snapshot = { schemaVersion: 10, since: '2026-09-01', until: '2026-09-07', syncedAt: new Date().toISOString(), accounts: [{id:'google_shared',name:'Shared account'}], campaigns: [{ id: 'campaign', accountId:'google_shared', name: 'Shared campaign', spend: 10 }] };
+const snapshot = { schemaVersion: 11, since: '2026-09-01', until: '2026-09-07', syncedAt: new Date().toISOString(), accounts: [{id:'google_shared',name:'Shared account'}], campaigns: [{ id: 'campaign', accountId:'google_shared', name: 'Shared campaign', spend: 10 }] };
 write('google-dashboard-cache.local.json', snapshot);
 const env = { ...process.env, PW_OS_MASTER_EMAIL: 'master@example.invalid', PW_OS_MASTER_INITIAL_PASSWORD: password, FIREBASE_ENABLED: 'false' };
 const server = spawn(process.execPath, [join(root,'node_modules/vite/bin/vite.js'), 'preview', '--config', join(root,'vite.config.ts'), '--host','127.0.0.1','--port','5197','--strictPort'], {cwd:dir,env,stdio:['ignore','pipe','pipe']});

@@ -1454,11 +1454,19 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
       }
     }
   };
+  // O servidor coleta os dados uma vez por dia. Reler o histórico salvo com
+  // frequência só devolve o mesmo conteúdo, então a tela confere de tempos em
+  // tempos para pegar a coleta das 04:00 ou uma sincronização feita por outra pessoa.
   const sharedReloadRef = useRef(() => {});
-  sharedReloadRef.current = () => { if (!loading && !manualSyncing && document.visibilityState === "visible") void load(false, false, true); };
+  const lastSharedReloadRef = useRef(Date.now());
+  sharedReloadRef.current = () => {
+    if (loading || manualSyncing || document.visibilityState !== "visible" || Date.now() - lastSharedReloadRef.current < 5 * 60_000) return;
+    lastSharedReloadRef.current = Date.now();
+    void load(false, false, true);
+  };
   useEffect(() => {
     const refresh = () => sharedReloadRef.current();
-    const timer = window.setInterval(refresh, 60_000);
+    const timer = window.setInterval(refresh, 10 * 60_000);
     window.addEventListener("focus", refresh);
     return () => { window.clearInterval(timer); window.removeEventListener("focus", refresh); };
   }, []);

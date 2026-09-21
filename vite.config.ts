@@ -1,5 +1,6 @@
 import { forEachConcurrent } from "./asyncPool";
 import { mediaConnectionSummary } from "./mediaConnectionSummary";
+import { isMediaSnapshotFresh, saoPauloDay } from "./mediaFreshness";
 import { googleOAuthReturnPage } from "./oauthCallback";
 import {
   createHash,
@@ -1184,10 +1185,26 @@ function localApi(
   const localCampaignOptimizationHistoryPath = "data/campaign-optimization-history.local.json";
   const mediaSyncIntervalMs = 24 * 60 * 60 * 1000;
   const mediaManualRefreshCooldownMs = 5 * 60 * 1000;
+  // O histórico chega a dezenas de MB. Relê-lo e reprocessá-lo a cada leitura
+  // de tela pesava na memória do servidor; por isso a versão já processada é
+  // reaproveitada enquanto o arquivo não mudar. Nunca altere os objetos
+  // retornados: eles são compartilhados entre as requisições.
+  let mediaSnapshotsMemo: { mtimeMs: number; size: number; value: Record<string, any>[] } | null = null;
+  const readMediaSnapshots = (): Record<string, any>[] => {
+    try {
+      const info = statSync(localMediaMetricSnapshotsPath);
+      if (mediaSnapshotsMemo && mediaSnapshotsMemo.mtimeMs === info.mtimeMs && mediaSnapshotsMemo.size === info.size)
+        return mediaSnapshotsMemo.value;
+      const value = JSON.parse(readFileSync(localMediaMetricSnapshotsPath, "utf8")) as Record<string, any>[];
+      mediaSnapshotsMemo = { mtimeMs: info.mtimeMs, size: info.size, value };
+      return value;
+    } catch {
+      return [];
+    }
+  };
   const persistMediaMetricSnapshot = (platform: "META_ADS" | "GOOGLE_ADS", payload: { schemaVersion: number; since: string; until: string; syncedAt: string; accounts: Record<string, any>[]; campaigns: Record<string, any>[] }) => {
     mkdirSync("data", { recursive: true });
-    let snapshots: Record<string, any>[] = [];
-    try { snapshots = JSON.parse(readFileSync(localMediaMetricSnapshotsPath, "utf8")) as Record<string, any>[]; } catch { snapshots = []; }
+    let snapshots: Record<string, any>[] = readMediaSnapshots();
     const snapshot = {
       id: `${platform}:${payload.since}:${payload.until}`,
       platform,
@@ -1200,27 +1217,20 @@ function localApi(
     };
     snapshots = [snapshot, ...snapshots.filter((item) => item.id !== snapshot.id)]
       .sort((a, b) => String(b.syncedAt).localeCompare(String(a.syncedAt))).slice(0, 800);
+    mediaSnapshotsMemo = null;
     writeFileSync(localMediaMetricSnapshotsPath, JSON.stringify(snapshots, null, 2), { mode: 0o600 });
   };
   const readMediaMetricSnapshot = (
     platform: "META_ADS" | "GOOGLE_ADS",
     since: string,
     until: string,
-  ) => {
-    try {
-      const snapshots = JSON.parse(
-        readFileSync(localMediaMetricSnapshotsPath, "utf8"),
-      ) as Record<string, any>[];
-      return snapshots.find(
-        (item) =>
-          item.platform === platform &&
-          item.since === since &&
-          item.until === until,
-      );
-    } catch {
-      return undefined;
-    }
-  };
+  ) =>
+    readMediaSnapshots().find(
+      (item) =>
+        item.platform === platform &&
+        item.since === since &&
+        item.until === until,
+    );
   // Cache entries belong to an exact platform/period, never to a user session.
   const readStoredMediaPeriod = (platform: "META_ADS" | "GOOGLE_ADS", since: string, until: string) => {
     // Alterar a versão quando a semântica do saldo mudar. Assim, um snapshot
@@ -1241,9 +1251,13 @@ function localApi(
         item.since === since && item.until === until && Array.isArray(item.accounts) && Array.isArray(item.campaigns));
     return candidates.sort((a, b) => String(b.syncedAt).localeCompare(String(a.syncedAt)))[0];
   };
+  // Com `force`, vale apenas o intervalo mínimo entre atualizações manuais.
+  // Sem `force`, vale a regra da coleta diária (mediaFreshness.ts): o dado do
+  // dia é o coletado depois das 04:00, e períodos encerrados não expiram mais.
   const mediaPeriodIsFresh = (snapshot: Record<string, any>, force: boolean) =>
-    Date.now() - new Date(snapshot.syncedAt || 0).getTime() <
-      (force ? mediaManualRefreshCooldownMs : snapshot.until >= new Date().toISOString().slice(0, 10) ? 15 * 60_000 : mediaSyncIntervalMs);
+    force
+      ? Date.now() - new Date(snapshot.syncedAt || 0).getTime() < mediaManualRefreshCooldownMs
+      : isMediaSnapshotFresh({ syncedAt: snapshot.syncedAt, until: String(snapshot.until) });
   type CampaignReviewEntry = {
     action: "ANALYSIS" | "REVIEW" | "REPORT_DOWNLOADED" | "REPORT_SENT";
     createdAt: string;
@@ -2187,98 +2201,97 @@ function localApi(
         };
       };
       const mediaInternalSyncToken = randomBytes(24).toString("hex");
-      // Entrega o snapshot persistido imediatamente e renova-o fora do caminho
-      // da requisição. O cache é compartilhado por todos os usuários e por
-      // período; portanto, uma única renovação aquece a próxima abertura.
-      const refreshMediaPeriodInBackground = (provider: "meta" | "google", since: string, until: string) => {
-        const address = server.httpServer?.address();
-        if (!address || typeof address === "string") return;
-        setTimeout(() => {
-          void fetch(`http://127.0.0.1:${address.port}/api/media/${provider}/campaigns?since=${encodeURIComponent(since)}&until=${encodeURIComponent(until)}&refresh=1`, {
-            headers: { "x-pw-media-background": mediaInternalSyncToken },
-          }).catch((cause) => console.warn(`[${provider === "meta" ? "Meta" : "Google"} Ads] Atualização em segundo plano falhou:`, cause instanceof Error ? cause.message : cause));
-        }, 0);
-      };
+      // Coleta diária. Roda no backend, sem depender de nenhum usuário logado, e é
+      // o único caminho automático que consulta o Google/Meta. Abrir a tela apenas
+      // lê o histórico salvo; o botão Sincronizar (media.sync) é o outro caminho.
+      const scheduledMediaMaxAttempts = 4;
+      const scheduledMediaRetryDelayMs = 30 * 60 * 1000;
       let lastScheduledMediaDay = "";
+      let scheduledMediaAttemptDay = "";
+      let scheduledMediaAttempts = 0;
+      let scheduledMediaNextAttemptAt = 0;
+      let scheduledMediaRunning = false;
       const runScheduledMediaSync = async () => {
-        const saoPauloParts = Object.fromEntries(
-          new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", hourCycle: "h23" })
-            .formatToParts(new Date()).filter((part) => part.type !== "literal").map((part) => [part.type, part.value]),
-        );
-        const localDay = `${saoPauloParts.year}-${saoPauloParts.month}-${saoPauloParts.day}`;
-        if (Number(saoPauloParts.hour) < 4 || lastScheduledMediaDay === localDay) return;
+        // O intervalo dispara a cada minuto; uma coleta longa não pode ser
+        // iniciada de novo por cima de si mesma.
+        if (scheduledMediaRunning) return;
+        const now = new Date(),
+          localDay = saoPauloDay(now),
+          localHour = Number(new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", hour: "2-digit", hourCycle: "h23" }).format(now));
+        if (localHour < 4 || lastScheduledMediaDay === localDay || Date.now() < scheduledMediaNextAttemptAt) return;
         const address = server.httpServer?.address();
         if (!address || typeof address === "string") return;
-        await Promise.all(
-          [
-            ["meta", localMetaDashboardCachePath, !!runtimeMetaAccessToken],
-            ["google", localGoogleDashboardCachePath, !!runtimeGoogleRefreshToken && !!runtimeGoogleDeveloperToken],
-          ].map(async ([provider, cachePath, configured]) => {
-            if (!configured) return;
-            try {
-              const fallbackUntil = localDay,
-                fallbackSinceDate = new Date(`${localDay}T12:00:00`);
-              fallbackSinceDate.setDate(fallbackSinceDate.getDate() - 29);
-              const cached = existsSync(String(cachePath))
-                ? JSON.parse(readFileSync(String(cachePath), "utf8")) as {
-                since: string;
-                until: string;
-                syncedAt?: string;
-                cachedAt?: string;
-                payload?: { syncedAt?: string };
-                }
-                : null;
-              const lastSync = cached?.syncedAt || cached?.cachedAt || cached?.payload?.syncedAt;
-              if (lastSync) {
-                const lastSyncDay = new Intl.DateTimeFormat("en-CA", {
-                  timeZone: "America/Sao_Paulo",
-                  year: "numeric",
-                  month: "2-digit",
-                  day: "2-digit",
-                }).format(new Date(lastSync));
-                if (lastSyncDay === localDay) return;
-              }
-              const cachedSince = cached?.since,
-                cachedUntil = cached?.until,
-                cachedDuration = cachedSince && cachedUntil
-                  ? Math.max(
-                      0,
-                      Math.round(
-                        (new Date(`${cachedUntil}T12:00:00`).getTime() -
-                          new Date(`${cachedSince}T12:00:00`).getTime()) /
-                          86400000,
-                      ),
-                    )
-                  : 29,
-                rollingSince = new Date(`${localDay}T12:00:00`);
-              rollingSince.setDate(rollingSince.getDate() - cachedDuration);
-              const since = rollingSince.toISOString().slice(0, 10),
-                until = fallbackUntil;
-              const monthStart = `${localDay.slice(0, 8)}01`;
-              const standardPeriods = [7, 15, 30].map((days) => {
-                const start = new Date(`${localDay}T12:00:00`);
-                start.setDate(start.getDate() - (days - 1));
-                return { since: start.toISOString().slice(0, 10), until: localDay };
-              });
-              // Além do período usado por último, deixa prontos os atalhos da
-              // interface e o mês corrente. Trocar datas comuns não precisa
-              // mais disparar a coleta pesada diante do usuário.
-              const periods = [{ since, until }, ...standardPeriods, { since: monthStart, until: localDay }]
-                .filter((period, index, values) => values.findIndex((value) => value.since === period.since && value.until === period.until) === index);
-              for (const period of periods)
-                await fetch(
-                  `http://127.0.0.1:${address.port}/api/media/${provider}/campaigns?since=${encodeURIComponent(period.since)}&until=${encodeURIComponent(period.until)}&refresh=1`,
-                  { headers: { "x-pw-media-background": mediaInternalSyncToken } },
-                );
-            } catch (cause) {
-              console.warn(
-                `[${provider === "meta" ? "Meta" : "Google"} Ads] Agendamento de sincronização falhou:`,
-                cause instanceof Error ? cause.message : cause,
+        if (scheduledMediaAttemptDay !== localDay) { scheduledMediaAttemptDay = localDay; scheduledMediaAttempts = 0; }
+        scheduledMediaRunning = true;
+        scheduledMediaAttempts += 1;
+        const syncProvider = async (provider: "meta" | "google", cachePath: string) => {
+          try {
+            const cached = existsSync(cachePath)
+              ? JSON.parse(readFileSync(cachePath, "utf8")) as { since?: string; until?: string }
+              : null;
+            const cachedSince = cached?.since,
+              cachedUntil = cached?.until,
+              cachedDuration = cachedSince && cachedUntil
+                ? Math.max(0, Math.round((new Date(`${cachedUntil}T12:00:00`).getTime() - new Date(`${cachedSince}T12:00:00`).getTime()) / 86400000))
+                : 29,
+              rollingSince = new Date(`${localDay}T12:00:00`);
+            rollingSince.setDate(rollingSince.getDate() - cachedDuration);
+            const monthStart = `${localDay.slice(0, 8)}01`;
+            const standardPeriods = [7, 15, 30].map((days) => {
+              const start = new Date(`${localDay}T12:00:00`);
+              start.setDate(start.getDate() - (days - 1));
+              return { since: start.toISOString().slice(0, 10), until: localDay };
+            });
+            // Além do período usado por último, deixa prontos os atalhos da
+            // interface e o mês corrente. Trocar datas comuns não precisa
+            // mais disparar a coleta diante do usuário.
+            const periods = [{ since: rollingSince.toISOString().slice(0, 10), until: localDay }, ...standardPeriods, { since: monthStart, until: localDay }]
+              .filter((period, index, values) => values.findIndex((value) => value.since === period.since && value.until === period.until) === index);
+            for (const [index, period] of periods.entries()) {
+              // Só o primeiro período do Google baixa anúncios, criativos, termos e
+              // geografia; os demais reaproveitam esses detalhes e coletam apenas as
+              // métricas, para não esgotar a cota da API.
+              const detailsFlag = provider === "google" && index === 0 ? "&details=1" : "";
+              const response = await fetch(
+                `http://127.0.0.1:${address.port}/api/media/${provider}/campaigns?since=${encodeURIComponent(period.since)}&until=${encodeURIComponent(period.until)}&refresh=1${detailsFlag}`,
+                { headers: { "x-pw-media-background": mediaInternalSyncToken } },
               );
+              const payload = await response.json().catch(() => ({})) as { message?: string; syncWarning?: string };
+              // Uma resposta 200 com `syncWarning` é o histórico antigo servido porque
+              // a plataforma falhou: não conta como coleta concluída.
+              if (!response.ok || payload.syncWarning)
+                throw new Error(payload.syncWarning || payload.message || `HTTP ${response.status}`);
             }
-          }),
-        );
-        lastScheduledMediaDay = localDay;
+            return true;
+          } catch (cause) {
+            console.warn(
+              `[${provider === "meta" ? "Meta" : "Google"} Ads] Coleta diária falhou (tentativa ${scheduledMediaAttempts}/${scheduledMediaMaxAttempts}):`,
+              cause instanceof Error ? cause.message : cause,
+            );
+            return false;
+          }
+        };
+        try {
+          const results = await Promise.all(
+            ([
+              ["meta", localMetaDashboardCachePath, !!runtimeMetaAccessToken],
+              ["google", localGoogleDashboardCachePath, !!runtimeGoogleRefreshToken && !!runtimeGoogleDeveloperToken],
+            ] as const).map(([provider, cachePath, configured]) => configured ? syncProvider(provider, cachePath) : Promise.resolve(true)),
+          );
+          if (results.every(Boolean)) {
+            lastScheduledMediaDay = localDay;
+            console.info(`[Mídia] Coleta diária de ${localDay} concluída.`);
+          } else if (scheduledMediaAttempts >= scheduledMediaMaxAttempts) {
+            // Esgotadas as tentativas do dia, a tela segue com o último histórico
+            // salvo e o botão Sincronizar continua disponível.
+            lastScheduledMediaDay = localDay;
+            console.error(`[Mídia] Coleta diária de ${localDay} não foi concluída após ${scheduledMediaMaxAttempts} tentativas.`);
+          } else {
+            scheduledMediaNextAttemptAt = Date.now() + scheduledMediaRetryDelayMs;
+          }
+        } finally {
+          scheduledMediaRunning = false;
+        }
       };
       const scheduledMediaTimer = setInterval(
         () => void runScheduledMediaSync(),
@@ -2313,9 +2326,7 @@ function localApi(
         if (url.startsWith("/media/history") && request.method === "GET") {
           if (!currentUser || !hasPermission(currentUser, "media.view")) return json(response, 403, { message: "Você não possui acesso ao histórico de mídia." });
           const requestUrl = new URL(request.url || "", "http://localhost"), platform = requestUrl.searchParams.get("platform"), since = requestUrl.searchParams.get("since"), until = requestUrl.searchParams.get("until");
-          let snapshots: Record<string, any>[] = [];
-          try { snapshots = JSON.parse(readFileSync(localMediaMetricSnapshotsPath, "utf8")) as Record<string, any>[]; } catch { snapshots = []; }
-          const snapshot = snapshots.find((item) => item.platform === platform && item.since === since && item.until === until);
+          const snapshot = readMediaSnapshots().find((item) => item.platform === platform && item.since === since && item.until === until);
           if (!snapshot) return json(response, 404, { message: "Este período ainda não foi armazenado no histórico.", campaigns: [] });
           return json(response, 200, { source: "DATABASE", ...snapshot });
         }
@@ -7688,14 +7699,18 @@ function localApi(
           const releasePeriod = await acquireMediaPeriod(`GOOGLE_ADS:${since}:${until}`);
           try {
           const storedGooglePeriod = readStoredMediaPeriod("GOOGLE_ADS", since, until);
-          // Uma abertura normal de tela nunca deve esperar o Google Ads: sempre
-          // devolve o que já está salvo (mesmo desatualizado) e renova em
-          // segundo plano. Só um pedido explícito de sincronização (botão)
-          // pode aguardar uma consulta ao vivo, e mesmo assim respeita o
-          // cooldown para não martelar a API.
-          if (storedGooglePeriod && (!forceRefresh || mediaPeriodIsFresh(storedGooglePeriod, true))) {
-            if (!forceRefresh && !mediaPeriodIsFresh(storedGooglePeriod, false))
-              refreshMediaPeriodInBackground("google", since, until);
+          // Abrir a tela nunca consulta o Google Ads: devolve sempre o histórico
+          // salvo, mesmo que já aguarde a próxima coleta das 04:00. O Google só é
+          // consultado (1) pela coleta diária, que pula períodos já atualizados hoje,
+          // (2) pelo botão Sincronizar, respeitando o intervalo mínimo entre
+          // atualizações, e (3) quando o período nunca foi salvo. Este último caso
+          // coleta somente métricas e reaproveita os detalhes já salvos.
+          const googleServedFromStorage = !!storedGooglePeriod && (
+            backgroundSync
+              ? mediaPeriodIsFresh(storedGooglePeriod, false)
+              : !forceRefresh || mediaPeriodIsFresh(storedGooglePeriod, true)
+          );
+          if (storedGooglePeriod && googleServedFromStorage) {
             return json(response, 200, withCampaignVerifications({
               ...storedGooglePeriod, cache: { status: mediaPeriodIsFresh(storedGooglePeriod, false) ? "stored" : "stale", cachedAt: storedGooglePeriod.syncedAt },
             }, "GOOGLE_ADS"));
@@ -7767,7 +7782,9 @@ function localApi(
                   (detail) => detail.errors || [],
                 )[0]?.message ||
                 payload.error?.message ||
-                "O Google Ads recusou a consulta."
+                (result.status === 429
+                  ? "O Google Ads atingiu o limite de requisições (HTTP 429)."
+                  : `O Google Ads recusou a consulta (HTTP ${result.status}).`)
               );
             };
             const directoryKey = createHash("sha256").update(`${runtimeGoogleClientId}:${runtimeGoogleRefreshToken}`).digest("hex");
@@ -7808,8 +7825,8 @@ function localApi(
                 // O developer token de acesso básico tem um limite curto de
                 // requisições por minuto. Um recuo com espera evita que o
                 // limite de uma conta derrube a sincronização inteira.
-                if (result.status === 429 && attempt < 3) {
-                  await new Promise((resolve) => setTimeout(resolve, 1_500 * 2 ** attempt));
+                if (result.status === 429 && attempt < 4) {
+                  await new Promise((resolve) => setTimeout(resolve, 2_000 * 2 ** attempt));
                   return search(customerId, loginId, query, attempt + 1);
                 }
                 throw new Error(await googleError(result));
@@ -7862,7 +7879,7 @@ function localApi(
                 });
               }
             });
-            if (!cachedDirectory && hierarchyComplete) googleDirectoryCache = { key: directoryKey, expiresAt: Date.now() + 10 * 60_000, accounts: [...accountMap.values()] };
+            if (!cachedDirectory && hierarchyComplete) googleDirectoryCache = { key: directoryKey, expiresAt: Date.now() + 6 * 60 * 60_000, accounts: [...accountMap.values()] };
             const accounts = [...accountMap.values()].filter(
                 (item) => !item.manager,
               ),
@@ -7958,11 +7975,12 @@ function localApi(
               } catch (cause) {
                 console.warn(`[Google Ads] Saldo de orçamento indisponível para ${account.id}:`, cause instanceof Error ? cause.message : cause);
               }
-              // Comparações e o botão de atualização precisam renovar as
-              // métricas, não baixar novamente criativos, URLs, termos e
-              // geografia de dezenas de contas. Esses detalhes permanecem no
-              // cache e são renovados numa consulta normal de um novo período.
-              const loadGoogleDetails = !comparisonRequest && !manualSync;
+              // Anúncios, criativos, páginas de destino, termos e geografia somam
+              // cerca de dez consultas por conta. Só a coleta diária os renova
+              // (`details=1`), e apenas em contas com veiculação no período; nos
+              // demais casos os detalhes já salvos são reaproveitados.
+              const accountHasDelivery = rows.some((row) => Number(row.metrics?.costMicros || 0) > 0 || Number(row.metrics?.impressions || 0) > 0);
+              const loadGoogleDetails = backgroundSync && requestUrl.searchParams.get("details") === "1" && !comparisonRequest && accountHasDelivery;
               const landingPages = new Map<string, string>();
               const adsByCampaign = new Map<string, Record<string, any>[]>();
               if (loadGoogleDetails) try {
@@ -8326,11 +8344,14 @@ function localApi(
           const releasePeriod = await acquireMediaPeriod(`META_ADS:${since}:${until}`);
           try {
           const storedMetaPeriod = readStoredMediaPeriod("META_ADS", since, until);
-          // Mesma regra do Google: tela normal nunca espera a Meta, sempre
-          // devolve o snapshot salvo e renova em segundo plano.
-          if (storedMetaPeriod && (!forceRefresh || mediaPeriodIsFresh(storedMetaPeriod, true))) {
-            if (!forceRefresh && !mediaPeriodIsFresh(storedMetaPeriod, false))
-              refreshMediaPeriodInBackground("meta", since, until);
+          // Mesma regra do Google: abrir a tela nunca consulta a Meta. Só a coleta
+          // diária, o botão Sincronizar e períodos nunca salvos chegam à API.
+          const metaServedFromStorage = !!storedMetaPeriod && (
+            backgroundSync
+              ? mediaPeriodIsFresh(storedMetaPeriod, false)
+              : !forceRefresh || mediaPeriodIsFresh(storedMetaPeriod, true)
+          );
+          if (storedMetaPeriod && metaServedFromStorage) {
             return json(response, 200, withCampaignVerifications({
               ...storedMetaPeriod, cache: { status: mediaPeriodIsFresh(storedMetaPeriod, false) ? "stored" : "stale", cachedAt: storedMetaPeriod.syncedAt },
             }, "META_ADS"));

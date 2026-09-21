@@ -60,8 +60,9 @@ try {
     const expired=await request(provider,'2026-08-01');
     assert.equal(expired.status,200);
     assert.equal(expired.payload.cache?.status,'stale','A normal load never blocks on the provider; it serves the stale snapshot instantly');
-    for(let i=0;i<50 && count(provider,'2026-08-01')<2;i++)await new Promise(r=>setTimeout(r,50));
-    assert.equal(count(provider,'2026-08-01'),2,'Expired history refreshes in the background for a reader');
+    await new Promise(r=>setTimeout(r,600));
+    assert.equal(count(provider,'2026-08-01'),1,'Reading a stale snapshot never calls the provider; only the daily job and the sync button do');
+    if(provider==='google')assert.equal(readFileSync(calls,'utf8').split('\n').filter(line=>line.startsWith('google-details:2026-08')).length,0,'A reader-triggered load collects metrics only, never ads/creatives/terms/geography');
     // Current month and the dashboard's last seven days hydrate without any Master session.
     const today=new Date().toISOString().slice(0,10),month=today.slice(0,8)+'01';
     const monthResponse=await fetch(base+'/media/'+provider+'/campaigns?since='+month+'&until='+today,{headers:sessions.reader});

@@ -22,6 +22,9 @@ globalThis.fetch = async (input, init = {}) => {
       if (since.startsWith('2020')) return reply({error:{message:'Fixture provider unavailable'}},502);
       return reply([{results:[{campaign:{id:'g1',name:'Google campaign',status:'ENABLED'},campaignBudget:{amountMicros:'10000000',period:'DAILY'},metrics:{costMicros:String(Number(since.slice(-2))*1000000),impressions:'100',clicks:'10',conversions:2}}]}]);
     }
+    // Consultas de detalhes com período, registradas por data inicial.
+    const detailPeriod = query.match(/BETWEEN '([^']+)'/);
+    if (detailPeriod && /FROM (ad_group_ad|search_term_view|geographic_view) /.test(query)) record('google-details', detailPeriod[1]);
     return reply([{results:[]}]);
   }
   if (url.hostname === 'graph.facebook.com') {
