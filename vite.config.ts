@@ -8888,6 +8888,7 @@ function localApi(
             const accountInsights = new Map<string, Map<string, MetaInsight>>();
             const accountAds = new Map<string, Map<string, Record<string, any>[]>>();
             const accountAdSets = new Map<string, Map<string, Array<{ id: string; name: string; status: string; configuredStatus: string }>>>();
+            const accountAdSetBudgets = new Map<string, Map<string, { daily: number; lifetime: number; remaining: number | null }>>();
             const accountGeographies = new Map<string, Map<string, Array<{ name: string; level: "REGION" | "CITY" | "NEIGHBORHOOD"; leads: number; clicks: number; spend: number }>>>();
             const campaignLandingPages = new Map<string, string>();
             await forEachConcurrent(accountRefs, 4, async (item) => {
@@ -8935,8 +8936,11 @@ function localApi(
                 campaign_id?: string;
                 status?: string;
                 effective_status?: string;
+                daily_budget?: string;
+                lifetime_budget?: string;
+                budget_remaining?: string;
                 promoted_object?: { page_id?: string; instagram_actor_id?: string };
-              }>(`${item.id}/adsets?fields=id,name,campaign_id,status,effective_status,promoted_object&limit=500`);
+              }>(`${item.id}/adsets?fields=id,name,campaign_id,status,effective_status,daily_budget,lifetime_budget,budget_remaining,promoted_object&limit=500`);
               const adSetById = new Map(adSetRows.filter((row) => row.id).map((row) => [row.id!, row]));
               const adSetsByCampaign = new Map<string, Array<{ id: string; name: string; status: string; configuredStatus: string }>>();
               adSetRows.forEach((row) => {
@@ -8949,6 +8953,23 @@ function localApi(
                 }]);
               });
               accountAdSets.set(item.id, adSetsByCampaign);
+              // Sem Advantage campaign budget (CBO), a Meta não preenche daily_budget/
+              // lifetime_budget na campanha: o orçamento fica em cada conjunto de anúncios.
+              // Somamos os conjuntos ainda em uso (fora do lixo) para não deixar a coluna vazia.
+              const budgetByCampaign = new Map<string, { daily: number; lifetime: number; remaining: number | null }>();
+              adSetRows.forEach((row) => {
+                if (!row.campaign_id) return;
+                const status = row.effective_status || row.status || "UNKNOWN";
+                if (status === "DELETED" || status === "ARCHIVED") return;
+                const current = budgetByCampaign.get(row.campaign_id) || { daily: 0, lifetime: 0, remaining: null },
+                  remaining = row.budget_remaining == null ? null : Number(row.budget_remaining) / 100;
+                budgetByCampaign.set(row.campaign_id, {
+                  daily: current.daily + Number(row.daily_budget || 0) / 100,
+                  lifetime: current.lifetime + Number(row.lifetime_budget || 0) / 100,
+                  remaining: remaining == null ? current.remaining : (current.remaining || 0) + remaining,
+                });
+              });
+              accountAdSetBudgets.set(item.id, budgetByCampaign);
               const adRows = await listAll<{
                 id?: string;
                 name?: string;
@@ -9248,6 +9269,12 @@ function localApi(
                     cpl: leads ? spend / leads : null,
                     warning: leads === 0 ? "Gasto sem action type de lead suportado" : undefined,
                   });
+                // Sem Advantage campaign budget, a campanha não tem orçamento próprio:
+                // usamos a soma dos conjuntos de anúncios coletada acima.
+                const adSetBudget = accountAdSetBudgets.get(account.id)?.get(campaign.id),
+                  campaignDailyBudget = Number(campaign.daily_budget || 0) / 100,
+                  campaignLifetimeBudget = Number(campaign.lifetime_budget || 0) / 100,
+                  hasCampaignBudget = campaignDailyBudget > 0 || campaignLifetimeBudget > 0;
                 return {
                   id: campaign.id,
                   accountId: account.id,
@@ -9258,9 +9285,11 @@ function localApi(
                   status: campaign.effective_status || "UNKNOWN",
                   configuredStatus: campaign.status || "UNKNOWN",
                   adSets: accountAdSets.get(account.id)?.get(campaign.id) || [],
-                  dailyBudget: Number(campaign.daily_budget || 0) / 100,
-                  lifetimeBudget: Number(campaign.lifetime_budget || 0) / 100,
-                  remainingBudget: campaign.budget_remaining == null ? null : Number(campaign.budget_remaining) / 100,
+                  dailyBudget: hasCampaignBudget ? campaignDailyBudget : (adSetBudget?.daily || 0),
+                  lifetimeBudget: hasCampaignBudget ? campaignLifetimeBudget : (adSetBudget?.lifetime || 0),
+                  remainingBudget: campaign.budget_remaining != null
+                    ? Number(campaign.budget_remaining) / 100
+                    : (hasCampaignBudget ? null : adSetBudget?.remaining ?? null),
                   spend,
                   reach: Number(insight.reach || 0),
                   impressions: Number(insight.impressions || 0),
