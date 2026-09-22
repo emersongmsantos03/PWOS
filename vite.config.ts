@@ -8977,10 +8977,16 @@ function localApi(
                     video_data?: { image_url?: string; message?: string; title?: string; video_id?: string; call_to_action?: { value?: { link?: string } } };
                   };
                 };
-              }>(`${item.id}/ads?fields=id,name,status,effective_status,campaign_id,adset{id,name},creative{id,name,title,body,image_url,video_id,effective_object_story_id,object_story_id,instagram_actor_id,thumbnail_url,object_story_spec{page_id,instagram_actor_id,link_data{link,message,name,picture},video_data{image_url,message,title,video_id,call_to_action{value}}}}&limit=500`).catch(() => []));
+              }>(`${item.id}/ads?fields=id,name,status,effective_status,campaign_id,adset{id,name},creative{id,name,title,body,image_url,video_id,effective_object_story_id,object_story_id,instagram_actor_id,thumbnail_url,object_story_spec{page_id,instagram_actor_id,link_data{link,message,name,picture},video_data{image_url,message,title,video_id,call_to_action{value}}}}&limit=500`).catch((cause) => {
+                console.warn(`[Meta Ads] Anúncios indisponíveis para a conta ${item.id} mesmo após nova tentativa:`, cause instanceof Error ? cause.message : cause);
+                return [];
+              }));
               const adInsightRows = await listAll<MetaInsight & { ad_id?: string }>(
                 `${item.id}/insights?fields=ad_id,spend,impressions,clicks,actions&level=ad&time_range=${encodeURIComponent(JSON.stringify({ since, until }))}&action_report_time=conversion&use_account_attribution_setting=true&limit=500`,
-              ).catch(() => listAllWithRetry<MetaInsight & { ad_id?: string }>(`${item.id}/insights?fields=ad_id,spend,impressions,clicks,actions&level=ad&time_range=${encodeURIComponent(JSON.stringify({ since, until }))}&action_report_time=conversion&use_account_attribution_setting=true&limit=500`).catch(() => []));
+              ).catch(() => listAllWithRetry<MetaInsight & { ad_id?: string }>(`${item.id}/insights?fields=ad_id,spend,impressions,clicks,actions&level=ad&time_range=${encodeURIComponent(JSON.stringify({ since, until }))}&action_report_time=conversion&use_account_attribution_setting=true&limit=500`).catch((cause) => {
+                console.warn(`[Meta Ads] Métricas por anúncio indisponíveis para a conta ${item.id} mesmo após nova tentativa:`, cause instanceof Error ? cause.message : cause);
+                return [];
+              }));
               const insightByAd = new Map(adInsightRows.filter((row) => row.ad_id).map((row) => [row.ad_id!, row]));
               const adsByCampaign = new Map<string, Record<string, any>[]>();
               adRows.forEach((ad) => {
