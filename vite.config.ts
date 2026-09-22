@@ -9261,6 +9261,11 @@ function localApi(
                 };
               }),
             );
+            // Sem esta linha, um login quebrado ao lado de um saudável fica invisível:
+            // o painel simplesmente atualiza, e só a contagem de contas revelaria que
+            // uma parte ficou de fora. Resume o resultado real de cada sincronização.
+            if (!comparisonRequest)
+              console.info(`[Meta Ads] Sincronização concluída (${since} a ${until}): ${accounts.length} conta(s) de ${metaConnections.length - brokenMetaConnections.size}/${metaConnections.length} login(s) válido(s).`);
             const syncedAt = new Date().toISOString(),
               campaignsWithHistory = withOptimizationHistory(campaigns, "META_ADS", syncedAt),
               payload = {
