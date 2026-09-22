@@ -3,6 +3,7 @@ import { appendFileSync } from 'node:fs';
 const originalFetch = globalThis.fetch;
 const reply = (payload, status = 200) => new Response(JSON.stringify(payload), { status });
 const record = (provider, since) => appendFileSync(process.env.MEDIA_TEST_CALLS, provider + ':' + since + '\n');
+let metaAdsAttempts = 0;
 globalThis.fetch = async (input, init = {}) => {
   const url = new URL(String(input));
   if (url.hostname === '127.0.0.1' || url.hostname === 'localhost') return originalFetch(input, init);
@@ -50,6 +51,35 @@ globalThis.fetch = async (input, init = {}) => {
   }
   if (url.hostname === 'graph.facebook.com') {
     const path=url.pathname.replace(/^\/v[^/]+\//,'');
+    const token=url.searchParams.get('access_token');
+    // Simula um login cujo aplicativo do Facebook foi apagado: toda chamada com este
+    // token recebe a mesma recusa que a Meta devolve nesse caso, para qualquer conta.
+    if (token === 'dead-meta-token')
+      return reply({error:{message:'Error validating application. Application has been deleted.',type:'OAuthException',code:190}},400);
+    if (token === 'good-meta-token') {
+      if (path === 'me/adaccounts') return reply({data:[{id:'act_ok'},{id:'act_bad'}]});
+      if (path === 'act_ok') return reply({id:'act_ok',name:'Conta Boa',currency:'BRL'});
+      // Conta com um problema permanente (ex.: permissão revogada): a conta é
+      // ignorada, mas não pode derrubar a sincronização da conta saudável.
+      if (path === 'act_bad') return reply({error:{message:'Unsupported get request.',code:100}},400);
+      if (path === 'act_ok/campaigns') return reply({data:[{id:'c1',name:'Camp OK',objective:'TRAFFIC',status:'ACTIVE',effective_status:'ACTIVE',daily_budget:'1000'}]});
+      if (path === 'act_ok/adsets') return reply({data:[]});
+      if (path === 'act_ok/ads') {
+        metaAdsAttempts += 1;
+        record('meta-ads-attempt', String(metaAdsAttempts));
+        // A primeira tentativa falha por um erro transitório (não é um dos códigos de
+        // limite de taxa já tratados); a segunda, feita pela retentativa, funciona.
+        if (metaAdsAttempts === 1) return reply({error:{message:'An unknown error occurred',code:1}},500);
+        return reply({data:[{id:'ad1',name:'Anúncio 1',status:'ACTIVE',effective_status:'ACTIVE',campaign_id:'c1',creative:{id:'cr1',name:'Criativo',image_url:'https://example.invalid/img.png'}}]});
+      }
+      if (path === 'act_ok/insights') {
+        if (url.searchParams.get('level') === 'ad')
+          return reply({data:[{ad_id:'ad1',spend:'5',impressions:'50',clicks:'5',actions:[{action_type:'lead',value:'1'}]}]});
+        if (url.searchParams.has('breakdowns')) return reply({data:[]});
+        return reply({data:[{campaign_id:'c1',spend:'20',reach:'300',impressions:'1000',clicks:'40',actions:[{action_type:'lead',value:'4'}]}]});
+      }
+      return reply({data:[]});
+    }
     if (path === 'me/adaccounts') return reply({data:[{id:'act_123'}]});
     if (path === 'act_123') return reply({id:'act_123',name:'Shared Meta',currency:'BRL'});
     if (path.endsWith('/campaigns')) return reply({data:[{id:'m1',name:'Meta campaign',status:'ACTIVE',effective_status:'ACTIVE',daily_budget:'1000'}]});

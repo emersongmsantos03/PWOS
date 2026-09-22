@@ -8736,6 +8736,14 @@ function localApi(
           const metaDeadline = setTimeout(() => metaController.abort(), 240_000);
           const metaConnections = metaAccessConnections();
           const accountTokens = new Map<string, string>();
+          // Um login do Facebook cujo aplicativo foi apagado ou desconectado não deve
+          // impedir a sincronização das contas conectadas por outro login.
+          const brokenMetaConnections = new Map<string, string>();
+          // Um código de erro da Meta identifica uma rejeição específica desta conta ou
+          // requisição (permissão, parâmetro, conta desativada). Sem código, é uma falha
+          // de transporte (rede, tempo esgotado, resposta inesperada) e é tratada como
+          // sistêmica, não como problema isolado de uma conta.
+          class MetaGraphError extends Error { constructor(message: string, readonly code?: number) { super(message); this.name = "MetaGraphError"; } }
           const graph = async <T>(path: string, explicitToken?: string, attempt = 0): Promise<T> => {
             const separator = path.includes("?") ? "&" : "?";
             const accountId = path.replace(/^https?:\/\/[^/]+\/v[^/]+\//, "").split(/[/?]/)[0];
@@ -8759,9 +8767,10 @@ function localApi(
                 await new Promise((resolve) => setTimeout(resolve, 1_500 * 2 ** attempt));
                 return graph<T>(path, explicitToken, attempt + 1);
               }
-              throw new Error(
+              throw new MetaGraphError(
                 payload.error?.message ||
                   "A Meta recusou a consulta de campanhas.",
+                Number.isFinite(Number(code)) ? Number(code) : undefined,
               );
             }
             return payload;
@@ -8771,24 +8780,55 @@ function localApi(
               const rows: T[] = [];
               const sources = allConnections ? metaConnections : [metaConnections[0]];
               for (const connection of sources) {
-                let next: string | undefined = path;
-                while (next) {
-                  const page: { data?: T[]; paging?: { next?: string } } =
-                    await graph<{ data?: T[]; paging?: { next?: string } }>(next, allConnections ? connection.token : undefined);
-                  for (const row of page.data || []) {
-                    const rowId = (row as { id?: string }).id;
-                    if (path.startsWith("me/adaccounts") && rowId) accountTokens.set(rowId, connection.token);
-                    if (!rowId || !rows.some((existing) => (existing as { id?: string }).id === rowId)) rows.push(row);
+                try {
+                  let next: string | undefined = path;
+                  while (next) {
+                    const page: { data?: T[]; paging?: { next?: string } } =
+                      await graph<{ data?: T[]; paging?: { next?: string } }>(next, allConnections ? connection.token : undefined);
+                    for (const row of page.data || []) {
+                      const rowId = (row as { id?: string }).id;
+                      if (path.startsWith("me/adaccounts") && rowId) accountTokens.set(rowId, connection.token);
+                      if (!rowId || !rows.some((existing) => (existing as { id?: string }).id === rowId)) rows.push(row);
+                    }
+                    next = page.paging?.next;
                   }
-                  next = page.paging?.next;
+                } catch (cause) {
+                  // Com uma única conexão inválida, a busca que soma todas as contas
+                  // não pode abortar as demais contas conectadas por outro login.
+                  // Uma busca sobre uma única conta continua propagando o erro: quem
+                  // chama sabe que aquela conta específica falhou.
+                  if (!allConnections) throw cause;
+                  const message = cause instanceof Error ? cause.message : String(cause);
+                  if (!brokenMetaConnections.has(connection.identity.id)) {
+                    brokenMetaConnections.set(connection.identity.id, message);
+                    console.warn(`[Meta Ads] Login "${connection.identity.name}" falhou e foi ignorado nesta sincronização: ${message}`);
+                  }
                 }
               }
               return rows;
+            };
+            // Uma cota momentânea ou uma página de resultados que falha no meio do
+            // caminho não deve virar "zero anúncios" permanente: tenta mais uma vez
+            // antes de desistir, já que `graph()` só repete os limites de taxa
+            // conhecidos e uma consulta paginada descarta as páginas já obtidas ao
+            // encontrar uma falha adiante.
+            const listAllWithRetry = async <T>(path: string) => {
+              try { return await listAll<T>(path); }
+              catch { await new Promise((resolve) => setTimeout(resolve, 2_000)); return listAll<T>(path); }
             };
             const accountRefs = await listAll<{ id: string }>(
               "me/adaccounts?fields=id&limit=100",
               true,
             );
+            // Nenhum login funcionando é uma indisponibilidade total: preserva o
+            // histórico salvo (tratamento já existente no catch externo) em vez de
+            // gravar um painel vazio por cima de dados que ainda são válidos.
+            if (metaConnections.length && brokenMetaConnections.size === metaConnections.length) {
+              const reasons = [...brokenMetaConnections.entries()]
+                .map(([id, reason]) => `${metaConnections.find((connection) => connection.identity.id === id)?.identity.name || id}: ${reason}`)
+                .join(" · ");
+              throw new Error(`Nenhum login do Facebook está funcionando. Reconecte na Central de Conexões. (${reasons})`);
+            }
             type MetaPagePicture = {
               id: string;
               name?: string;
@@ -8841,6 +8881,7 @@ function localApi(
             const accountGeographies = new Map<string, Map<string, Array<{ name: string; level: "REGION" | "CITY" | "NEIGHBORHOOD"; leads: number; clicks: number; spend: number }>>>();
             const campaignLandingPages = new Map<string, string>();
             await forEachConcurrent(accountRefs, 4, async (item) => {
+              try {
               const accountDetail = await graph<MetaAccountPayload>(
                 `${item.id}?fields=id,name,currency,amount_spent,spend_cap`,
               );
@@ -8925,10 +8966,22 @@ function localApi(
                 };
               }>(
                 `${item.id}/ads?fields=id,name,status,effective_status,campaign_id,adset{id,name},creative{id,name,title,body,image_url,video_id,effective_object_story_id,object_story_id,instagram_actor_id,thumbnail_url,object_story_spec{page_id,instagram_actor_id,link_data{link,message,name,picture},video_data{image_url,message,title,video_id,call_to_action{value}}}}&limit=500`,
-              ).catch(() => []);
+              ).catch(() => listAllWithRetry<{
+                id?: string; name?: string; status?: string; effective_status?: string; campaign_id?: string;
+                adset?: { id?: string; name?: string };
+                creative?: {
+                  id?: string; name?: string; title?: string; body?: string; image_url?: string; video_id?: string;
+                  effective_object_story_id?: string; object_story_id?: string; instagram_actor_id?: string; thumbnail_url?: string;
+                  object_story_spec?: {
+                    page_id?: string; instagram_actor_id?: string;
+                    link_data?: { link?: string; message?: string; name?: string; picture?: string };
+                    video_data?: { image_url?: string; message?: string; title?: string; video_id?: string; call_to_action?: { value?: { link?: string } } };
+                  };
+                };
+              }>(`${item.id}/ads?fields=id,name,status,effective_status,campaign_id,adset{id,name},creative{id,name,title,body,image_url,video_id,effective_object_story_id,object_story_id,instagram_actor_id,thumbnail_url,object_story_spec{page_id,instagram_actor_id,link_data{link,message,name,picture},video_data{image_url,message,title,video_id,call_to_action{value}}}}&limit=500`).catch(() => []));
               const adInsightRows = await listAll<MetaInsight & { ad_id?: string }>(
                 `${item.id}/insights?fields=ad_id,spend,impressions,clicks,actions&level=ad&time_range=${encodeURIComponent(JSON.stringify({ since, until }))}&action_report_time=conversion&use_account_attribution_setting=true&limit=500`,
-              ).catch(() => []);
+              ).catch(() => listAllWithRetry<MetaInsight & { ad_id?: string }>(`${item.id}/insights?fields=ad_id,spend,impressions,clicks,actions&level=ad&time_range=${encodeURIComponent(JSON.stringify({ since, until }))}&action_report_time=conversion&use_account_attribution_setting=true&limit=500`).catch(() => []));
               const insightByAd = new Map(adInsightRows.filter((row) => row.ad_id).map((row) => [row.ad_id!, row]));
               const adsByCampaign = new Map<string, Record<string, any>[]>();
               adRows.forEach((ad) => {
@@ -9133,6 +9186,18 @@ function localApi(
                 geographyByCampaign.set(region.campaign_id, entries);
               });
               accountGeographies.set(item.id, geographyByCampaign);
+              } catch (cause) {
+                // Uma rejeição específica da Meta (permissão revogada, conta desativada,
+                // parâmetro inválido) não pode zerar o painel inteiro: só esta conta é
+                // ignorada, e ela é reconsiderada na próxima sincronização. Uma falha sem
+                // código de erro é sistêmica (rede, tempo esgotado) e continua abortando a
+                // sincronização inteira, preservando o histórico salvo no catch externo.
+                if (cause instanceof MetaGraphError && typeof cause.code === "number") {
+                  console.warn(`[Meta Ads] Conta ${item.id} ignorada nesta sincronização (código ${cause.code}): ${cause.message}`);
+                  return;
+                }
+                throw cause;
+              }
             });
             metaController.signal.throwIfAborted();
             const actionValue = (

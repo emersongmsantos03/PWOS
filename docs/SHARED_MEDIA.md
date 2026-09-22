@@ -57,6 +57,21 @@ as contas foram coletadas nele.
 
 Meta continua guardando períodos inteiros, pelas regras da seção anterior.
 
+### Meta Ads: resiliência por login e por conta
+
+A sincronização soma as contas de todos os logins do Facebook conectados. Um login cujo
+aplicativo foi apagado ou desconectado (`Error validating application`) é identificado
+pelo nome e ignorado nesta execução; as contas dos demais logins seguem normalmente. Se
+**todos** os logins estiverem quebrados, a sincronização não grava um painel vazio: falha
+com uma mensagem que nomeia qual login reconectar, preservando o histórico salvo.
+
+Dentro de uma conta, uma rejeição da Meta com um código de erro específico (permissão
+revogada, conta desativada, parâmetro inválido) isola só aquela conta; as demais
+continuam. Uma falha sem código de erro (rede, tempo esgotado) é tratada como sistêmica e
+aborta a sincronização inteira, preservando o histórico salvo — nunca mistura dados de
+períodos diferentes. Uma falha passageira ao buscar anúncios e criativos é tentada mais
+uma vez antes de aparecer como "ainda não sincronizado".
+
 A interface preserva as datas escolhidas. Um erro da plataforma nunca devolve dados
 de outro intervalo. Se existir cache do período exato, ele pode ser retornado com
 um aviso de desatualização; sem cache, a resposta informa a falha da conexão ou da API.
@@ -78,6 +93,7 @@ node scripts/test-shared-media.mjs
 node scripts/test-media-periods.mjs
 node scripts/test-media-permissions.mjs
 node scripts/test-google-daily.mjs
+node scripts/test-meta-resilience.mjs
 ```
 
 Os testes usam servidores e dados temporários. O teste de períodos substitui as APIs
