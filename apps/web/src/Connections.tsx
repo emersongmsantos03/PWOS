@@ -1,6 +1,6 @@
 import { MetaLogo, GoogleAdsLogo } from "./PlatformLogos";
 import { useEffect, useState } from "react";
-import { Check, CheckCircle2, Clock3, LogIn, RefreshCw, ShieldCheck, Unplug } from "lucide-react";
+import { Check, CheckCircle2, Clock3, Eye, EyeOff, KeyRound, LogIn, RefreshCw, ShieldCheck, Unplug } from "lucide-react";
 import "./ConnectionsToken.css";
 import { systemConfirm } from "./SystemDialog";
 
@@ -33,6 +33,9 @@ export function Connections() {
   const [disconnecting, setDisconnecting] = useState<Platform | null>(null);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  const [metaTokenInput, setMetaTokenInput] = useState("");
+  const [metaTokenVisible, setMetaTokenVisible] = useState(false);
+  const [savingMetaToken, setSavingMetaToken] = useState(false);
   const load = async () => {
     setLoading(true);
     try {
@@ -95,8 +98,18 @@ export function Connections() {
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Não foi possível desconectar esta conta."); }
     finally { setDisconnecting(null); }
   };
+  const saveMetaToken = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setSavingMetaToken(true); setError(""); setMessage("");
+    try {
+      const response = await fetch("/api/media/meta/token", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: metaTokenInput.trim() }) }), payload = await response.json();
+      if (!response.ok) throw new Error(payload.message || "Não foi possível salvar o token.");
+      setMessage(payload.message || "Token salvo com sucesso."); setMetaTokenInput(""); await load();
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Não foi possível salvar o token."); }
+    finally { setSavingMetaToken(false); }
+  };
   return <div className="page">
-    <div className="page-head"><div><span className="eyebrow">CONFIGURAÇÕES</span><h1>Central de Conexões</h1><p>Conecte as contas por login. Nenhum token precisa ser copiado ou colado.</p></div><button className="secondary" onClick={() => void load()} disabled={loading}><RefreshCw className={loading ? "spin" : ""} /> Atualizar</button></div>
+    <div className="page-head"><div><span className="eyebrow">CONFIGURAÇÕES</span><h1>Central de Conexões</h1><p>Conecte as contas por login. Um token só é necessário para o caso avançado de contas fora do Gerenciador de Negócios do login pessoal.</p></div><button className="secondary" onClick={() => void load()} disabled={loading}><RefreshCw className={loading ? "spin" : ""} /> Atualizar</button></div>
     <div className="security-note"><ShieldCheck /><div><b>Uma conexão para toda a equipe</b><p>O Master ou um perfil com a permissão Autorizar conecta Google e Meta. A equipe utiliza essa conexão conforme suas permissões, sem precisar conectar novamente. A sincronização inclui as contas de anúncios às quais o login conectado tem acesso; no Google, também as vinculadas à administradora. Cada cliente visualiza apenas suas próprias contas.</p></div></div>
     {error && <div className="form-error">{error}</div>}{message && <div className="form-success"><Check />{message}</div>}
     <section className="platform-grid connection-coming-grid">{(["META_ADS", "GOOGLE_ADS"] as const).map((platform) => {
@@ -107,6 +120,14 @@ export function Connections() {
         <p className="connection-sync-note">{!isConnected ? "Plataforma desconectada. Conecte para sincronizar contas e campanhas." : integration?.lastSyncAt ? `Dados salvos em ${new Date(integration.lastSyncAt).toLocaleString("pt-BR")}` : "Aguardando a primeira sincronização de contas e campanhas."}</p>
         {isMeta && !!status?.identities?.length && <div className="oauth-identities-list">{status.identities.map((item) => <div key={item.id}><span>{item.name.slice(0, 1).toUpperCase()}</span><p><b>{item.name}</b><small>Conectada em {new Date(item.connectedAt).toLocaleString("pt-BR")}</small></p>{status.canRevoke && <button type="button" className="secondary" disabled={disconnecting !== null || connecting !== null} onClick={() => void disconnectMetaIdentity(item)}><Unplug /> Remover</button>}</div>)}</div>}
         {status && (status.canManage || status.canRevoke) ? <div className="oauth-connection-actions">{status.canManage && <button className="primary oauth-login-button" disabled={!status.oauthAvailable || connecting !== null || disconnecting !== null} onClick={() => void connect(platform)}><LogIn />{connecting === platform ? "Abrindo login…" : isMeta && isConnected ? "Adicionar outra conta" : isConnected ? "Reconectar Google" : `Entrar com ${isMeta ? "Facebook" : "Google"}`}</button>}{status.canRevoke && isConnected && (!isMeta || !status.identities?.length) && <button className="secondary oauth-disconnect-button" disabled={disconnecting !== null || connecting !== null} onClick={() => void disconnect(platform)}><Unplug />{disconnecting === platform ? "Desconectando…" : "Desconectar"}</button>}{!status.oauthAvailable && <p className="oauth-backend-note"><ShieldCheck /> O aplicativo OAuth desta plataforma precisa ser habilitado uma única vez no backend.</p>}</div> : <div className="token-master-only"><ShieldCheck /><span><b>Configuração restrita</b><small>Seu perfil precisa da permissão Central de Conexões → Autorizar para conectar contas.</small></span></div>}
+        {isMeta && status?.canManage && <details className="meta-token-admin">
+          <summary><KeyRound /> Colar token de usuário do sistema</summary>
+          <p className="oauth-backend-note" style={{ marginTop: 10 }}>Use quando as contas do cliente pertencem a um Gerenciador de Negócios diferente do login pessoal acima, e por isso nunca aparecem por lá. Gere um token de <b>usuário do sistema</b> no Gerenciador de Negócios (Usuários → Usuários do sistema), com as contas de anúncios necessárias atribuídas a ele.</p>
+          <form onSubmit={(event) => void saveMetaToken(event)}>
+            <label>Token de acesso<div><input type={metaTokenVisible ? "text" : "password"} value={metaTokenInput} onChange={(event) => setMetaTokenInput(event.target.value)} placeholder="Cole o token gerado no Gerenciador de Negócios" autoComplete="off" required minLength={80} /><button type="button" onClick={() => setMetaTokenVisible((value) => !value)} aria-label={metaTokenVisible ? "Ocultar token" : "Mostrar token"}>{metaTokenVisible ? <EyeOff /> : <Eye />}</button></div><small>O token é validado com a Meta e criptografado antes de ser salvo. Ele passa a valer para toda a equipe, ao lado dos logins já conectados.</small></label>
+            <button type="submit" className="primary" disabled={savingMetaToken || metaTokenInput.trim().length < 80}>{savingMetaToken ? "Validando…" : "Salvar token"}</button>
+          </form>
+        </details>}
       </article>;
     })}</section>
   </div>;
