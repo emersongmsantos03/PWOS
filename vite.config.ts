@@ -1203,19 +1203,19 @@ function localApi(
   const localCampaignOptimizationHistoryPath = "data/campaign-optimization-history.local.json";
   const mediaSyncIntervalMs = 24 * 60 * 60 * 1000;
   const mediaManualRefreshCooldownMs = 5 * 60 * 1000;
-  // O histórico chega a dezenas de MB. Relê-lo e reprocessá-lo a cada leitura
-  // de tela pesava na memória do servidor; por isso a versão já processada é
-  // reaproveitada enquanto o arquivo não mudar. Nunca altere os objetos
-  // retornados: eles são compartilhados entre as requisições.
-  let mediaSnapshotsMemo: { mtimeMs: number; size: number; value: Record<string, any>[] } | null = null;
+  // Este arquivo pode chegar a dezenas de MB, com anúncios e criativos completos por
+  // campanha. Uma versão anterior manteve o conteúdo já interpretado em memória entre
+  // requisições para economizar CPU, mas a sincronização diária da Meta reescreve este
+  // arquivo várias vezes em sequência (uma por período): cada gravação invalidava o
+  // cache e forçava uma nova leitura e interpretação completas logo em seguida, então
+  // o ganho nunca se realizava, apenas mantinha uma cópia extra retida. Em produção,
+  // isso esgotou a memória do contêiner (1 GiB) durante a primeira sincronização em
+  // que a Meta chegou a concluir vários períodos seguidos. Lê e interpreta o arquivo a
+  // cada chamada, como antes, para que o resultado seja descartado assim que a
+  // requisição termina.
   const readMediaSnapshots = (): Record<string, any>[] => {
     try {
-      const info = statSync(localMediaMetricSnapshotsPath);
-      if (mediaSnapshotsMemo && mediaSnapshotsMemo.mtimeMs === info.mtimeMs && mediaSnapshotsMemo.size === info.size)
-        return mediaSnapshotsMemo.value;
-      const value = JSON.parse(readFileSync(localMediaMetricSnapshotsPath, "utf8")) as Record<string, any>[];
-      mediaSnapshotsMemo = { mtimeMs: info.mtimeMs, size: info.size, value };
-      return value;
+      return JSON.parse(readFileSync(localMediaMetricSnapshotsPath, "utf8")) as Record<string, any>[];
     } catch {
       return [];
     }
@@ -1235,7 +1235,6 @@ function localApi(
     };
     snapshots = [snapshot, ...snapshots.filter((item) => item.id !== snapshot.id)]
       .sort((a, b) => String(b.syncedAt).localeCompare(String(a.syncedAt))).slice(0, 800);
-    mediaSnapshotsMemo = null;
     writeFileSync(localMediaMetricSnapshotsPath, JSON.stringify(snapshots, null, 2), { mode: 0o600 });
   };
   const readMediaMetricSnapshot = (
