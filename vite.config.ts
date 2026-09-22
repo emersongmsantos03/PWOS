@@ -8752,7 +8752,9 @@ function localApi(
               path.startsWith("http")
                 ? path
                 : `https://graph.facebook.com/${metaGraphVersion}/${path}${separator}access_token=${encodeURIComponent(accessToken)}`,
-              { signal: AbortSignal.any([metaController.signal, AbortSignal.timeout(20_000)]) },
+              // Contas com muitos anúncios podem levar mais que os 20s originais para
+              // responder; 40s dá folga sem comprometer o limite geral da requisição.
+              { signal: AbortSignal.any([metaController.signal, AbortSignal.timeout(40_000)]) },
             );
             const payload = (await result.json()) as T & {
               error?: { message?: string; code?: number };
@@ -8810,10 +8812,19 @@ function localApi(
             // caminho não deve virar "zero anúncios" permanente: tenta mais uma vez
             // antes de desistir, já que `graph()` só repete os limites de taxa
             // conhecidos e uma consulta paginada descarta as páginas já obtidas ao
-            // encontrar uma falha adiante.
+            // encontrar uma falha adiante. Contas com muitos anúncios fazem a Meta
+            // recusar a página inteira ("reduce the amount of data") ou estourar o
+            // tempo limite; repetir a mesma consulta grande falha do mesmo jeito, então
+            // a nova tentativa pede uma página bem menor em vez de insistir no mesmo tamanho.
             const listAllWithRetry = async <T>(path: string) => {
               try { return await listAll<T>(path); }
-              catch { await new Promise((resolve) => setTimeout(resolve, 2_000)); return listAll<T>(path); }
+              catch (cause) {
+                await new Promise((resolve) => setTimeout(resolve, 2_000));
+                const currentLimit = Number(path.match(/[?&]limit=(\d+)/)?.[1]) || 100;
+                const smallerPath = path.replace(/([?&]limit=)\d+/, `$1${Math.max(20, Math.floor(currentLimit / 4))}`);
+                try { return await listAll<T>(smallerPath); }
+                catch { throw cause; }
+              }
             };
             const accountRefs = await listAll<{ id: string }>(
               "me/adaccounts?fields=id&limit=100",
@@ -8964,7 +8975,7 @@ function localApi(
                   };
                 };
               }>(
-                `${item.id}/ads?fields=id,name,status,effective_status,campaign_id,adset{id,name},creative{id,name,title,body,image_url,video_id,effective_object_story_id,object_story_id,instagram_actor_id,thumbnail_url,object_story_spec{page_id,instagram_actor_id,link_data{link,message,name,picture},video_data{image_url,message,title,video_id,call_to_action{value}}}}&limit=500`,
+                `${item.id}/ads?fields=id,name,status,effective_status,campaign_id,adset{id,name},creative{id,name,title,body,image_url,video_id,effective_object_story_id,object_story_id,instagram_actor_id,thumbnail_url,object_story_spec{page_id,instagram_actor_id,link_data{link,message,name,picture},video_data{image_url,message,title,video_id,call_to_action{value}}}}&limit=100`,
               ).catch(() => listAllWithRetry<{
                 id?: string; name?: string; status?: string; effective_status?: string; campaign_id?: string;
                 adset?: { id?: string; name?: string };
@@ -8977,13 +8988,13 @@ function localApi(
                     video_data?: { image_url?: string; message?: string; title?: string; video_id?: string; call_to_action?: { value?: { link?: string } } };
                   };
                 };
-              }>(`${item.id}/ads?fields=id,name,status,effective_status,campaign_id,adset{id,name},creative{id,name,title,body,image_url,video_id,effective_object_story_id,object_story_id,instagram_actor_id,thumbnail_url,object_story_spec{page_id,instagram_actor_id,link_data{link,message,name,picture},video_data{image_url,message,title,video_id,call_to_action{value}}}}&limit=500`).catch((cause) => {
+              }>(`${item.id}/ads?fields=id,name,status,effective_status,campaign_id,adset{id,name},creative{id,name,title,body,image_url,video_id,effective_object_story_id,object_story_id,instagram_actor_id,thumbnail_url,object_story_spec{page_id,instagram_actor_id,link_data{link,message,name,picture},video_data{image_url,message,title,video_id,call_to_action{value}}}}&limit=100`).catch((cause) => {
                 console.warn(`[Meta Ads] Anúncios indisponíveis para a conta ${item.id} mesmo após nova tentativa:`, cause instanceof Error ? cause.message : cause);
                 return [];
               }));
               const adInsightRows = await listAll<MetaInsight & { ad_id?: string }>(
-                `${item.id}/insights?fields=ad_id,spend,impressions,clicks,actions&level=ad&time_range=${encodeURIComponent(JSON.stringify({ since, until }))}&action_report_time=conversion&use_account_attribution_setting=true&limit=500`,
-              ).catch(() => listAllWithRetry<MetaInsight & { ad_id?: string }>(`${item.id}/insights?fields=ad_id,spend,impressions,clicks,actions&level=ad&time_range=${encodeURIComponent(JSON.stringify({ since, until }))}&action_report_time=conversion&use_account_attribution_setting=true&limit=500`).catch((cause) => {
+                `${item.id}/insights?fields=ad_id,spend,impressions,clicks,actions&level=ad&time_range=${encodeURIComponent(JSON.stringify({ since, until }))}&action_report_time=conversion&use_account_attribution_setting=true&limit=100`,
+              ).catch(() => listAllWithRetry<MetaInsight & { ad_id?: string }>(`${item.id}/insights?fields=ad_id,spend,impressions,clicks,actions&level=ad&time_range=${encodeURIComponent(JSON.stringify({ since, until }))}&action_report_time=conversion&use_account_attribution_setting=true&limit=100`).catch((cause) => {
                 console.warn(`[Meta Ads] Métricas por anúncio indisponíveis para a conta ${item.id} mesmo após nova tentativa:`, cause instanceof Error ? cause.message : cause);
                 return [];
               }));
