@@ -283,11 +283,18 @@ const hasDelivery = (item: Campaign) =>
   item.clicks > 0 ||
   item.leads > 0 ||
   item.conversations > 0;
+// Na Comparação, o status atual (Ativa/Pausada) não diz se a campanha rodou no
+// período consultado: uma campanha pausada ontem veiculou a semana inteira, e
+// uma pausada há meses não veiculou nada. Este filtro usa a entrega real.
+const DELIVERED_IN_PERIOD = "DELIVERED_IN_PERIOD";
+const matchesStatusFilter = (item: Campaign, status: string) =>
+  status === "ALL" || (status === DELIVERED_IN_PERIOD ? hasDelivery(item) : item.status === status);
 const isBoostedPost = (item: Campaign) =>
   /^(publica[cç][aã]o|instagram post|facebook post)|impulsion/i.test(item.name);
 // Gestão de mídia e Comparação compartilham o mesmo estado de filtros; este
 // componente garante que as duas telas exibam exatamente os mesmos controles.
-function CampaignFilterControls({ status, statuses, onStatusChange, delivery, onDeliveryChange, showBoosted, onShowBoostedChange }: {
+function CampaignFilterControls({ status, statuses, onStatusChange, delivery, onDeliveryChange, showBoosted, onShowBoostedChange, periodDeliveryOption = false }: {
+  periodDeliveryOption?: boolean;
   status: string;
   statuses: string[];
   onStatusChange: (value: string) => void;
@@ -303,6 +310,7 @@ function CampaignFilterControls({ status, statuses, onStatusChange, delivery, on
         value={status}
         onChange={onStatusChange}
         options={[
+          ...(periodDeliveryOption ? [{ value: DELIVERED_IN_PERIOD, label: "Veicularam no período" }] : []),
           { value: "ALL", label: "Todos os status" },
           ...statuses.map((item) => ({ value: item, label: statusLabel[item] || item })),
         ]}
@@ -1308,7 +1316,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
   const [since, setSince] = useState(() => reportClientFromUrl ? initialReportPeriod().since : safeSavedMediaPeriod(userId).since),
     [until, setUntil] = useState(() => reportClientFromUrl ? initialReportPeriod().until : safeSavedMediaPeriod(userId).until);
   const [query, setQuery] = useState(""),
-    [status, setStatus] = useState(section === "TODAY" ? "ALL" : "ACTIVE"),
+    [status, setStatus] = useState(section === "TODAY" ? "ALL" : section === "COMPILED" ? DELIVERED_IN_PERIOD : "ACTIVE"),
     [delivery, setDelivery] = useState("ALL"),
     [showBoosted, setShowBoosted] = useState(false),
     [contextClient, setContextClient] = useState(() => contextClientFromUrl || savedMediaContext(userId).client || "ALL"),
@@ -1655,7 +1663,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
         return (
           (contextClient === "ALL" || assignment?.clientId === contextClient) &&
           (contextResponsible === "ALL" || assignment?.responsibleId === contextResponsible) &&
-          (status === "ALL" || item.status === status) &&
+          matchesStatusFilter(item, status) &&
           (delivery === "ALL" ||
             (delivery === "WITH_DATA"
               ? hasDelivery(item)
@@ -1783,7 +1791,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
       overall.reachAvailable && overall.reach
         ? overall.impressions / overall.reach
         : null;
-  const previousFiltered = comparisonCampaigns.filter((item) => { const assignment = assignments.find((value) => value.platform === (item.platform || "META_ADS") && value.accountId === item.accountId); return (contextClient === "ALL" || assignment?.clientId === contextClient) && (contextResponsible === "ALL" || assignment?.responsibleId === contextResponsible) && (status === "ALL" || item.status === status); }),
+  const previousFiltered = comparisonCampaigns.filter((item) => { const assignment = assignments.find((value) => value.platform === (item.platform || "META_ADS") && value.accountId === item.accountId); return (contextClient === "ALL" || assignment?.clientId === contextClient) && (contextResponsible === "ALL" || assignment?.responsibleId === contextResponsible) && matchesStatusFilter(item, status); }),
     previousOverall = previousFiltered.reduce(add, emptyTotals()),
     comparisonText = (current: number, previous: number, inverse = false) => { if (!previous) return "Sem base anterior"; const delta = (current - previous) / previous * 100 * (inverse ? -1 : 1); return `${delta > 0 ? "↑" : delta < 0 ? "↓" : "—"} ${number(Math.abs(delta), 1)}% vs. anterior`; };
   const allCampaigns = groups.flatMap((group) =>
@@ -2043,7 +2051,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
             onAnalyze={openCampaignAnalysis}
             search={query}
             onSearchChange={setQuery}
-            filters={<CampaignFilterControls status={status} statuses={statuses} onStatusChange={setStatus} delivery={delivery} onDeliveryChange={setDelivery} showBoosted={showBoosted} onShowBoostedChange={setShowBoosted} />}
+            filters={<CampaignFilterControls periodDeliveryOption status={status} statuses={statuses} onStatusChange={setStatus} delivery={delivery} onDeliveryChange={setDelivery} showBoosted={showBoosted} onShowBoostedChange={setShowBoosted} />}
           />
         ) : mediaMode === "CAMPAIGNS" || (mediaMode === "CLIENTS" && managementView === "CAMPAIGNS") ? (
           <CampaignReport
@@ -2405,18 +2413,24 @@ function MediaAiInsights({ campaigns, since, until, context, scope = "CAMPAIGNS"
   </>;
 }
 
-function ComparisonClientRows({ group, previousCampaigns, previousAvailable, search, onAnalyze }: { group: ClientGroup; previousCampaigns: Campaign[]; previousAvailable: boolean; search: string; onAnalyze: (campaign: Campaign) => void }) {
+function ComparisonClientRows({ group, previousCampaigns, previousAvailable, search, onAnalyze, periodDays, previousPeriodDays }: { group: ClientGroup; previousCampaigns: Campaign[]; previousAvailable: boolean; search: string; onAnalyze: (campaign: Campaign) => void; periodDays: number; previousPeriodDays: number }) {
   const [open,setOpen] = useState(false);
   const name = group.client?.name || accountLabel(group.account);
   const current = group.campaigns;
   const accountKeys = new Set(group.accounts.map(account => `${account.platform || group.platform}:${account.id}`));
-  const previous = previousAvailable ? previousCampaigns.filter(item => accountKeys.has(`${item.platform}:${item.accountId}`)) : [];
+  // O período anterior segue a mesma regra: só entram campanhas que veicularam nele.
+  const previous = previousAvailable ? previousCampaigns.filter(item => accountKeys.has(`${item.platform}:${item.accountId}`) && hasDelivery(item)) : [];
   const previousById = new Map(previous.map(item => [`${item.platform}:${item.accountId}:${item.id}`, item]));
   const averageScore = (items: Campaign[]) => { const values = items.map(campaignScore).filter(value => value >= 0); return values.length ? Math.round(values.reduce((sum,value)=>sum+value,0)/values.length) : null; };
   const campaignRows = current.filter(item => name.toLowerCase().includes(search.toLowerCase()) || item.name.toLowerCase().includes(search.toLowerCase())).slice().sort((a,b)=>a.name.localeCompare(b.name,"pt-BR",{sensitivity:"base",numeric:true}));
   const renderRow = (items: Campaign[], oldItems: Campaign[], currency: string, campaign?: Campaign) => {
-    const total = portfolioMetrics(items)[0], old = portfolioMetrics(oldItems)[0];
-    if (!total) return null;
+    const currentTotal = portfolioMetrics(items)[0], previousTotal = portfolioMetrics(oldItems)[0];
+    if (!currentTotal) return null;
+    // A plataforma só informa o orçamento diário configurado hoje, que não vale
+    // para campanhas pausadas nem para períodos passados. Na comparação, o
+    // investimento diário é o gasto real do período dividido pelos seus dias.
+    const total = { ...currentTotal, dailyBudget: currentTotal.spend / periodDays },
+      old = previousTotal && { ...previousTotal, dailyBudget: previousTotal.spend / previousPeriodDays };
     const networks = [...new Set(items.map(item=>item.platform || "META_ADS"))];
     const active = items.filter(item=>item.status === "ACTIVE").length;
     const urls = [...new Set(items.map(item=>item.landingPageUrl).filter((url): url is string => !!url))];
@@ -2457,6 +2471,7 @@ function CompiledReport({ campaigns, groups, platform, since, until, onSinceChan
     previousSinceDefault = iso(new Date(new Date(`${since}T12:00`).getTime() - periodLength * 86400000));
   const [previousSince, setPreviousSince] = useState(previousSinceDefault),
     [previousUntil, setPreviousUntil] = useState(previousUntilDefault),
+    previousPeriodLength = Math.max(1, Math.round((new Date(`${previousUntil}T12:00`).getTime() - new Date(`${previousSince}T12:00`).getTime()) / 86400000) + 1),
     [previousCampaigns, setPreviousCampaigns] = useState<Campaign[]>([]),
     [portfolioSearch, setPortfolioSearch] = useState(""),
     [page, setPage] = useState(1),
@@ -2522,7 +2537,7 @@ function CompiledReport({ campaigns, groups, platform, since, until, onSinceChan
     </section>
     <div className="comparison-simple-filters"><label><Building2/><select aria-label="Cliente para comparação" value={selectedPortfolio} onChange={event => setSelectedPortfolio(event.target.value)}><option value="ALL">Todos os clientes</option>{groups.map(group => <option key={group.key} value={group.key}>{group.client?.name || accountLabel(group.account)}</option>)}</select></label><label><Search/><input value={search} onChange={event => onSearchChange(event.target.value)} placeholder="Buscar cliente ou campanha…"/></label>{filters}<span role="status">{loadingComparison ? "Atualizando período anterior…" : "Atual · variação · anterior"}</span></div>
     {comparisonError && <div className="traffic-error"><AlertTriangle /><div><b>Comparação indisponível</b><p>{comparisonError}</p></div></div>}
-    {paginatedGroups.map(group => <ComparisonClientRows key={group.key} group={group} previousCampaigns={previousCampaigns} previousAvailable={!loadingComparison && !comparisonError} search={search} onAnalyze={onAnalyze}/>)}
+    {paginatedGroups.map(group => <ComparisonClientRows key={group.key} group={group} previousCampaigns={previousCampaigns} previousAvailable={!loadingComparison && !comparisonError} search={search} onAnalyze={onAnalyze} periodDays={periodLength} previousPeriodDays={previousPeriodLength}/>)}
     {!comparisonGroups.length && <div className="panel inline-empty"><Search/><h3>Nenhum cliente encontrado</h3><p>Ajuste os filtros da comparação.</p></div>}
     <footer className="campaign-pagination compiled-pagination">
       <span>Exibindo {comparisonGroups.length ? (safePage - 1) * pageSize + 1 : 0}–{Math.min(safePage * pageSize, comparisonGroups.length)} de {comparisonGroups.length} clientes</span>
