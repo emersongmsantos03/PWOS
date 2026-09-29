@@ -285,6 +285,54 @@ const hasDelivery = (item: Campaign) =>
   item.conversations > 0;
 const isBoostedPost = (item: Campaign) =>
   /^(publica[cç][aã]o|instagram post|facebook post)|impulsion/i.test(item.name);
+// Gestão de mídia e Comparação compartilham o mesmo estado de filtros; este
+// componente garante que as duas telas exibam exatamente os mesmos controles.
+function CampaignFilterControls({ status, statuses, onStatusChange, delivery, onDeliveryChange, showBoosted, onShowBoostedChange }: {
+  status: string;
+  statuses: string[];
+  onStatusChange: (value: string) => void;
+  delivery: string;
+  onDeliveryChange: (value: string) => void;
+  showBoosted: boolean;
+  onShowBoostedChange: (value: boolean) => void;
+}) {
+  return <>
+    <div className="campaign-standard-filter">
+      <SearchableSelect
+        searchable={false}
+        value={status}
+        onChange={onStatusChange}
+        options={[
+          { value: "ALL", label: "Todos os status" },
+          ...statuses.map((item) => ({ value: item, label: statusLabel[item] || item })),
+        ]}
+      />
+    </div>
+    <div className="campaign-standard-filter">
+      <SearchableSelect
+        searchable={false}
+        value={delivery}
+        onChange={onDeliveryChange}
+        options={[
+          { value: "ALL", label: "Todas as entregas" },
+          { value: "WITH_DATA", label: "Com entrega" },
+          { value: "NO_DATA", label: "Sem entrega" },
+        ]}
+      />
+    </div>
+    <div className="campaign-standard-filter traffic-filter-boosted">
+      <SearchableSelect
+        searchable={false}
+        value={showBoosted ? "SHOW" : "HIDE"}
+        onChange={(value) => onShowBoostedChange(value === "SHOW")}
+        options={[
+          { value: "HIDE", label: "Ocultar impulsionamentos" },
+          { value: "SHOW", label: "Mostrar impulsionamentos" },
+        ]}
+      />
+    </div>
+  </>;
+}
 // Cada coluna tem a largura mínima que o próprio rótulo do cabeçalho precisa
 // (com table-layout:fixed, uma largura menor faz o texto do th vazar em cima
 // da coluna vizinha em vez de quebrar ou cortar).
@@ -1993,6 +2041,9 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
             onUntilChange={setUntil}
             onPlatformChange={selectPlatform}
             onAnalyze={openCampaignAnalysis}
+            search={query}
+            onSearchChange={setQuery}
+            filters={<CampaignFilterControls status={status} statuses={statuses} onStatusChange={setStatus} delivery={delivery} onDeliveryChange={setDelivery} showBoosted={showBoosted} onShowBoostedChange={setShowBoosted} />}
           />
         ) : mediaMode === "CAMPAIGNS" || (mediaMode === "CLIENTS" && managementView === "CAMPAIGNS") ? (
           <CampaignReport
@@ -2058,40 +2109,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
                     placeholder="Buscar cliente ou campanha…"
                   />
                 </label>
-                <div className="campaign-standard-filter">
-                  <SearchableSelect
-                    searchable={false}
-                    value={status}
-                    onChange={setStatus}
-                    options={[
-                      { value: "ALL", label: "Todos os status" },
-                      ...statuses.map((item) => ({ value: item, label: statusLabel[item] || item })),
-                    ]}
-                  />
-                </div>
-                <div className="campaign-standard-filter">
-                  <SearchableSelect
-                    searchable={false}
-                    value={delivery}
-                    onChange={setDelivery}
-                    options={[
-                      { value: "ALL", label: "Todas as entregas" },
-                      { value: "WITH_DATA", label: "Com entrega" },
-                      { value: "NO_DATA", label: "Sem entrega" },
-                    ]}
-                  />
-                </div>
-                <div className="campaign-standard-filter traffic-filter-boosted">
-                  <SearchableSelect
-                    searchable={false}
-                    value={showBoosted ? "SHOW" : "HIDE"}
-                    onChange={(value) => setShowBoosted(value === "SHOW")}
-                    options={[
-                      { value: "HIDE", label: "Ocultar impulsionamentos" },
-                      { value: "SHOW", label: "Mostrar impulsionamentos" },
-                    ]}
-                  />
-                </div>
+                <CampaignFilterControls status={status} statuses={statuses} onStatusChange={setStatus} delivery={delivery} onDeliveryChange={setDelivery} showBoosted={showBoosted} onShowBoostedChange={setShowBoosted} />
               </div>
             </section>
             {loading && !data ? (
@@ -2419,8 +2437,11 @@ function ComparisonClientRows({ group, previousCampaigns, previousAvailable, sea
   return <article className={`simple-client-table ${open ? "open" : ""}`}><div className="simple-table-scroll"><table><SimpleTableHead /><tbody>{[...new Set(current.map(item=>item.currency))].map(currency=>renderRow(current.filter(item=>item.currency===currency),previous.filter(item=>item.currency===currency),currency))}{open && campaignRows.map(item=>{const old=previousById.get(`${item.platform}:${item.accountId}:${item.id}`);return renderRow([item],old && old.currency===item.currency ? [old] : [],item.currency,item)})}</tbody></table></div></article>;
 }
 
-function CompiledReport({ campaigns, groups, platform, since, until, onSinceChange, onUntilChange, onPlatformChange, onAnalyze }: {
+function CompiledReport({ campaigns, groups, platform, since, until, onSinceChange, onUntilChange, onPlatformChange, onAnalyze, search, onSearchChange, filters }: {
   onAnalyze: (campaign: Campaign) => void;
+  search: string;
+  onSearchChange: (value: string) => void;
+  filters: ReactNode;
   campaigns: CompiledCampaign[];
   groups: ClientGroup[];
   platform: MediaView;
@@ -2438,7 +2459,6 @@ function CompiledReport({ campaigns, groups, platform, since, until, onSinceChan
     [previousUntil, setPreviousUntil] = useState(previousUntilDefault),
     [previousCampaigns, setPreviousCampaigns] = useState<Campaign[]>([]),
     [portfolioSearch, setPortfolioSearch] = useState(""),
-    [search, setSearch] = useState(""),
     [page, setPage] = useState(1),
     [pageSize, setPageSize] = useState<20 | 40 | 60 | 80 | 100>(20),
     [loadingComparison, setLoadingComparison] = useState(false),
@@ -2500,7 +2520,7 @@ function CompiledReport({ campaigns, groups, platform, since, until, onSinceChan
       <i>comparar com</i>
       <div><small>PERÍODO ANTERIOR</small><label><CalendarDays /><input type="date" value={previousSince} max={previousUntil} onChange={(event) => setPreviousSince(event.target.value)} /><span>até</span><input type="date" value={previousUntil} min={previousSince} onChange={(event) => setPreviousUntil(event.target.value)} /></label></div>
     </section>
-    <div className="comparison-simple-filters"><label><Building2/><select aria-label="Cliente para comparação" value={selectedPortfolio} onChange={event => setSelectedPortfolio(event.target.value)}><option value="ALL">Todos os clientes</option>{groups.map(group => <option key={group.key} value={group.key}>{group.client?.name || accountLabel(group.account)}</option>)}</select></label><label><Search/><input value={search} onChange={event => setSearch(event.target.value)} placeholder="Buscar cliente ou campanha…"/></label><span role="status">{loadingComparison ? "Atualizando período anterior…" : "Atual · variação · anterior"}</span></div>
+    <div className="comparison-simple-filters"><label><Building2/><select aria-label="Cliente para comparação" value={selectedPortfolio} onChange={event => setSelectedPortfolio(event.target.value)}><option value="ALL">Todos os clientes</option>{groups.map(group => <option key={group.key} value={group.key}>{group.client?.name || accountLabel(group.account)}</option>)}</select></label><label><Search/><input value={search} onChange={event => onSearchChange(event.target.value)} placeholder="Buscar cliente ou campanha…"/></label>{filters}<span role="status">{loadingComparison ? "Atualizando período anterior…" : "Atual · variação · anterior"}</span></div>
     {comparisonError && <div className="traffic-error"><AlertTriangle /><div><b>Comparação indisponível</b><p>{comparisonError}</p></div></div>}
     {paginatedGroups.map(group => <ComparisonClientRows key={group.key} group={group} previousCampaigns={previousCampaigns} previousAvailable={!loadingComparison && !comparisonError} search={search} onAnalyze={onAnalyze}/>)}
     {!comparisonGroups.length && <div className="panel inline-empty"><Search/><h3>Nenhum cliente encontrado</h3><p>Ajuste os filtros da comparação.</p></div>}
