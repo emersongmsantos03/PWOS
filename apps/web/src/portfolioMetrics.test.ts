@@ -23,3 +23,11 @@ it("handles zero delivery, mixed budget availability and conversation results", 
   expect(total).toMatchObject({ results: 5, lifetimeBudget: null, ctr: null, cpc: null, cpm: null, conversion: null, frequency: null });
   expect(portfolioMetrics([])).toEqual([]);
 });
+it("sums the daily budget of active campaigns only", () => {
+  const [total] = portfolioMetrics([{ ...campaign, status: "ACTIVE" }, { ...campaign, status: "PAUSED", dailyBudget: 50 }]);
+  expect(total.dailyBudget).toBe(20);
+  expect(total.balanceDays).toBe(40);
+  const [paused] = portfolioMetrics([{ ...campaign, status: "PAUSED" }]);
+  expect(paused.dailyBudget).toBeNull();
+  expect(paused.balanceDays).toBeNull();
+});

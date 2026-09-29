@@ -1,5 +1,5 @@
 type PortfolioCampaign = {
-  accountId?: string; currency: string; spend: number; impressions: number; clicks: number;
+  accountId?: string; status?: string; currency: string; spend: number; impressions: number; clicks: number;
   leads: number; conversations: number; reach: number; dailyBudget: number;
   lifetimeBudget: number; remainingBudget?: number | null; accountRemainingBudget?: number | null;
 };
@@ -22,14 +22,18 @@ export function portfolioMetrics(campaigns: PortfolioCampaign[]) {
     const remainingBudget = hasAccountBalances
       ? [...balancesByAccount.values()].reduce<number>((total, value) => total + Math.max(0, Number(value)), 0)
       : rows.every(item => item.remainingBudget != null && Number.isFinite(item.remainingBudget)) ? sum("remainingBudget") : null;
-    const dailyBudget = sum("dailyBudget");
+    // Orçamento diário só existe para o que está rodando: campanhas pausadas
+    // mantêm o valor configurado, mas não gastam. Mesmo quando o filtro inclui
+    // inativas, somam-se apenas os orçamentos das campanhas ativas.
+    const budgetRows = rows.filter(item => item.status == null || item.status === "ACTIVE");
+    const dailyBudget = budgetRows.reduce((total, item) => total + (Number.isFinite(item.dailyBudget) ? Math.max(0, item.dailyBudget) : 0), 0);
     return {
       currency, spend, impressions, clicks, leads, reach, conversations, results,
       dailyBudget: dailyBudget || null,
       lifetimeBudget: rows.every(item => item.lifetimeBudget > 0) ? sum("lifetimeBudget") : null,
       remainingBudget,
       balanceSource: hasAccountBalances ? "ACCOUNT" : remainingBudget != null ? "CAMPAIGN" : "NONE",
-      balanceDays: remainingBudget != null && rows.every(item => item.dailyBudget > 0) ? remainingBudget / dailyBudget : null,
+      balanceDays: remainingBudget != null && budgetRows.length > 0 && budgetRows.every(item => item.dailyBudget > 0) ? remainingBudget / dailyBudget : null,
       cpl: leads > 0 ? spend / leads : null,
       costPerResult: results > 0 ? spend / results : null,
       ctr: impressions > 0 ? clicks / impressions * 100 : null,

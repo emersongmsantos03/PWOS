@@ -790,7 +790,7 @@ function ClientCampaignGroup({
                   <td><span className="portfolio-network-icon" role="img" aria-label={item.platform === "GOOGLE_ADS" ? "Google Ads" : "Meta Ads"} title={item.platform === "GOOGLE_ADS" ? "Google Ads" : "Meta Ads"}>{item.platform === "GOOGLE_ADS" ? <GoogleAdsLogo/> : <MetaLogo/>}</span></td>
                   <td><CampaignDeliveryStatus campaign={item}/></td>
                   <td><LandingPageIcon url={item.landingPageUrl} status={item.landingPageStatus}/></td>
-                  <td><span className="simple-value simple-money">{item.dailyBudget > 0 ? money(item.dailyBudget,item.currency) : "—"}</span></td>
+                  <td><span className="simple-value simple-money">{item.status === "ACTIVE" && item.dailyBudget > 0 ? money(item.dailyBudget,item.currency) : "—"}</span></td>
                   <td><span className="simple-value simple-volume">{number(item.impressions)}</span></td><td><span className="simple-value simple-clicks">{number(item.clicks)}</span></td>
                   <td><span className="simple-value simple-rate">{item.impressions > 0 ? `${number(item.clicks / item.impressions * 100,2)}%` : "—"}</span></td>
                   <td><span className="simple-value simple-rate">{item.clicks > 0 ? money(item.spend / item.clicks,item.currency) : "—"}</span></td>
@@ -1785,6 +1785,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
     ),
     dailyBudget = groups
       .flatMap((group) => group.campaigns)
+      .filter((item) => item.status === "ACTIVE")
       .reduce((sum, item) => sum + item.dailyBudget, 0),
     averageCpl = overall.leads ? overall.spend / overall.leads : null,
     frequency =
@@ -2413,7 +2414,7 @@ function MediaAiInsights({ campaigns, since, until, context, scope = "CAMPAIGNS"
   </>;
 }
 
-function ComparisonClientRows({ group, previousCampaigns, previousAvailable, search, onAnalyze, periodDays, previousPeriodDays }: { group: ClientGroup; previousCampaigns: Campaign[]; previousAvailable: boolean; search: string; onAnalyze: (campaign: Campaign) => void; periodDays: number; previousPeriodDays: number }) {
+function ComparisonClientRows({ group, previousCampaigns, previousAvailable, search, onAnalyze }: { group: ClientGroup; previousCampaigns: Campaign[]; previousAvailable: boolean; search: string; onAnalyze: (campaign: Campaign) => void }) {
   const [open,setOpen] = useState(false);
   const name = group.client?.name || accountLabel(group.account);
   const current = group.campaigns;
@@ -2424,13 +2425,8 @@ function ComparisonClientRows({ group, previousCampaigns, previousAvailable, sea
   const averageScore = (items: Campaign[]) => { const values = items.map(campaignScore).filter(value => value >= 0); return values.length ? Math.round(values.reduce((sum,value)=>sum+value,0)/values.length) : null; };
   const campaignRows = current.filter(item => name.toLowerCase().includes(search.toLowerCase()) || item.name.toLowerCase().includes(search.toLowerCase())).slice().sort((a,b)=>a.name.localeCompare(b.name,"pt-BR",{sensitivity:"base",numeric:true}));
   const renderRow = (items: Campaign[], oldItems: Campaign[], currency: string, campaign?: Campaign) => {
-    const currentTotal = portfolioMetrics(items)[0], previousTotal = portfolioMetrics(oldItems)[0];
-    if (!currentTotal) return null;
-    // A plataforma só informa o orçamento diário configurado hoje, que não vale
-    // para campanhas pausadas nem para períodos passados. Na comparação, o
-    // investimento diário é o gasto real do período dividido pelos seus dias.
-    const total = { ...currentTotal, dailyBudget: currentTotal.spend / periodDays },
-      old = previousTotal && { ...previousTotal, dailyBudget: previousTotal.spend / previousPeriodDays };
+    const total = portfolioMetrics(items)[0], old = portfolioMetrics(oldItems)[0];
+    if (!total) return null;
     const networks = [...new Set(items.map(item=>item.platform || "META_ADS"))];
     const active = items.filter(item=>item.status === "ACTIVE").length;
     const urls = [...new Set(items.map(item=>item.landingPageUrl).filter((url): url is string => !!url))];
@@ -2471,7 +2467,6 @@ function CompiledReport({ campaigns, groups, platform, since, until, onSinceChan
     previousSinceDefault = iso(new Date(new Date(`${since}T12:00`).getTime() - periodLength * 86400000));
   const [previousSince, setPreviousSince] = useState(previousSinceDefault),
     [previousUntil, setPreviousUntil] = useState(previousUntilDefault),
-    previousPeriodLength = Math.max(1, Math.round((new Date(`${previousUntil}T12:00`).getTime() - new Date(`${previousSince}T12:00`).getTime()) / 86400000) + 1),
     [previousCampaigns, setPreviousCampaigns] = useState<Campaign[]>([]),
     [portfolioSearch, setPortfolioSearch] = useState(""),
     [page, setPage] = useState(1),
@@ -2537,7 +2532,7 @@ function CompiledReport({ campaigns, groups, platform, since, until, onSinceChan
     </section>
     <div className="comparison-simple-filters"><label><Building2/><select aria-label="Cliente para comparação" value={selectedPortfolio} onChange={event => setSelectedPortfolio(event.target.value)}><option value="ALL">Todos os clientes</option>{groups.map(group => <option key={group.key} value={group.key}>{group.client?.name || accountLabel(group.account)}</option>)}</select></label><label><Search/><input value={search} onChange={event => onSearchChange(event.target.value)} placeholder="Buscar cliente ou campanha…"/></label>{filters}<span role="status">{loadingComparison ? "Atualizando período anterior…" : "Atual · variação · anterior"}</span></div>
     {comparisonError && <div className="traffic-error"><AlertTriangle /><div><b>Comparação indisponível</b><p>{comparisonError}</p></div></div>}
-    {paginatedGroups.map(group => <ComparisonClientRows key={group.key} group={group} previousCampaigns={previousCampaigns} previousAvailable={!loadingComparison && !comparisonError} search={search} onAnalyze={onAnalyze} periodDays={periodLength} previousPeriodDays={previousPeriodLength}/>)}
+    {paginatedGroups.map(group => <ComparisonClientRows key={group.key} group={group} previousCampaigns={previousCampaigns} previousAvailable={!loadingComparison && !comparisonError} search={search} onAnalyze={onAnalyze}/>)}
     {!comparisonGroups.length && <div className="panel inline-empty"><Search/><h3>Nenhum cliente encontrado</h3><p>Ajuste os filtros da comparação.</p></div>}
     <footer className="campaign-pagination compiled-pagination">
       <span>Exibindo {comparisonGroups.length ? (safePage - 1) * pageSize + 1 : 0}–{Math.min(safePage * pageSize, comparisonGroups.length)} de {comparisonGroups.length} clientes</span>
