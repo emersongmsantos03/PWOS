@@ -14,11 +14,14 @@ import {
   Clock3,
   Eye,
   EyeOff,
+  Handshake,
   MapPin,
+  MessagesSquare,
   Plus,
   Users,
   X,
 } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { SearchableSelect } from "./SearchableSelect";
 import { DateTimePicker } from "./DateTimePicker";
 
@@ -38,6 +41,10 @@ type CalendarEvent = {
   opportunityId?: string;
   recurrence?: string;
   reminderMinutes?: number;
+  source?: "GOOGLE";
+  googleHtmlLink?: string;
+  googleSyncError?: string;
+  meetUrl?: string;
 };
 type Task = {
   id: string;
@@ -60,11 +67,16 @@ type Opportunity = {
   company: string;
   status: string;
   serviceInterest: string;
+  responsibleId?: string;
+  responsibleName?: string;
+  nextAction?: string;
+  nextActionAt?: string;
 };
 type View = "DAY" | "WEEK" | "MONTH";
 type CreateType = "EVENT" | "TASK";
+type AgendaTicket = { id: string; code: string; title: string; assigneeId: string; assigneeName: string; priority: string; status: string; dueAt: string };
 type CalendarItem = {
-  kind: "event" | "task";
+  kind: "event" | "task" | "ticket" | "crm";
   id: string;
   title: string;
   ownerId: string;
@@ -116,14 +128,17 @@ const initialCalendarDate = () => {
 };
 
 export function CalendarManagement() {
+  const navigate = useNavigate();
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [tickets, setTickets] = useState<AgendaTicket[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [opportunities, setOpportunities] = useState<Opportunity[]>([]);
   const [currentUserId, setCurrentUserId] = useState("");
   const [canViewTeam, setCanViewTeam] = useState(false);
   const [canEditAllEvents, setCanEditAllEvents] = useState(false);
+  const [google, setGoogle] = useState<{ connected: boolean; error: string }>({ connected: false, error: "" });
   const [canEditAllTasks, setCanEditAllTasks] = useState(false);
   const [ownerIds, setOwnerIds] = useState<string[]>([]);
   const [anchor, setAnchor] = useState(initialCalendarDate);
@@ -151,6 +166,8 @@ export function CalendarManagement() {
       fetch("/api/clients"),
       fetch("/api/crm/opportunities"),
     ]);
+    // Prazos de chamados entram na agenda do responsável (somente leitura).
+    void fetch("/api/tickets").then(async (response) => response.ok && setTickets((await response.json()).tickets || [])).catch(() => undefined);
     const [
       eventData,
       taskData,
@@ -170,6 +187,7 @@ export function CalendarManagement() {
       setEvents(eventData.events || []);
       setCanViewTeam(!!eventData.canViewTeam);
       setCanEditAllEvents(!!eventData.canEditAll);
+      setGoogle(eventData.google || { connected: false, error: "" });
     }
     if (taskResponse.ok) {
       setTasks(taskData.tasks || []);
@@ -207,7 +225,8 @@ export function CalendarManagement() {
         end: new Date(event.endAt),
         location: event.location,
         category: event.category,
-        editable: event.ownerId === currentUserId || canEditAllEvents,
+        // Eventos do Google Agenda são editados pelo próprio dono; a alteração volta para o Google.
+        editable: event.source === "GOOGLE" ? event.ownerId === currentUserId && google.connected : event.ownerId === currentUserId || canEditAllEvents,
       }));
     const taskItems = tasks
       .filter(
@@ -230,16 +249,52 @@ export function CalendarManagement() {
           editable: task.responsibleId === currentUserId || canEditAllTasks,
         };
       });
-    return [...eventItems, ...taskItems].sort(
+    const ticketItems = tickets
+      .filter((ticket) => ownerIds.includes(ticket.assigneeId) && ticket.dueAt && !["RESOLVED", "CLOSED"].includes(ticket.status))
+      .map((ticket) => {
+        const start = new Date(ticket.dueAt);
+        return {
+          kind: "ticket" as const,
+          id: ticket.id,
+          title: `${ticket.code} · ${ticket.title}`,
+          ownerId: ticket.assigneeId,
+          ownerName: ticket.assigneeName,
+          start,
+          end: new Date(start.getTime() + 30 * 60_000),
+          category: `TICKET_${ticket.priority}`,
+          editable: false,
+        };
+      });
+    // Próxima ação de leads do CRM na agenda do responsável (somente leitura).
+    const crmItems = opportunities
+      .filter((item) => item.status === "OPEN" && item.nextActionAt && item.responsibleId && ownerIds.includes(item.responsibleId))
+      .map((item) => {
+        const start = new Date(item.nextActionAt!);
+        return {
+          kind: "crm" as const,
+          id: item.id,
+          title: `${item.nextAction || "Próxima ação"} · ${item.company || item.name}`,
+          ownerId: item.responsibleId!,
+          ownerName: item.responsibleName || "",
+          start,
+          end: new Date(start.getTime() + 30 * 60_000),
+          category: "CRM",
+          editable: false,
+        };
+      });
+    return [...eventItems, ...taskItems, ...ticketItems, ...crmItems].sort(
       (a, b) => a.start.getTime() - b.start.getTime(),
     );
   }, [
     events,
     tasks,
+    tickets,
+    opportunities,
     ownerIds,
     currentUserId,
     canEditAllEvents,
     canEditAllTasks,
+    google.connected,
   ]);
 
   const days = useMemo(() => {
@@ -267,7 +322,21 @@ export function CalendarManagement() {
     setCreating(true);
   };
   const openEdit = (item: CalendarItem) => {
+    if (item.kind === "ticket") {
+      navigate(`/chamados?ticket=${encodeURIComponent(item.id)}`);
+      return;
+    }
+    if (item.kind === "crm") {
+      navigate(`/crm?opportunity=${encodeURIComponent(item.id)}`);
+      return;
+    }
     if (!item.editable) {
+      // Eventos criados direto no Google Agenda são abertos lá.
+      const googleEvent = item.kind === "event" ? events.find((event) => event.id === item.id && event.source === "GOOGLE") : undefined;
+      if (googleEvent?.googleHtmlLink) {
+        window.open(googleEvent.googleHtmlLink, "_blank", "noopener");
+        return;
+      }
       setError("Este item é somente para visualização.");
       return;
     }
@@ -450,6 +519,8 @@ export function CalendarManagement() {
           </div>
         </header>
         {pendingInvites.map(event=><div className="calendar-invitation" key={event.id}><CalendarDays/><span><b>Convite: {event.title}</b><small>{new Date(event.startAt).toLocaleString("pt-BR")} · {event.ownerName}</small></span><button onClick={()=>void respond(event.id,"DECLINED")}>Recusar</button><button className="accept" onClick={()=>void respond(event.id,"ACCEPTED")}>Aceitar</button></div>)}
+        {google.error && <div className="calendar-permission-notice calendar-google-error"><Eye />Não foi possível ler seu Google Agenda: {google.error}</div>}
+        {!google.connected && <div className="calendar-permission-notice calendar-google-hint"><CalendarDays />Conecte sua conta Google em Configurações → Conta Google e e-mail para ver e enviar seus compromissos ao Google Agenda.</div>}
         {error && !creating && (
           <div className="calendar-permission-notice">
             <Eye />
@@ -516,6 +587,14 @@ export function CalendarManagement() {
                 <span>
                   <i className="task-dot" />
                   Tarefa
+                </span>
+                <span>
+                  <i className="ticket-dot" />
+                  Chamado
+                </span>
+                <span>
+                  <i className="crm-dot" />
+                  CRM
                 </span>
               </footer>
             </aside>
@@ -589,6 +668,7 @@ export function CalendarManagement() {
           clients={clients}
           opportunities={opportunities}
           currentUserId={currentUserId}
+          googleConnected={google.connected}
           saving={saving}
           error={error}
           item={editing}
@@ -626,12 +706,16 @@ function ItemCard({
       className={`calendar-item ${item.kind} ${item.category.toLowerCase()} ${item.editable ? "editable" : "read-only"}${durationHours ? " calendar-duration" : ""}`}
       style={{ "--owner-color": color, ...(durationHours ? { "--calendar-duration-height": `${Math.max(30, durationHours * 58 - 6)}px` } : {}) } as React.CSSProperties}
       title={
-        item.kind === "task"
+        item.kind === "ticket"
+          ? `${item.ownerName} · prazo do chamado — clique para abrir`
+          : item.kind === "crm"
+          ? `${item.ownerName} · próxima ação do CRM — clique para abrir o lead`
+          : item.kind === "task"
           ? `${item.ownerName} · ${item.editable ? "clique para editar" : "somente visualização"}`
           : `${item.ownerName} · ${item.editable ? "clique para editar ou arraste para alterar o horário" : "somente visualização"}`
       }
     >
-      <span>{item.kind === "task" ? <CheckSquare2 /> : <Clock3 />}</span>
+      <span>{item.kind === "task" ? <CheckSquare2 /> : item.kind === "ticket" ? <MessagesSquare /> : item.kind === "crm" ? <Handshake /> : <Clock3 />}</span>
       <div>
         <b>{item.title}</b>
         <small>
@@ -643,6 +727,8 @@ function ItemCard({
             ` – ${item.end.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`}{" "}
           · {item.ownerName}
           {item.kind === "task" && " · Creative Ops"}
+          {item.kind === "ticket" && " · Chamado"}
+          {item.kind === "crm" && " · CRM"}
         </small>
       </div>
       {!item.editable && <Eye />}
@@ -818,6 +904,7 @@ function CreateModal({
   clients,
   opportunities,
   currentUserId,
+  googleConnected,
   saving,
   error,
   item,
@@ -831,6 +918,7 @@ function CreateModal({
   clients: Client[];
   opportunities: Opportunity[];
   currentUserId: string;
+  googleConnected: boolean;
   saving: boolean;
   error: string;
   item: CalendarEvent | Task | null;
@@ -924,6 +1012,9 @@ function CreateModal({
                   <input name="location" defaultValue={eventItem?.location || ""} />
                 </div>
               </label>
+              {googleConnected && (eventItem?.meetUrl ? <p className="full calendar-google-meet">Google Meet: <a href={eventItem.meetUrl} target="_blank" rel="noreferrer">{eventItem.meetUrl}</a></p> : <label className="full calendar-google-meet"><input type="checkbox" name="googleMeet" defaultChecked={category === "MEETING"} /> Criar link do Google Meet e enviar convite pelo Google Agenda</label>)}
+              {eventItem?.source === "GOOGLE" && <p className="full calendar-google-meet">Evento do seu Google Agenda: título, horário, local e descrição são salvos direto no Google. Participantes e vínculos com cliente não se aplicam.</p>}
+              {eventItem?.googleSyncError && <p className="full calendar-google-error">Não sincronizado com o Google Agenda: {eventItem.googleSyncError}</p>}
               {category === "MEETING" && rooms.length > 0 && <label className="full">Sala de reunião<select name="roomId"><option value="">Sem sala reservada</option>{rooms.map(room=><option value={room.id} key={room.id}>{room.name}{room.location?` · ${room.location}`:""}{room.capacity?` · ${room.capacity} pessoas`:""}</option>)}</select></label>}
             </>
           ) : (

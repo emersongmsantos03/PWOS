@@ -32,6 +32,7 @@ import {
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { SearchableSelect } from "./SearchableSelect";
+import { toDateTimeInput } from "./dateInput";
 
 type Status =
   | "TODO"
@@ -1579,7 +1580,7 @@ function TaskDetail({
             Prazo
             <input
               type="datetime-local"
-              value={task.dueAt?.slice(0, 16) || ""}
+              value={toDateTimeInput(task.dueAt)}
               onChange={(event) => onPatch({ dueAt: event.target.value })}
             />
           </label>
@@ -2062,7 +2063,7 @@ function ContentFields({
       platform: task.details?.platform || "instagram",
       format: task.details?.format || task.subtype,
       caption: task.details?.caption || "",
-      publishAt: task.details?.publishAt?.slice(0, 16) || "",
+      publishAt: toDateTimeInput(task.details?.publishAt),
       cta: task.details?.cta || "",
       hashtags: task.details?.hashtags || "",
     }),

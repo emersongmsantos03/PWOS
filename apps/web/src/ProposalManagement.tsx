@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { SearchableSelect } from "./SearchableSelect";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -145,13 +146,20 @@ export function ProposalManagement({
       <section className="proposal-list-panel">
         <header>
           <div className="proposal-search"><Search /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar proposta, empresa ou cliente..." /></div>
-          <select value={status} onChange={(event) => setStatus(event.target.value)}>
-            <option value="ALL">Todos os status</option>
-            <option value="DRAFT">Rascunhos</option>
-            <option value="SENT">Aguardando assinatura</option>
-            <option value="ACCEPTED">Assinadas</option>
-            <option value="REJECTED">Recusadas</option>
-          </select>
+          <div className="proposal-status-filter">
+            <SearchableSelect
+              value={status}
+              onChange={setStatus}
+              searchable={false}
+              options={[
+                { value: "ALL", label: "Todos os status" },
+                { value: "DRAFT", label: "Rascunhos" },
+                { value: "SENT", label: "Aguardando assinatura" },
+                { value: "ACCEPTED", label: "Assinadas" },
+                { value: "REJECTED", label: "Recusadas" },
+              ]}
+            />
+          </div>
         </header>
         {loading ? (
           <div className="proposal-empty">Carregando propostas…</div>

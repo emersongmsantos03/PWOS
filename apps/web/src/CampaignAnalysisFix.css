@@ -298,3 +298,30 @@ html:not([data-theme="dark"]) .campaign-state.lp-active {
 .traffic-page .traffic-platform-switch>button>span:last-child>b{font-size:9px}.traffic-page .traffic-platform-switch>button>span:last-child>small{margin-top:1px;font-size:6px}
 .traffic-page .traffic-period>.traffic-sync{border-color:color-mix(in srgb,var(--accent) 35%,var(--border));color:var(--accent)}.traffic-page .traffic-period>.traffic-sync:disabled{border-color:var(--border);color:var(--subtle);opacity:.58;cursor:not-allowed}
 @media(max-width:700px){.traffic-page .traffic-platform-switch>button{min-width:125px}.traffic-page .traffic-period>.traffic-sync{flex:1}}
+
+/* Comentário obrigatório ao concluir a revisão. */
+.campaign-review-composer { flex: 0 0 auto; display: flex; flex-direction: column; gap: 8px; padding: 14px 24px; border-top: 1px solid var(--border); background: var(--surface-soft); }
+.campaign-review-composer > label { display: flex; flex-direction: column; gap: 2px; }
+.campaign-review-composer > label b { color: var(--heading); font-size: 10px; }
+.campaign-review-composer > label small { color: var(--subtle); font-size: 8px; }
+.campaign-review-composer textarea { box-sizing: border-box; width: 100%; min-height: 64px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--heading); font: inherit; font-size: 10px; resize: vertical; }
+.campaign-review-composer textarea:focus { outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent); outline-offset: 1px; }
+.campaign-review-composer > div { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+.campaign-review-composer > div small { margin-right: auto; color: #b87808; font-size: 8px; }
+.campaign-review-composer > div small.ready { color: var(--subtle); }
+.campaign-review-composer button { display: inline-flex; align-items: center; gap: 6px; min-height: 34px; padding: 0 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--heading); font-size: 9px; font-weight: 750; cursor: pointer; }
+.campaign-review-composer button svg { width: 14px; }
+.campaign-review-composer button.save { border-color: color-mix(in srgb, #24a66f 45%, var(--border)); background: #24a66f; color: #fff; }
+.campaign-review-composer button:disabled { cursor: not-allowed; opacity: .55; }
+
+/* Comentário e foto da campanha em cada revisão do histórico. */
+.campaign-review-history article > blockquote,
+.campaign-review-history article > .campaign-review-snapshot { grid-column: 2 / -1; margin: 0; }
+.campaign-review-history article > blockquote { padding: 8px 11px; border-left: 3px solid #24a66f; border-radius: 0 8px 8px 0; background: var(--surface-soft); color: var(--heading); font-size: 9px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.campaign-review-history article > blockquote.empty { border-left-color: var(--divider); color: var(--subtle); font-style: italic; }
+.campaign-review-snapshot > summary { color: var(--accent); font-size: 8px; font-weight: 750; cursor: pointer; }
+.campaign-review-snapshot > dl { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); margin-top: 8px; }
+@media (max-width: 760px) {
+  .campaign-review-history article > blockquote,
+  .campaign-review-history article > .campaign-review-snapshot { grid-column: 1 / -1; }
+}

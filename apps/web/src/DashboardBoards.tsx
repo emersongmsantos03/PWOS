@@ -1,9 +1,11 @@
 import { requestMediaPeriod } from "./mediaPeriodRequest";
 import { MetaLogo, GoogleAdsLogo } from "./PlatformLogos";
-import { useEffect, useState } from "react";
-import { Activity, AlertTriangle, AlarmClock, ArrowRight, BarChart3, BriefcaseBusiness, CalendarDays, ChartLine, Check, CheckCircle2, CircleDollarSign, ClipboardCheck, Clock3, Handshake, ListChecks, Megaphone, SearchCheck, Sparkles, Target, UserRoundCheck, Users, WalletCards } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
+import { Activity, AlertTriangle, AlarmClock, ArrowRight, BarChart3, BriefcaseBusiness, CalendarDays, ChartLine, Check, CheckCircle2, CircleDollarSign, ClipboardCheck, Clock3, Handshake, ListChecks, MessagesSquare, Megaphone, SearchCheck, Sparkles, Target, UserRoundCheck, Users, WalletCards } from "lucide-react";
 import { NavLink } from "react-router-dom";
+import { actionStatusLabels, addDays, dayOf, displayStatus, formatLabels, localDay, overallPerception, timeOf, typeLabels, type Meeting, type MeetingsData } from "./meetingsModel";
 import "./CampaignIntelligenceBoard.css";
+import "./GestaoBoard.css";
 
 type User={id:string;name:string;role:string;profile:string;permissions?:string[];departmentId?:string;departmentName?:string};
 type TeamUser={id:string;name:string;role?:string;profile?:string};
@@ -13,7 +15,7 @@ type Task={id:string;title:string;responsibleId:string;responsibleName:string;pr
 type Stage={id:string;name:string;color:string;probability:number;terminal?:"WON"|"LOST"};
 type Pipeline={id:string;name:string;stages:Stage[]};
 type Opportunity={id:string;name:string;company:string;serviceInterest:string;potentialValue:number;responsibleId:string;responsibleName:string;pipelineId:string;stageId:string;status:"OPEN"|"WON"|"LOST"|"CONVERTED";nextAction:string;nextActionAt:string;createdAt:string;updatedAt:string};
-type CalendarEvent={id:string;title:string;ownerId:string;ownerName:string;participantIds:string[];startAt:string;endAt:string;category:string};
+type CalendarEvent={id:string;title:string;ownerId:string;ownerName:string;participantIds:string[];startAt:string;endAt:string;category:string;location?:string};
 type FinanceEntry={id:string;type:"INCOME"|"EXPENSE";amount:number;dueDate:string;status:string};
 type Data={tickets:Ticket[];clients:Client[];tasks:Task[];users:TeamUser[];pipelines:Pipeline[];opportunities:Opportunity[];events:CalendarEvent[];finance:FinanceEntry[];canViewFinanceValues:boolean};
 
@@ -63,10 +65,12 @@ export function DashboardBoards({user}:{user:User}){
   const executive=can("dashboard.view_executive");
   if(loading)return <div className="dashboard-loading"><Activity/> Atualizando indicadores operacionais...</div>;
   const campaignIntelligence = user.departmentName?.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().includes("inteligencia de campanha");
-  return <>{loadError&&<p role="alert">{loadError}</p>}{campaignIntelligence?<CampaignIntelligenceBoard user={user} data={data}/>:executive?<ExecutiveBoard user={user} data={data}/>:<CollaboratorBoard user={user} data={data}/>}</>;
+  // Liderança de Gestão / Customer Success tem um painel focado em reuniões e carteira.
+  const management = ["gestao","customer success","supervisao"].some(name=>user.departmentName?.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().includes(name));
+  return <>{loadError&&<p role="alert">{loadError}</p>}{management?<GestaoBoard user={user} data={data}/>:campaignIntelligence?<CampaignIntelligenceBoard user={user} data={data}/>:executive?<ExecutiveBoard user={user} data={data}/>:<CollaboratorBoard user={user} data={data}/>}</>;
 }
 
-type BoardCampaign={id:string;accountId:string;platform?:"META_ADS"|"GOOGLE_ADS";name:string;client:string;currency?:string;status:string;dailyBudget:number;lifetimeBudget:number;remainingBudget?:number|null;accountRemainingBudget?:number|null;spend:number;impressions:number;clicks:number;leads:number;cpl:number|null;verifiedAt?:string|null;landingPageStatus?:string|null};
+type BoardCampaign={id:string;accountId:string;platform?:"META_ADS"|"GOOGLE_ADS";name:string;client:string;currency?:string;status:string;dailyBudget:number;lifetimeBudget:number;remainingBudget?:number|null;spend:number;impressions:number;clicks:number;leads:number;cpl:number|null;verifiedAt?:string|null;landingPageStatus?:string|null};
 const campaignHealth=(item:BoardCampaign)=>{
   if(!item.impressions&&!item.clicks&&!item.spend)return -1;
   const ctr=item.impressions?item.clicks/item.impressions*100:0;
@@ -78,24 +82,31 @@ const campaignHealth=(item:BoardCampaign)=>{
   return Math.max(0,score);
 };
 const reviewOverdue=(item:BoardCampaign)=>!item.verifiedAt||Date.now()-new Date(item.verifiedAt).getTime()>=7*86400000;
-const balanceRisk=(item:BoardCampaign)=>{
-  const available=item.accountRemainingBudget ?? item.remainingBudget;
-  const balance=available==null?null:Math.max(0,Number(available));
-  if(item.status!=="ACTIVE"||balance==null)return null;
-  if(item.dailyBudget>0){const days=balance/item.dailyBudget;return days<=2?"critical":days<=4?"warning":null;}
-  if(item.lifetimeBudget>0){const rate=balance/item.lifetimeBudget;return rate<=.15?"critical":rate<=.3?"warning":null;}
-  return null;
-};
-const campaignBalance=(item:BoardCampaign)=>{const available=item.accountRemainingBudget ?? item.remainingBudget;return available==null?null:Math.max(0,Number(available));};
-const campaignCurrency=(item:BoardCampaign)=>item.currency||"BRL";
-const campaignMoney=(value:number,item:BoardCampaign)=>value.toLocaleString("pt-BR",{style:"currency",currency:campaignCurrency(item),maximumFractionDigits:0});
+type BoardAccount={id:string;name:string;platform:"META_ADS"|"GOOGLE_ADS";currency?:string;spendCap?:number;amountSpent?:number;remainingBudget?:number|null};
+// Cliente precisa pedir crédito quando o saldo da conta cobre até este número de dias
+// do orçamento diário somado das campanhas ativas da conta.
+const creditAlertDays=4,creditCriticalDays=2,creditSuggestionDays=30;
+type CreditNeed={account:BoardAccount;client:string;daily:number;balance:number;days:number;suggested:number;link:string};
+// Saldo da conta: na Meta, o que falta até o limite de gastos da conta (a API não expõe o
+// crédito pré-pago); no Google, o orçamento da conta ainda não veiculado.
+const accountBalance=(account:BoardAccount)=>account.platform==="META_ADS"
+  ?(account.spendCap&&account.spendCap>0?Math.max(0,account.spendCap-Number(account.amountSpent||0)):null)
+  :(account.remainingBudget==null?null:Math.max(0,Number(account.remainingBudget)));
+const creditNeeds=(accounts:BoardAccount[],campaigns:BoardCampaign[]):CreditNeed[]=>accounts.flatMap(account=>{
+  const active=campaigns.filter(item=>item.platform===account.platform&&item.accountId===account.id&&item.status==="ACTIVE"&&item.dailyBudget>0);
+  const daily=active.reduce((sum,item)=>sum+item.dailyBudget,0),balance=accountBalance(account);
+  if(!active.length||balance==null||balance/daily>creditAlertDays)return [];
+  const named=active.find(item=>item.client&&!/^\d+$/.test(item.client));
+  return [{account,client:named?.client||account.name,daily,balance,days:balance/daily,suggested:Math.max(0,daily*creditSuggestionDays-balance),link:campaignUrl(active[0])}];
+}).sort((a,b)=>a.days-b.days);
+const accountMoney=(value:number,account:BoardAccount)=>value.toLocaleString("pt-BR",{style:"currency",currency:account.currency||"BRL",maximumFractionDigits:0});
 const campaignUrl=(item:BoardCampaign)=>`/midia/gestao?campaign=${encodeURIComponent(`${item.platform||"META_ADS"}:${item.accountId}:${item.id}`)}`;
 const taskUrl=(task:Task)=>`/tarefas?task=${encodeURIComponent(task.id)}`;
 const ticketUrl=(ticket:Ticket)=>`/chamados?ticket=${encodeURIComponent(ticket.id)}`;
 const agendaUrl=(event:CalendarEvent)=>`/agenda?date=${encodeURIComponent(event.startAt)}`;
 
 function CampaignIntelligenceBoard({user,data}:{user:User;data:Data}){
-  const [campaigns,setCampaigns]=useState<BoardCampaign[]>([]),[campaignLoading,setCampaignLoading]=useState(true),[campaignError,setCampaignError]=useState("");
+  const [campaigns,setCampaigns]=useState<BoardCampaign[]>([]),[accounts,setAccounts]=useState<BoardAccount[]>([]),[campaignLoading,setCampaignLoading]=useState(true),[campaignError,setCampaignError]=useState("");
   useEffect(()=>{
     const controller=new AbortController();
     const timeout=setTimeout(()=>controller.abort(),255000);
@@ -107,16 +118,18 @@ function CampaignIntelligenceBoard({user,data}:{user:User;data:Data}){
     Promise.allSettled(["meta","google"].map(async provider=>{
       const {response,payload}=await requestMediaPeriod(`/api/media/${provider}/campaigns?since=${since}&until=${until}`,controller.signal);
       if(!response.ok)throw new Error(`${provider === "meta" ? "Meta Ads" : "Google Ads"}: ${payload.message || "Não foi possível consultar as campanhas."}`);
-      return(payload.campaigns||[]).map((item:BoardCampaign)=>({...item,platform:provider==="meta"?"META_ADS":"GOOGLE_ADS",accountRemainingBudget:(payload.accounts||[]).find((account:{id:string;remainingBudget?:number|null})=>account.id===item.accountId)?.remainingBudget??null}));
+      const platform=provider==="meta"?"META_ADS" as const:"GOOGLE_ADS" as const;
+      return{campaigns:(payload.campaigns||[]).map((item:BoardCampaign)=>({...item,platform})) as BoardCampaign[],accounts:(payload.accounts||[]).map((account:BoardAccount)=>({...account,platform})) as BoardAccount[]};
     })).then(results=>{
       if(disposed)return;
-      setCampaigns(results.flatMap(result=>result.status==="fulfilled"?result.value:[]));
+      setCampaigns(results.flatMap(result=>result.status==="fulfilled"?result.value.campaigns:[]));
+      setAccounts(results.flatMap(result=>result.status==="fulfilled"?result.value.accounts:[]));
       const failures=results.filter((result): result is PromiseRejectedResult=>result.status==="rejected");
       if(failures.length)setCampaignError(failures.map(result=>result.reason instanceof Error ? result.reason.message : "Não foi possível carregar as campanhas. Tente novamente.").join(" · "));
     }).finally(()=>{clearTimeout(timeout);if(!disposed)setCampaignLoading(false);});
     return()=>{disposed=true;clearTimeout(timeout);controller.abort();};
   },[user.id]);
-  const active=campaigns.filter(item=>item.status==="ACTIVE"),critical=active.filter(item=>{const score=campaignHealth(item);return score>=0&&score<70}),warning=active.filter(item=>{const score=campaignHealth(item);return score>=70&&score<90}),overdueReviews=active.filter(reviewOverdue),balanceAttention=active.filter(item=>balanceRisk(item)).sort((a,b)=>{const riskA=balanceRisk(a)==="critical"?0:1,riskB=balanceRisk(b)==="critical"?0:1;const daysA=a.dailyBudget?Number(campaignBalance(a)||0)/a.dailyBudget:1,daysB=b.dailyBudget?Number(campaignBalance(b)||0)/b.dailyBudget:1;return riskA-riskB||daysA-daysB;}),healthy=active.filter(item=>{const score=campaignHealth(item);return score>=90}),todayEvents=data.events.filter(event=>(event.ownerId===user.id||event.participantIds?.includes(user.id))&&sameDay(event.startAt)).sort((a,b)=>new Date(a.startAt).getTime()-new Date(b.startAt).getTime()),myTasks=data.tasks.filter(task=>task.responsibleId===user.id&&!['DONE','CANCELLED'].includes(task.status)).sort((a,b)=>Number(overdue(b))-Number(overdue(a))),todayTasks=myTasks.filter(task=>sameDay(task.dueAt)||overdue(task)).slice(0,7),waitingD1=myTasks.filter(task=>/d\+1|aguardando resultado|validar resultado/i.test(`${task.title} ${task.status}`)),myTickets=data.tickets.filter(ticket=>ticket.assigneeId===user.id&&!['RESOLVED','CLOSED'].includes(ticket.status)),teamTickets=data.tickets.filter(ticket=>ticket.assigneeId!==user.id&&!['RESOLVED','CLOSED'].includes(ticket.status)),reportTasks=myTasks.filter(task=>/relat[oó]rio|report/i.test(task.title));
+  const active=campaigns.filter(item=>item.status==="ACTIVE"),critical=active.filter(item=>{const score=campaignHealth(item);return score>=0&&score<70}),warning=active.filter(item=>{const score=campaignHealth(item);return score>=70&&score<90}),overdueReviews=active.filter(reviewOverdue),credit=creditNeeds(accounts,campaigns),healthy=active.filter(item=>{const score=campaignHealth(item);return score>=90}),todayEvents=data.events.filter(event=>(event.ownerId===user.id||event.participantIds?.includes(user.id))&&sameDay(event.startAt)).sort((a,b)=>new Date(a.startAt).getTime()-new Date(b.startAt).getTime()),myTasks=data.tasks.filter(task=>task.responsibleId===user.id&&!['DONE','CANCELLED'].includes(task.status)).sort((a,b)=>Number(overdue(b))-Number(overdue(a))),todayTasks=myTasks.filter(task=>sameDay(task.dueAt)||overdue(task)).slice(0,7),waitingD1=myTasks.filter(task=>/d\+1|aguardando resultado|validar resultado/i.test(`${task.title} ${task.status}`)),myTickets=data.tickets.filter(ticket=>ticket.assigneeId===user.id&&!['RESOLVED','CLOSED'].includes(ticket.status)),teamTickets=data.tickets.filter(ticket=>ticket.assigneeId!==user.id&&!['RESOLVED','CLOSED'].includes(ticket.status)),reportTasks=myTasks.filter(task=>/relat[oó]rio|report/i.test(task.title));
   const attention=[...critical,...warning.filter(item=>!critical.some(value=>value.id===item.id)),...overdueReviews.filter(item=>![...critical,...warning].some(value=>value.id===item.id))].slice(0,6);
   const todayLabel=new Intl.DateTimeFormat("pt-BR",{day:"2-digit",month:"2-digit",year:"numeric"}).format(new Date());
   const timeOfDay=new Date().getHours()<12?"Bom dia":new Date().getHours()<18?"Boa tarde":"Boa noite";
@@ -140,8 +153,8 @@ function CampaignIntelligenceBoard({user,data}:{user:User;data:Data}){
       <section className="ci-card ci-day-tasks"><CiTitle icon={ClipboardCheck} title={`Suas tarefas do dia · ${todayLabel}`} action="Ver todas" to="/tarefas"/><div className="ci-task-list">{todayTasks.map(task=><NavLink to={taskUrl(task)} key={task.id} className="ci-task-row"><span><i className={overdue(task)?"is-late":task.status==="IN_PROGRESS"?"is-progress":""}/>{task.title}</span><em className={overdue(task)?"late":task.status==="IN_PROGRESS"?"progress":""}>{overdue(task)?"Atrasada":taskStatus(task.status)}</em></NavLink>)}{!todayTasks.length&&<Empty text="Nenhuma tarefa prevista para hoje."/>}</div></section>
     </div>
     <section className="ci-overview-cards">
-      <CiBalanceFocus campaigns={balanceAttention} loading={campaignLoading}/>
-      <CiOverview icon={WalletCards} title="Operação de campanhas" caption="panorama de hoje" tone="gold" rows={[["Campanhas ativas",String(active.length),"Em veiculação","/midia/gestao"],["Saldo em atenção",String(balanceAttention.length),"Até quatro dias de saldo","/midia/hoje"],["Em atenção",String(warning.length),"Precisam de acompanhamento","/midia/hoje"],["Revisões pendentes",String(overdueReviews.length),"Ciclo de 7 dias","/midia/hoje"]]} to="/midia/hoje"/>
+      <CiCreditNeeds needs={credit} loading={campaignLoading}/>
+      <CiOverview icon={WalletCards} title="Operação de campanhas" caption="panorama de hoje" tone="gold" rows={[["Campanhas ativas",String(active.length),"Em veiculação","/midia/gestao"],["Pedir créditos",String(credit.length),`Clientes com saldo para até ${creditAlertDays} dias`,"/midia/gestao"],["Em atenção",String(warning.length),"Precisam de acompanhamento","/midia/hoje"],["Revisões pendentes",String(overdueReviews.length),"Ciclo de 7 dias","/midia/hoje"]]} to="/midia/hoje"/>
       <CiOverview icon={ClipboardCheck} title="Relatórios para enviar" caption="organização de entregas" tone="purple" rows={reportTasks.slice(0,4).map(task=>[task.title,formatDate(task.dueAt),taskStatus(task.status),taskUrl(task)])} empty="Nenhum relatório pendente." to="/relatorios"/>
       <CiOverview icon={AlertTriangle} title="Alertas em atenção" caption="campanhas para revisar" tone="red" rows={attention.slice(0,4).map(item=>[item.client||"Cliente",item.name,campaignHealth(item)<70?"Score crítico — verificar agora":"Acompanhar campanha",campaignUrl(item),campaignHealth(item)<70?"Verificar":"Analisar"])} empty={campaignLoading?"Carregando campanhas…":"Nenhuma campanha requer atenção."} to="/midia/hoje"/>
     </section>
@@ -154,9 +167,78 @@ function CampaignIntelligenceBoard({user,data}:{user:User;data:Data}){
 function CiTitle({icon:Icon,title,action,to}:{icon:typeof Activity;title:string;action:string;to:string}){return <header className="ci-card-title"><span><Icon/></span><b>{title}</b><NavLink to={to}>{action}<ArrowRight/></NavLink></header>}
 function CiStatus({value,label,detail,tone,icon:Icon,to}:{value:number;label:string;detail:string;tone:string;icon:typeof Activity;to:string}){return <NavLink to={to} className={`ci-status ${tone}`}><span><Icon/></span><div><b>{label}</b><strong>{value}</strong><small>{detail}</small></div></NavLink>}
 function PlatformBadge({platform}:{platform?:BoardCampaign["platform"]}){const meta=platform==="META_ADS";return <span className={`ci-platform ${meta?"meta":"google"}`} title={meta?"Meta Ads":"Google Ads"}>{meta?<MetaLogo />:<GoogleAdsLogo />}</span>}
-function CiBalanceFocus({campaigns,loading}:{campaigns:BoardCampaign[];loading:boolean}){return <section className="ci-balance-focus"><header><span><CircleDollarSign/></span><div><b>Saldo que exige atenção</b><small>Somente campanhas com saldo para até quatro dias</small></div><NavLink to="/midia/gestao">Ver campanhas <ArrowRight/></NavLink></header><div className="ci-balance-list">{campaigns.length?campaigns.slice(0,6).map(item=>{const balance=campaignBalance(item)||0,days=item.dailyBudget>0?balance/item.dailyBudget:null;return <article key={`${item.platform}:${item.accountId}:${item.id}`} className={`ci-balance-row ${balanceRisk(item)}`}><PlatformBadge platform={item.platform}/><NavLink to={campaignUrl(item)} className="ci-balance-campaign"><b title={item.client||"Cliente não vinculado"}>{item.client||"Cliente não vinculado"}</b><small title={item.name}>{item.name}</small></NavLink><strong><small>Investimento diário</small>{item.dailyBudget>0?campaignMoney(item.dailyBudget,item)+"/dia":"Não informado"}</strong><strong><small>Saldo restante</small>{campaignMoney(balance,item)}{days!=null&&<em>{days<=1?"menos de 1 dia":`${Math.ceil(days)} dias`}</em>}</strong><NavLink className="ci-campaign-action analyze" to={campaignUrl(item)}><BarChart3/> Analisar</NavLink></article>}):<Empty text={loading?"Carregando saldos das campanhas…":"Nenhuma campanha com saldo em atenção."}/>}</div></section>}
+function CiCreditNeeds({needs,loading}:{needs:CreditNeed[];loading:boolean}){return <section className="ci-balance-focus"><header><span><CircleDollarSign/></span><div><b>Clientes que precisam solicitar créditos{needs.length?` (${needs.length})`:""}</b><small>Saldo da conta para até {creditAlertDays} dias do orçamento diário das campanhas ativas</small></div><NavLink to="/midia/gestao">Ver campanhas <ArrowRight/></NavLink></header><div className="ci-balance-list ci-credit-list">{needs.length?needs.map(need=>{const days=Math.floor(need.days);return <article key={`${need.account.platform}:${need.account.id}`} className={`ci-balance-row ${need.days<=creditCriticalDays?"critical":"warning"}`}><PlatformBadge platform={need.account.platform}/><NavLink to={need.link} className="ci-balance-campaign"><b title={need.client}>{need.client}</b><small title={`${need.account.name} · pedir cerca de ${accountMoney(need.suggested,need.account)} para ${creditSuggestionDays} dias`}>{need.account.name} · pedir ~{accountMoney(need.suggested,need.account)} p/ {creditSuggestionDays} dias</small></NavLink><strong><small>Investimento diário</small>{accountMoney(need.daily,need.account)}/dia</strong><strong><small>Saldo restante</small>{accountMoney(need.balance,need.account)}<em>{need.balance<=0?"sem saldo":days<1?"menos de 1 dia":`${days} dia${days>1?"s":""}`}</em></strong><NavLink className="ci-campaign-action analyze" to={need.link}><BarChart3/> Ver conta</NavLink></article>}):<Empty text={loading?"Carregando saldos das contas…":"Nenhum cliente precisa solicitar créditos agora."}/>}</div></section>}
 function CiOverview({icon:Icon,title,caption,tone,rows,empty,to}:{icon:typeof Activity;title:string;caption:string;tone:string;rows:string[][];empty?:string;to:string}){return <section className={`ci-overview-card ${tone}`}><header><span><Icon/></span><div><b>{title}</b><small>{caption}</small></div></header><div className="ci-overview-rows">{rows.length?rows.map((row,index)=>{const content=<><b title={row[0]}>{row[0]}</b><span title={row[1]}>{row[1]}</span><em>{row[2]}</em></>;return row[4]?<article className="ci-overview-action-row" key={`${row[0]}-${index}`}>{content}<NavLink className="ci-campaign-action verify" to={row[3]}><CheckCircle2/>{row[4]}</NavLink></article>:row[3]?<NavLink className="ci-overview-row-link" to={row[3]} key={`${row[0]}-${index}`}>{content}</NavLink>:<article key={`${row[0]}-${index}`}>{content}</article>}):<Empty text={empty||"Sem itens para exibir."}/>}</div><NavLink to={to}>Ver mais <ArrowRight/></NavLink></section>}
 function CiTickets({title,number,tickets,empty,to,secondary=false}:{title:string;number:string;tickets:Ticket[];empty:string;to:string;secondary?:boolean}){return <section className={`ci-tickets-card ${secondary?"secondary":""}`}><header><span>{number}</span><b>{title}</b><NavLink to={to}>Ver mais <ArrowRight/></NavLink></header><div className="ci-ticket-table"><div className="ci-ticket-head"><span>PRIORIDADE</span><span>CHAMADO</span><span>RESPONSÁVEL</span><span>PRAZO</span><span>STATUS</span></div>{tickets.length?tickets.slice(0,5).map(ticket=><NavLink className="ci-ticket-row" to={ticketUrl(ticket)} key={ticket.id}><i className={ticket.priority.toLowerCase()}>{ticket.priority==="URGENT"?"Urgente":ticket.priority==="HIGH"?"Alta":"Normal"}</i><b>{ticket.title}</b><span>{ticket.assigneeName||"Sem responsável"}</span><time>{formatDate(ticket.dueAt)}</time><em className={ticket.status.toLowerCase()}>{ticket.status==="IN_PROGRESS"?"Em produção":ticket.status==="WAITING"?"Aguardando":"Verificar"}</em></NavLink>):<Empty text={empty}/>}</div></section>}
+
+function GestaoBoard({user,data}:{user:User;data:Data}){
+  const can=(permission:string)=>user.profile==="MASTER"||Boolean(user.permissions?.includes(permission));
+  const [meetingsData,setMeetingsData]=useState<MeetingsData|null>(null),[meetingsError,setMeetingsError]=useState("");
+  useEffect(()=>{
+    if(!can("meetings.view"))return;
+    const controller=new AbortController();
+    fetch("/api/meetings",{signal:controller.signal}).then(async response=>{const payload=await response.json().catch(()=>({}));if(!response.ok)throw new Error(payload.message||"Não foi possível carregar as reuniões.");setMeetingsData(payload)}).catch(error=>{if(!controller.signal.aborted)setMeetingsError(error.message)});
+    return()=>controller.abort();
+  },[user.id]);
+  const meetings=meetingsData?.meetings||[],today=localDay(),tomorrow=localDay(addDays(new Date(),1));
+  const linkedEvents=new Set(meetings.map(item=>item.calendarEventId).filter(Boolean));
+  const agenda=[
+    ...data.events.filter(event=>(event.ownerId===user.id||event.participantIds?.includes(user.id))&&sameDay(event.startAt)).map(event=>{const meeting=meetings.find(item=>item.calendarEventId===event.id);return{id:event.id,startAt:event.startAt,title:meeting?.clientName||event.title,detail:meeting?(meeting.subject||typeLabels[meeting.type]):event.category||"Compromisso",place:meeting?formatLabels[meeting.format]:event.location||"",to:meeting?`/reunioes/${meeting.id}`:agendaUrl(event),tone:meeting?(meeting.type==="PLANNING"?"orange":meeting.type==="RESULTS"?"red":"green"):"blue"}}),
+    ...meetings.filter(item=>item.responsibleId===user.id&&item.status!=="CANCELLED"&&dayOf(item.startAt)===today&&(!item.calendarEventId||!linkedEvents.has(item.calendarEventId)||!data.events.some(event=>event.id===item.calendarEventId))).map(item=>({id:item.id,startAt:item.startAt,title:item.clientName,detail:item.subject||typeLabels[item.type],place:formatLabels[item.format],to:`/reunioes/${item.id}`,tone:"green"})),
+  ].sort((a,b)=>a.startAt.localeCompare(b.startAt));
+  const myTasks=data.tasks.filter(task=>task.responsibleId===user.id&&!["DONE","CANCELLED"].includes(task.status)).sort((a,b)=>Number(overdue(b))-Number(overdue(a))||(a.dueAt||"").localeCompare(b.dueAt||""));
+  const todayTasks=myTasks.filter(task=>sameDay(task.dueAt)||overdue(task)).slice(0,9);
+  const myTickets=data.tickets.filter(ticket=>ticket.assigneeId===user.id&&!["RESOLVED","CLOSED"].includes(ticket.status)),teamTickets=data.tickets.filter(ticket=>ticket.assigneeId!==user.id&&!["RESOLVED","CLOSED"].includes(ticket.status));
+  const active=meetings.filter(item=>item.status!=="CANCELLED");
+  const todays=active.filter(item=>dayOf(item.startAt)===today).sort((a,b)=>a.startAt.localeCompare(b.startAt)),tomorrows=active.filter(item=>dayOf(item.startAt)===tomorrow).sort((a,b)=>a.startAt.localeCompare(b.startAt));
+  const summaries=meetings.filter(item=>item.status==="COMPLETED"&&dayOf(item.startAt)===today).sort((a,b)=>a.startAt.localeCompare(b.startAt));
+  const latest=new Map<string,Meeting>();
+  meetings.filter(item=>item.status==="COMPLETED").sort((a,b)=>a.startAt.localeCompare(b.startAt)).forEach(item=>latest.set(item.clientId,item));
+  const portfolio=(meetingsData?.clients||[]).filter(client=>client.status!=="INACTIVE"),month=today.slice(0,7);
+  const attention=[...latest.values()].filter(item=>["ATTENTION","NEGATIVE"].includes(overallPerception(item))).length;
+  const pendingReturns=meetings.filter(item=>item.status==="COMPLETED"&&item.nextContact.date&&item.nextContact.date<=today&&!meetings.some(next=>next.clientId===item.clientId&&next.startAt>item.startAt&&next.status!=="CANCELLED")).length+meetings.flatMap(item=>item.actions).filter(action=>action.status==="WAITING_CLIENT").length;
+  const contactedToday=new Set(summaries.map(item=>item.clientId)).size,plannedToday=new Set(todays.map(item=>item.clientId)).size;
+  const meetingStatus=(item:Meeting)=>{const state=displayStatus(item);return <em className={`gb-status ${state.tone}`}>{state.label==="Agendada"&&dayOf(item.startAt)===today?"Pendente":state.label}</em>};
+  const firstAction=(item:Meeting)=>item.actions.find(action=>action.status!=="DONE")||item.actions[0];
+  const timeOfDay=new Date().getHours()<12?"Bom dia":new Date().getHours()<18?"Boa tarde":"Boa noite";
+  return <div className="campaign-intelligence-board ci-reference-board gestao-board">
+    <header className="ci-reference-greeting">
+      <div className="ci-sun"><Sparkles/></div><div className="ci-greeting-copy"><h1>{timeOfDay}, {first(user.name)}! 👋</h1><b>Hoje é dia {fullDate()}!</b><p>Disciplina hoje, grandes resultados amanhã.</p></div>
+      <blockquote><Sparkles/><span>"Relacionamento bem cuidado<br/>vira resultado no longo prazo."</span></blockquote>
+      <aside><span><Users/></span><div><small>DEPARTAMENTO</small><b>{user.departmentName||"Gestão"}</b></div>{can("tickets.create")?<NavLink className="gb-ticket-button" to="/chamados"><MessagesSquare/>Abrir chamado</NavLink>:<em>Customer Success</em>}</aside>
+    </header>
+    {meetingsError&&<p role="alert">{meetingsError}</p>}
+    <div className="ci-reference-main">
+      <section className="ci-card ci-day-agenda"><CiTitle icon={CalendarDays} title="Sua agenda" action="Abrir agenda" to="/agenda"/>{agenda.length?<div className="ci-timeline gb-agenda">{agenda.slice(0,8).map(item=><NavLink to={item.to} key={item.id} className={`ci-timeline-link gb-tone-${item.tone}`}><article><time>{new Date(item.startAt).toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"})}</time><i/><div><b>{item.title}</b><small>{item.detail}{item.place?` · ${item.place}`:""}</small></div></article></NavLink>)}</div>:<Empty text="Nenhum compromisso agendado para hoje."/>}</section>
+      <section className="ci-card ci-day-tasks"><CiTitle icon={ClipboardCheck} title={`Suas tarefas do dia · ${new Date().toLocaleDateString("pt-BR")}`} action="Ver todas" to="/tarefas"/><div className="ci-task-list">{todayTasks.map(task=><NavLink to={taskUrl(task)} key={task.id} className="ci-task-row"><span><i className={overdue(task)?"is-late":task.status==="IN_PROGRESS"?"is-progress":""}/>{task.title}</span><em className={overdue(task)?"late":task.status==="IN_PROGRESS"?"progress":""}>{overdue(task)?"Atrasada":taskStatus(task.status)}</em></NavLink>)}{!todayTasks.length&&<Empty text="Nenhuma tarefa prevista para hoje."/>}</div></section>
+    </div>
+    {can("meetings.view")&&<div className="gb-meetings">
+      <section className="gb-block"><h2><Handshake/>Reuniões clientes</h2><div className="gb-pair">
+        <GbMeetingTable title="Reuniões do dia" icon={CalendarDays} rows={todays} empty="Nenhuma reunião com clientes hoje." link="Ver todas as reuniões do dia" to="/reunioes/agendadas" status={meetingStatus}/>
+        <GbMeetingTable title="Reuniões para amanhã" icon={CalendarDays} rows={tomorrows} empty="Nenhuma reunião marcada para amanhã." link="Ver todas as reuniões de amanhã" to="/reunioes/agendadas" status={meetingStatus}/>
+      </div></section>
+      <section className="gb-block"><h2><ListChecks/>Resumo reuniões</h2><div className="gb-panel"><header><ClipboardCheck/><b>Resumo das reuniões de hoje</b></header>
+        <div className="gb-table summary"><div className="gb-row head"><span>Cliente</span><span>Horário</span><span>Resumo</span><span>Ação necessária</span><span>Responsável</span><span>Status</span></div>
+          {summaries.slice(0,5).map(item=>{const action=firstAction(item);return <NavLink className="gb-row" key={item.id} to={`/reunioes/${item.id}`}><b>{item.clientName}</b><span>{timeOf(item.startAt)}</span><span title={item.summary}>{item.summary||item.statements[0]?.text||"—"}</span><span title={action?.title}>{action?.title||"—"}</span><span>{action?.responsibleName.split(" ")[0]||"—"}</span>{action?<em className={`gb-status ${action.status==="DONE"?"green":action.status==="PENDING"?"orange":"blue"}`}>{actionStatusLabels[action.status]}</em>:<em className="gb-status green">Concluída</em>}</NavLink>})}
+          {!summaries.length&&<Empty text="Nenhuma reunião concluída hoje ainda."/>}</div>
+        <NavLink className="gb-more" to="/reunioes/concluidas">Ver todos os resumos de hoje <ArrowRight/></NavLink></div></section>
+    </div>}
+    <div className="gb-bottom">
+      <section className="gb-block"><h2><MessagesSquare/>Chamados</h2><div className="ci-tickets-grid gb-tickets">
+        <CiTickets title="Seus chamados" number="01" tickets={myTickets} empty="Nenhum chamado aberto para você." to="/chamados"/>
+        <CiTickets title="Chamados com terceiros" number="02" tickets={teamTickets} empty="Nenhum chamado de terceiros em aberto." to="/chamados" secondary/>
+      </div></section>
+      <section className="gb-block gb-portfolio"><h2><BriefcaseBusiness/>Visão da carteira<NavLink to="/clientes">Ver carteira <ArrowRight/></NavLink></h2><div className="gb-portfolio-grid">
+        <article><Users/><small>Clientes da carteira</small><b>{portfolio.length}</b><em className="green">+{portfolio.filter(client=>client.createdAt?.slice(0,7)===month).length} este mês</em></article>
+        <article><UserRoundCheck/><small>Contatados hoje</small><b>{contactedToday}<span>/{plannedToday||0}</span></b><em className="blue">{plannedToday?`${Math.round(contactedToday/plannedToday*100)}% das reuniões do dia`:"Sem reuniões previstas"}</em></article>
+        <NavLink to="/reunioes/relatorios"><AlertTriangle className="red"/><small>Clientes em atenção</small><b>{attention}</b><em className="red">Necessitam ação</em></NavLink>
+        <NavLink to="/reunioes/relatorios"><AlarmClock className="orange"/><small>Retornos pendentes</small><b>{pendingReturns}</b><em className="orange">Aguardando resposta</em></NavLink>
+        <blockquote><span>“</span>Clientes bem atendidos,<br/>crescem com a gente.</blockquote>
+      </div></section>
+    </div>
+  </div>;
+}
+function GbMeetingTable({title,icon:Icon,rows,empty,link,to,status}:{title:string;icon:typeof Activity;rows:Meeting[];empty:string;link:string;to:string;status:(item:Meeting)=>ReactNode}){return <div className="gb-panel"><header><Icon/><b>{title}</b></header><div className="gb-table"><div className="gb-row head"><span>Cliente</span><span>Horário</span><span>Participante</span><span>Assunto</span><span>Status</span></div>{rows.slice(0,5).map(item=><NavLink className="gb-row" key={item.id} to={`/reunioes/${item.id}`}><b>{item.clientName}</b><span>{timeOf(item.startAt)}</span><span>{item.responsibleName.split(" ")[0]}</span><span title={item.subject}>{item.subject||typeLabels[item.type]}</span>{status(item)}</NavLink>)}{!rows.length&&<Empty text={empty}/>}</div><NavLink className="gb-more" to={to}>{link} <ArrowRight/></NavLink></div>}
 
 function ExecutiveBoard({user,data}:{user:User;data:Data}){
   const {tickets,clients,tasks,users,pipelines,opportunities,events,finance}=data;

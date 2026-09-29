@@ -104,7 +104,7 @@ export function SettingsManagement({
     ["general", Settings, "Geral"],
     ["appearance", Sun, "Aparência"],
     ["notifications", Bell, "Notificações"],
-    ["email", Mail, "E-mail e SMTP"],
+    ["email", Mail, "Conta Google e e-mail"],
     ["openai", Sparkles, "OpenAI e insights"],
     ["rooms", DoorOpen, "Salas de reunião"],
     ["security", ShieldCheck, "Conta e segurança"],
@@ -422,20 +422,24 @@ function OpenAiSettings(){
     {message&&<div className="settings-email-message success"><Check/>{message}</div>}{error&&<div className="settings-email-message error"><LockKeyhole/>{error}</div>}
   </>;
 }
-type EmailConnection = { method:"SMTP"|"GOOGLE";email:string;senderName:string;verifiedAt:string;configured:boolean };
+type EmailConnection = { method:"SMTP"|"GOOGLE";email:string;senderName:string;verifiedAt:string;configured:boolean;calendar?:boolean };
 function UserEmailSettings(){
   const [connection,setConnection]=useState<EmailConnection|null>(null),[googleAvailable,setGoogleAvailable]=useState(false),[loading,setLoading]=useState(true),[saving,setSaving]=useState(false),[message,setMessage]=useState(""),[error,setError]=useState("");
   const load=async()=>{const response=await fetch("/api/email-connection"),payload=await response.json();if(response.ok){setConnection(payload.connection||null);setGoogleAvailable(!!payload.googleOAuthAvailable)}setLoading(false)};
-  useEffect(()=>{void load();const status=new URLSearchParams(window.location.search).get("email");if(status==="connected")setMessage("Conta Google conectada com sucesso.");if(status==="error")setError("Não foi possível concluir a conexão com o Google.")},[]);
+  useEffect(()=>{void load();const status=new URLSearchParams(window.location.search).get("email");if(status==="connected")setMessage("Conta Google conectada. Gmail, Google Agenda e Meet já estão ligados ao PW OS.");if(status==="error")setError("Não foi possível concluir a conexão com o Google.")},[]);
   const saveSmtp=async(event:FormEvent<HTMLFormElement>)=>{event.preventDefault();setSaving(true);setError("");setMessage("");const response=await fetch("/api/email-connection",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(Object.fromEntries(new FormData(event.currentTarget)))}),payload=await response.json();setSaving(false);if(!response.ok)return setError(payload.message||"Falha ao conectar.");setConnection(payload.connection);setMessage("Gmail conectado e validado.");event.currentTarget.reset()};
   const test=async()=>{setSaving(true);setError("");const response=await fetch("/api/email-connection/test",{method:"POST"}),payload=await response.json();setSaving(false);response.ok?setMessage("E-mail de teste enviado para sua conta."):setError(payload.message||"Falha no teste.")};
   const connectGoogle=async()=>{setError("");const response=await fetch("/api/email-connection/google/start",{method:"POST"}),payload=await response.json();if(!response.ok)return setError(payload.message);window.location.href=payload.authUrl};
   const disconnect=async()=>{await fetch("/api/email-connection",{method:"DELETE"});setConnection(null);setMessage("Conexão removida.")};
   if(loading)return <p>Carregando configuração de e-mail…</p>;
-  return <><SettingsHeader icon={Mail} title="E-mail e SMTP" text="Envie acessos do portal e relatórios usando sua própria conta Gmail."/>
-    {connection&&<div className="email-connection-status"><span><Check/></span><div><b>{connection.email}</b><small>{connection.method==="GOOGLE"?"Conectado com Google":"Gmail SMTP"} · validado em {new Date(connection.verifiedAt).toLocaleString("pt-BR")}</small></div><button onClick={()=>void test()} disabled={saving}><Send/> Enviar teste</button><button className="danger-row" onClick={()=>void disconnect()}>Desconectar</button></div>}
-    <div className="gmail-connect-choice"><button className="google-connect" disabled={!googleAvailable} onClick={()=>void connectGoogle()}><b>G</b><span><strong>Entrar com Google</strong><small>{googleAvailable?"Autorize o envio sem informar senha de app.":"OAuth Google ainda não configurado no servidor."}</small></span></button><i>ou</i></div>
+  const google=connection?.method==="GOOGLE";
+  return <><SettingsHeader icon={Mail} title="Conta Google e e-mail" text="Conecte sua conta Google Workspace com um único login: o PW OS envia e-mails pelo seu Gmail e leva agendamentos e reuniões para o seu Google Agenda, com link do Meet."/>
+    {connection&&<div className="email-connection-status"><span><Check/></span><div><b>{connection.email}</b><small>{google?"Conectado com Google":"Gmail SMTP (somente e-mail)"} · validado em {new Date(connection.verifiedAt).toLocaleString("pt-BR")}</small><div className="google-services">{[["Gmail",true],["Google Agenda",!!connection.calendar],["Google Meet",!!connection.calendar]].map(([label,on])=><em key={String(label)} className={on?"on":"off"}>{on?<Check/>:<LockKeyhole/>}{label}</em>)}</div></div><button onClick={()=>void test()} disabled={saving}><Send/> Enviar teste</button><button className="danger-row" onClick={()=>void disconnect()}>Desconectar</button></div>}
+    {connection&&!connection.calendar&&<div className="settings-email-message error"><LockKeyhole/>{google?"Sua conexão é anterior à integração com a agenda. Clique em “Entrar com Google” novamente para liberar o Google Agenda e o Meet.":"A conexão por senha de app só envia e-mails. Entre com Google para sincronizar agenda e reuniões."}</div>}
+    <div className="gmail-connect-choice"><button className="google-connect" disabled={!googleAvailable} onClick={()=>void connectGoogle()}><b>G</b><span><strong>{google&&connection?.calendar?"Reconectar conta Google":"Entrar com Google"}</strong><small>{googleAvailable?"Só fazer login e autorizar: Gmail, Google Agenda e Meet de uma vez.":"OAuth Google ainda não configurado no servidor."}</small></span></button></div>
+    <details className="smtp-alternative"><summary>Prefere usar senha de app? (somente envio de e-mail)</summary>
     <form className="smtp-settings-form" onSubmit={saveSmtp}><label>Nome do remetente<input name="senderName" required defaultValue={connection?.senderName||""} placeholder="Seu nome ou nome da agência"/></label><label>E-mail Gmail / Workspace<input name="email" type="email" required defaultValue={connection?.email||""} placeholder="voce@seudominio.com.br"/></label><label className="full">Senha de app do Google<input name="appPassword" type="password" minLength={16} required placeholder="16 caracteres"/><small>Use uma senha de app; nunca informe a senha normal do Gmail.</small></label><div className="smtp-fixed-data"><span>Servidor <b>smtp.gmail.com</b></span><span>Segurança <b>SSL</b></span><span>Porta <b>465</b></span></div><button className="primary" disabled={saving}><Plug/>{saving?"Testando e salvando…":"Testar e conectar SMTP"}</button></form>
+    </details>
     {message&&<div className="settings-email-message success"><Check/>{message}</div>}{error&&<div className="settings-email-message error"><LockKeyhole/>{error}</div>}
   </>;
 }

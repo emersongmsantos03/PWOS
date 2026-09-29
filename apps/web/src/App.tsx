@@ -19,6 +19,7 @@ import {
   BriefcaseBusiness,
   Camera,
   CalendarDays,
+  CalendarCheck,
   Check,
   ChevronDown,
   CircleDollarSign,
@@ -72,6 +73,7 @@ import { DashboardBoards } from "./DashboardBoards";
 import { CrmManagement } from "./CrmManagement";
 import { TasksManagement } from "./TasksManagement";
 import { CalendarManagement } from "./CalendarManagement";
+import { MeetingsManagement } from "./MeetingsManagement";
 import { OperationalReports } from "./OperationalReports";
 import { PublicProposal } from "./PublicProposal";
 import { ProposalManagement } from "./ProposalManagement";
@@ -99,6 +101,7 @@ const nav = [
   { to: "/propostas", icon: FileSignature, label: "Propostas" },
   { to: "/tarefas", icon: ListTodo, label: "Creative Ops" },
   { to: "/agenda", icon: CalendarDays, label: "Agenda" },
+  { to: "/reunioes", icon: CalendarCheck, label: "Reuniões" },
   { to: "/financeiro", icon: CircleDollarSign, label: "Financeiro" },
   { to: "/midia", icon: Megaphone, label: "Mídia paga" },
   { to: "/relatorios", icon: FileText, label: "Relatórios" },
@@ -238,6 +241,7 @@ function Shell({
     }
   });
   const [mediaMenuOpen, setMediaMenuOpen] = useState(() => location.pathname.startsWith("/midia"));
+  const [meetingsMenuOpen, setMeetingsMenuOpen] = useState(() => location.pathname.startsWith("/reunioes"));
   const [accountMenu, setAccountMenu] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notifications, setNotifications] = useState<MediaNotification[]>([]),
@@ -342,6 +346,7 @@ function Shell({
       "/propostas": "proposals.view",
       "/tarefas": "creative_ops.view",
       "/agenda": "calendar.view",
+      "/reunioes": "meetings.view",
       "/financeiro": "finance.view",
       "/midia": "media.view",
       "/relatorios": "reports.view",
@@ -367,7 +372,20 @@ function Shell({
           <X />
         </button>
         <nav aria-label="Navegação principal">
-          {visibleNav.map((item) => item.to === "/midia" ? (
+          {visibleNav.map((item) => item.to === "/reunioes" ? (
+            <div className={`sidebar-media-group meetings-group ${meetingsMenuOpen ? "open" : ""}`} key={item.to}>
+              <button type="button" className={`sidebar-media-parent ${location.pathname.startsWith("/reunioes") ? "active" : ""}`} onClick={() => setMeetingsMenuOpen((value) => !value)} aria-expanded={meetingsMenuOpen}>
+                <item.icon />{item.label}<ChevronDown className="sidebar-media-chevron" />
+              </button>
+              <div className="sidebar-media-submenu">
+                <NavLink to="/reunioes/agendar" onClick={() => setMenu(false)}>Agendar</NavLink>
+                <NavLink to="/reunioes/agendadas" onClick={() => setMenu(false)}>Agendadas</NavLink>
+                <NavLink to="/reunioes/em-andamento" onClick={() => setMenu(false)}>Em andamento</NavLink>
+                <NavLink to="/reunioes/concluidas" onClick={() => setMenu(false)}>Concluídas</NavLink>
+                <NavLink to="/reunioes/relatorios" onClick={() => setMenu(false)}>Relatórios</NavLink>
+              </div>
+            </div>
+          ) : item.to === "/midia" ? (
             <div className={`sidebar-media-group ${mediaMenuOpen ? "open" : ""}`} key={item.to}>
               <button type="button" className={`sidebar-media-parent ${location.pathname.startsWith("/midia") ? "active" : ""}`} onClick={() => setMediaMenuOpen((value) => !value)} aria-expanded={mediaMenuOpen}>
                 <item.icon />{item.label}<ChevronDown className="sidebar-media-chevron" />
@@ -438,7 +456,7 @@ function Shell({
           </div>
           <div className="top-actions">
             <span className="sync">
-              <span /> Ambiente local
+              <span /> {["localhost", "127.0.0.1"].includes(window.location.hostname) ? "Ambiente local" : "Produção"}
             </span>
             <button
               className="theme-toggle"
@@ -710,6 +728,13 @@ function Shell({
               )
             }
           />
+          <Route path="/reunioes" element={can("meetings.view")?<Navigate to="/reunioes/agendadas" replace />:<Navigate to={firstAccessiblePath} replace />} />
+          <Route path="/reunioes/agendar" element={can("meetings.view")?<MeetingsManagement key="meetings-schedule" view="schedule" user={user} />:<Navigate to={firstAccessiblePath} replace />} />
+          <Route path="/reunioes/agendadas" element={can("meetings.view")?<MeetingsManagement key="meetings-scheduled" view="scheduled" user={user} />:<Navigate to={firstAccessiblePath} replace />} />
+          <Route path="/reunioes/em-andamento" element={can("meetings.view")?<MeetingsManagement key="meetings-live" view="live" user={user} />:<Navigate to={firstAccessiblePath} replace />} />
+          <Route path="/reunioes/concluidas" element={can("meetings.view")?<MeetingsManagement key="meetings-completed" view="completed" user={user} />:<Navigate to={firstAccessiblePath} replace />} />
+          <Route path="/reunioes/relatorios" element={can("meetings.view")?<MeetingsManagement key="meetings-reports" view="reports" user={user} />:<Navigate to={firstAccessiblePath} replace />} />
+          <Route path="/reunioes/:id" element={can("meetings.view")?<MeetingsManagement key="meetings-detail" view="detail" user={user} />:<Navigate to={firstAccessiblePath} replace />} />
           <Route path="/financeiro" element={can("finance.view")?<FinancialManagement />:<Navigate to={firstAccessiblePath} replace />} />
           <Route path="/midia" element={can("media.view")?<Navigate to="/midia/gestao" replace />:<Navigate to={firstAccessiblePath} replace />} />
           <Route path="/midia/hoje" element={can("media.view")?<MediaDashboard key="media-priority-queue" section="TODAY" />:<Navigate to={firstAccessiblePath} replace />} />
@@ -729,6 +754,7 @@ function Shell({
                 profile={user.profile}
                 role={user.role}
                 roleId={user.roleId}
+                currentUserId={user.id}
               /> : <Navigate to={firstAccessiblePath} replace />
             }
           />

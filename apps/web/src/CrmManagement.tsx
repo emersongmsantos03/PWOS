@@ -37,6 +37,7 @@ import {
 import { isValidDocument, maskCurrency, maskDocument, maskPhone, parseCurrency } from "./inputMasks";
 import { DateTimePicker } from "./DateTimePicker";
 import { SearchableSelect } from "./SearchableSelect";
+import { toDateTimeInput } from "./dateInput";
 import "./OpportunityWorkspaceRefinements.css";
 
 type Stage = {
@@ -414,6 +415,17 @@ export function CrmManagement({
   useEffect(() => {
     void load();
   }, []);
+  // Link direto (/crm?opportunity=ID), usado pelo sino e pela Agenda: abre a oportunidade no funil dela.
+  const [deepLinkDone, setDeepLinkDone] = useState(false);
+  useEffect(() => {
+    if (deepLinkDone || !items.length) return;
+    const target = items.find((item) => item.id === new URLSearchParams(window.location.search).get("opportunity"));
+    if (target) {
+      setPipelineId(target.pipelineId);
+      setSelected(target);
+    }
+    setDeepLinkDone(true);
+  }, [items, deepLinkDone]);
   const visible = useMemo(
     () =>
       items.filter(
@@ -3709,7 +3721,7 @@ function OpportunityForm({
                 <input
                   name="nextActionAt"
                   type="datetime-local"
-                  defaultValue={item?.nextActionAt?.slice(0, 16)}
+                  defaultValue={toDateTimeInput(item?.nextActionAt)}
                 />
               </label>
             </div>

@@ -17,3 +17,19 @@
 .access-modal .permission-extra-cell input[type="checkbox"]{width:17px!important;height:17px!important;min-width:17px!important}
 @media(max-width:760px){.access-modal .permission-extra-cell{padding:38px 14px 12px!important;flex-wrap:wrap!important;overflow:visible}.access-modal .permission-extra-cell:before{top:13px!important;transform:none}}
 .department-system-label{display:inline-flex;align-items:center;gap:3px;margin-left:7px;padding:3px 6px;border-radius:999px;background:var(--surface-soft);color:var(--subtle);font-size:6px;font-style:normal;font-weight:750;vertical-align:middle}.department-system-label svg{width:9px;height:9px}.department-row-actions button:disabled{cursor:not-allowed;opacity:.5}
+
+/* Senha provisória: espaço para a terceira ação da linha e janela de redefinição. */
+.access-list-head,.access-user-row{grid-template-columns:35px 1.45fr .72fr .9fr .82fr .7fr 1fr 104px}
+@media(max-width:1050px){.access-list-head,.access-user-row{grid-template-columns:35px 1.4fr .8fr 1fr .8fr 104px}}
+.temporary-password-tag{display:inline-flex;align-items:center;gap:4px;width:max-content;margin-top:3px;padding:1px 7px;border-radius:5px;background:#fff5dc;color:#9a6400;font-size:9.5px;font-style:normal;font-weight:600}
+.temporary-password-tag svg{width:11px}
+html[data-theme="dark"] .temporary-password-tag{background:#3a2e12;color:#f2be4b}
+.temporary-password-input{display:flex;align-items:center;gap:6px}
+.temporary-password-input input{flex:1;min-width:0;font-family:ui-monospace,Menlo,monospace;letter-spacing:.04em}
+.temporary-password-input button{display:grid;place-items:center;flex:0 0 38px;height:38px;border:1px solid var(--border);border-radius:8px;background:transparent;color:inherit}
+.temporary-password-input button svg{width:15px}
+.temporary-password-result{display:flex;align-items:center;gap:10px;margin:6px 0 10px}
+.temporary-password-result code{flex:1;padding:12px 14px;border:1px dashed var(--border);border-radius:8px;font-size:17px;letter-spacing:.06em;word-break:break-all;user-select:all}
+.temporary-password-result button{display:inline-flex;align-items:center;gap:6px}
+.temporary-password-result button svg{width:14px}
+.temporary-password-note{margin:0 0 6px;font-size:11px;opacity:.75}

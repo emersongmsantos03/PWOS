@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { Building2, Check, ChevronDown, Crown, Edit3, KeyRound, LockKeyhole, MoreHorizontal, Plus, Search, ShieldCheck, SlidersHorizontal, Trash2, UserPlus, Users, X } from "lucide-react";
+import { Building2, Check, ChevronDown, Copy, Crown, Edit3, Eye, EyeOff, KeyRound, RefreshCw, LockKeyhole, MoreHorizontal, Plus, Search, ShieldCheck, SlidersHorizontal, Trash2, UserPlus, Users, X } from "lucide-react";
 import "./PermissionRefinements.css";
 import { systemConfirm } from "./SystemDialog";
 
 type Effect = "ALLOW" | "DENY";
-type User = { id: string; name: string; email: string; avatarDataUrl?: string; profile: string; role: string; roleId?: string; departmentId?:string; departmentName?:string; permissionOverrides?: Record<string, Effect> };
+type User = { id: string; name: string; email: string; avatarDataUrl?: string; profile: string; role: string; roleId?: string; departmentId?:string; departmentName?:string; permissionOverrides?: Record<string, Effect>; mustChangePassword?: boolean };
 type Role = { id: string; name: string; description: string; level: number; system: boolean; assignable?: boolean; permissions: string[]; userCount?: number };
 type CatalogModule = { module: string; key: string; actions: string[] };
 type Department={id:string;name:string;description?:string;active:boolean;managerUserId?:string;managerName?:string;system?:boolean};
@@ -19,10 +19,10 @@ const actionNames: Record<string,string> = {
   authorize:"Autorizar", manage_accounts:"Gerenciar contas", manage_campaigns:"Gerenciar campanhas",
   manage_client_access:"Gerenciar portal do cliente", view_logs:"Ver logs", revoke:"Revogar acesso",
   review:"Revisar e aprovar demandas", view_all:"Visualizar todas", edit_all:"Editar todas", edit_team:"Editar demandas da equipe", view_team_demands:"Visualizar demandas da equipe",
-  comment:"Comentar", manage_departments:"Gerenciar setores", create_access:"Criar acesso do cliente"
+  comment:"Comentar", manage_departments:"Gerenciar setores", create_access:"Criar acesso do cliente", reset_password:"Redefinir senha provisória"
 };
 
-export function AccessManagement({permissions,profile,role,roleId}:{permissions:string[];profile:string;role:string;roleId?:string}) {
+export function AccessManagement({permissions,profile,role,roleId,currentUserId}:{permissions:string[];profile:string;role:string;roleId?:string;currentUserId?:string}) {
   const [tab,setTab]=useState<"users"|"roles"|"departments">("users");
   const [users,setUsers]=useState<User[]>([]);
   const [roles,setRoles]=useState<Role[]>([]);
@@ -34,6 +34,7 @@ export function AccessManagement({permissions,profile,role,roleId}:{permissions:
   const [editingRole,setEditingRole]=useState<Role|null>(null);
   const [viewingRoleUsers,setViewingRoleUsers]=useState<Role|null>(null);
   const [deletingUser,setDeletingUser]=useState<User|null>(null);
+  const [resettingUser,setResettingUser]=useState<User|null>(null);
   const [error,setError]=useState("");
   const can=(permission:string)=>profile==="MASTER"||permissions.includes(permission);
   const canDeleteUsers=profile==="MASTER"||roleId==="owner-system-role"||role==="CEO"||role==="Desenvolvedor";
@@ -42,24 +43,25 @@ export function AccessManagement({permissions,profile,role,roleId}:{permissions:
   return <div className="page access-page">
     <div className="page-head"><div><span className="eyebrow">ADMINISTRAÇÃO</span><h1>Equipe e acessos</h1><p>Gerencie usuários, cargos, permissões e setores da organização.</p></div>{tab!=="departments"&&can(tab==="users"?"users.create":"roles.create")&&<button className="primary" onClick={()=>tab==="users"?setNewUser(true):setNewRole(true)}><Plus/> {tab==="users"?"Criar usuário":"Criar cargo"}</button>}</div>
     <div className="access-tabs"><button className={tab==="users"?"active":""} onClick={()=>setTab("users")}><Users/> Usuários <span>{users.length}</span></button><button className={tab==="roles"?"active":""} onClick={()=>setTab("roles")}><ShieldCheck/> Cargos e permissões <span>{roles.length}</span></button><button className={tab==="departments"?"active":""} onClick={()=>setTab("departments")}><Building2/> Setores <span>{departments.length}</span></button></div>
-    {tab==="users"?<UsersPanel users={users} roles={roles} canDelete={canDeleteUsers} onEdit={setEditingUser} onDelete={setDeletingUser}/>:tab==="roles"?<RolesPanel roles={roles} catalog={catalog} onEdit={setEditingRole} onCreate={()=>setNewRole(true)} onViewUsers={setViewingRoleUsers}/>:<DepartmentsPanel departments={departments} users={users} canManage={can("tickets.manage_departments")} onChange={load}/>}
+    {tab==="users"?<UsersPanel users={users} roles={roles} canDelete={canDeleteUsers} canResetPassword={user=>can("users.reset_password")&&user.profile!=="MASTER"&&user.id!==currentUserId&&(profile==="MASTER"||(roles.find(item=>item.id===user.roleId)?.level??0)<=(roles.find(item=>item.id===roleId)?.level??0))} onEdit={setEditingUser} onDelete={setDeletingUser} onResetPassword={setResettingUser}/>:tab==="roles"?<RolesPanel roles={roles} catalog={catalog} onEdit={setEditingRole} onCreate={()=>setNewRole(true)} onViewUsers={setViewingRoleUsers}/>:<DepartmentsPanel departments={departments} users={users} canManage={can("tickets.manage_departments")} onChange={load}/>}
     {newUser&&<NewUserModal roles={roles} departments={departments} error={error} onClose={()=>{setNewUser(false);setError("")}} onSave={async event=>{event.preventDefault();setError("");const formInput=Object.fromEntries(new FormData(event.currentTarget));const input={...formInput,departmentManager:formInput.departmentManager==="on"};const response=await fetch("/api/users",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(input)});const data=await response.json();if(!response.ok)return setError(data.message);setNewUser(false);void load()}}/>}
     {newRole&&<RoleEditor catalog={catalog} onClose={()=>setNewRole(false)} onSave={async input=>{await fetch("/api/roles",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(input)});setNewRole(false);void load()}}/>}
     {editingRole&&<RoleEditor role={editingRole} catalog={catalog} onClose={()=>setEditingRole(null)} onSave={async input=>{await fetch(`/api/roles/${editingRole.id}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(input)});setEditingRole(null);void load()}}/>}
     {editingUser&&<UserAccessEditor user={editingUser} roles={roles} departments={departments} catalog={catalog} canDelete={canDeleteUsers} onDelete={()=>{setDeletingUser(editingUser);setEditingUser(null)}} onClose={()=>setEditingUser(null)} onSave={async input=>{await fetch(`/api/users/${editingUser.id}/access`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(input)});setEditingUser(null);void load()}}/>}
     {viewingRoleUsers&&<RoleUsersModal role={viewingRoleUsers} users={users.filter(user=>user.roleId===viewingRoleUsers.id)} onClose={()=>setViewingRoleUsers(null)}/>}
+    {resettingUser&&<TemporaryPasswordModal user={resettingUser} onClose={()=>setResettingUser(null)} onSaved={()=>void load()}/>}
     {deletingUser&&<DeleteUserModal user={deletingUser} onClose={()=>setDeletingUser(null)} onDeleted={async()=>{setDeletingUser(null);await load()}}/>}
   </div>;
 }
 
-function UsersPanel({users,roles,canDelete,onEdit,onDelete}:{users:User[];roles:Role[];canDelete:boolean;onEdit:(user:User)=>void;onDelete:(user:User)=>void}) {
+function UsersPanel({users,roles,canDelete,canResetPassword,onEdit,onDelete,onResetPassword}:{users:User[];roles:Role[];canDelete:boolean;canResetPassword:(user:User)=>boolean;onEdit:(user:User)=>void;onDelete:(user:User)=>void;onResetPassword:(user:User)=>void}) {
   return <section className="panel access-panel">
     <div className="access-toolbar"><div className="search small"><Search/><input placeholder="Buscar usuário..."/></div><button className="secondary"><SlidersHorizontal/> Filtros</button></div>
     <div className="access-list-head"><span>Usuário</span><span>Perfil técnico</span><span>Cargo</span><span>Setor</span><span>Exceções</span><span>Acesso efetivo</span><span/></div>
     {users.map(user=>{const assignedRole=roles.find(item=>item.id===user.roleId);const overrides=Object.keys(user.permissionOverrides||{}).length;return <div className="access-user-row" key={user.id}>
       <span className="avatar access-user-avatar">{user.avatarDataUrl?<img src={user.avatarDataUrl} alt={`Foto de ${user.name}`}/>:user.name.split(" ").map(part=>part[0]).join("").slice(0,2)}</span>
-      <div><b>{user.name}</b><small>{user.email}</small></div><span className={`technical-profile ${user.profile.toLowerCase()}`}>{user.profile}</span><span>{assignedRole?.name||user.role}</span><span className="user-department">{user.departmentName||"Sem setor"}</span><span className={overrides?"has-overrides":""}>{overrides?`${overrides} ${overrides===1?"ajuste":"ajustes"}`:"Nenhuma"}</span><span className="effective-access"><ShieldCheck/>{user.profile==="MASTER"?"Tudo":`${assignedRole?.permissions.length||0} permissões`}</span>
-      <div className="access-row-actions">{canDelete&&user.profile!=="MASTER"&&<button className="delete" onClick={()=>onDelete(user)} title={`Excluir ${user.name}`}><Trash2/></button>}<button onClick={()=>onEdit(user)} disabled={user.profile==="MASTER"} title={user.profile==="MASTER"?"A conta master tem acesso total protegido":"Editar acesso"}>{user.profile==="MASTER"?<Crown/>:<Edit3/>}</button></div>
+      <div><b>{user.name}</b><small>{user.email}</small>{user.mustChangePassword&&user.profile!=="MASTER"&&<em className="temporary-password-tag" title="A pessoa vai criar a própria senha no próximo login"><KeyRound/>Senha provisória</em>}</div><span className={`technical-profile ${user.profile.toLowerCase()}`}>{user.profile}</span><span>{assignedRole?.name||user.role}</span><span className="user-department">{user.departmentName||"Sem setor"}</span><span className={overrides?"has-overrides":""}>{overrides?`${overrides} ${overrides===1?"ajuste":"ajustes"}`:"Nenhuma"}</span><span className="effective-access"><ShieldCheck/>{user.profile==="MASTER"?"Tudo":`${assignedRole?.permissions.length||0} permissões`}</span>
+      <div className="access-row-actions">{canResetPassword(user)&&<button onClick={()=>onResetPassword(user)} title={`Definir senha provisória para ${user.name}`} aria-label={`Definir senha provisória para ${user.name}`}><KeyRound/></button>}{canDelete&&user.profile!=="MASTER"&&<button className="delete" onClick={()=>onDelete(user)} title={`Excluir ${user.name}`}><Trash2/></button>}<button onClick={()=>onEdit(user)} disabled={user.profile==="MASTER"} title={user.profile==="MASTER"?"A conta master tem acesso total protegido":"Editar acesso"}>{user.profile==="MASTER"?<Crown/>:<Edit3/>}</button></div>
     </div>})}
   </section>;
 }
@@ -159,6 +161,22 @@ function UserAccessEditor({user,roles,departments,catalog,canDelete,onDelete,onC
     <div className="permission-table-wrap"><div className="permission-table user-permission-table"><div className="permission-table-head"><span>Módulo</span>{basicActions.map(action=><span key={action}>{actionNames[action]}</span>)}<span>Ações específicas</span></div>{catalog.map(module=>{const keys=module.actions.map(action=>`${module.key}.${action}`);const extras=module.actions.filter(action=>!basicActions.includes(action));const selected=keys.filter(isAllowed).length;return <div className="permission-table-row" key={module.key}><div className="permission-module-cell"><label><input type="checkbox" checked={selected===keys.length} onChange={()=>toggleModule(module)}/><span><b>{module.module}</b><small>{selected}/{keys.length} concedidas</small></span></label></div>{basicActions.map(action=>{const key=`${module.key}.${action}`;const available=module.actions.includes(action);return <div className="permission-action-cell" key={action}>{available?<label className={overrides[key]?"permission-changed":""} title={`${actionNames[action]} em ${module.module}`}><input type="checkbox" checked={isAllowed(key)} onChange={()=>toggleAccess(key)}/><span>{actionNames[action]}</span></label>:<i>—</i>}</div>})}<div className="permission-extra-cell">{extras.length?extras.map(action=>{const key=`${module.key}.${action}`;return <label className={`${isAllowed(key)?"selected":""} ${overrides[key]?"permission-changed":""}`} key={key}><input type="checkbox" checked={isAllowed(key)} onChange={()=>toggleAccess(key)}/><span>{actionNames[action]||action.replaceAll("_"," ")}</span></label>}):<i>Nenhuma</i>}</div></div>})}</div></div>
     <div className="modal-actions user-access-actions">{canDelete&&<button className="delete-user-action" onClick={onDelete}><Trash2/> Excluir usuário</button>}<button className="secondary" onClick={onClose}>Cancelar</button><button className="primary" onClick={()=>onSave({roleId,departmentId,permissionOverrides:overrides})}>Salvar acesso</button></div>
   </Modal>;
+}
+
+const generatePassword=()=>{
+  const sets=["ABCDEFGHJKLMNPQRSTUVWXYZ","abcdefghijkmnopqrstuvwxyz","23456789","!@#$%&*?"],all=sets.join(""),random=(max:number)=>crypto.getRandomValues(new Uint32Array(1))[0]%max;
+  const chars=[...sets.map(set=>set[random(set.length)]),...Array.from({length:8},()=>all[random(all.length)])];
+  for(let i=chars.length-1;i>0;i--){const j=random(i+1);[chars[i],chars[j]]=[chars[j],chars[i]]}
+  return chars.join("");
+};
+
+function TemporaryPasswordModal({user,onClose,onSaved}:{user:User;onClose:()=>void;onSaved:()=>void}) {
+  const [password,setPassword]=useState(generatePassword),[visible,setVisible]=useState(true),[error,setError]=useState(""),[loading,setLoading]=useState(false),[saved,setSaved]=useState(""),[copied,setCopied]=useState(false);
+  const invalid=password.length<8||/\s/.test(password);
+  const save=async(event:FormEvent<HTMLFormElement>)=>{event.preventDefault();if(invalid)return;setLoading(true);setError("");const response=await fetch(`/api/users/${user.id}/temporary-password`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password})});const data=await response.json().catch(()=>({}));setLoading(false);if(!response.ok){setError(data.message||"Não foi possível redefinir a senha.");return}setSaved(password);onSaved()};
+  const copy=async()=>{try{await navigator.clipboard.writeText(saved);setCopied(true)}catch{setCopied(false)}};
+  if(saved)return <Modal title="Senha provisória definida" subtitle={`Envie a senha abaixo para ${user.name}. Ela vale para um único acesso: no próximo login, o sistema vai pedir que a pessoa crie a própria senha.`} icon={<KeyRound/>} onClose={onClose}><div className="temporary-password-result"><code>{saved}</code><button type="button" className="secondary" onClick={()=>void copy()}>{copied?<Check/>:<Copy/>}{copied?"Copiada":"Copiar"}</button></div><p className="temporary-password-note">Por segurança, esta senha não será exibida novamente e as sessões abertas de {user.name.split(" ")[0]} foram encerradas.</p><div className="modal-actions"><button type="button" className="primary" onClick={onClose}>Concluir</button></div></Modal>;
+  return <Modal title={`Senha provisória para ${user.name}`} subtitle="A senha atual deixa de funcionar agora. Com a provisória, a pessoa entra uma vez e é obrigada a criar a própria senha." icon={<KeyRound/>} onClose={onClose}><form onSubmit={save}><label>Senha provisória<span className="temporary-password-input"><input type={visible?"text":"password"} value={password} onChange={event=>setPassword(event.target.value)} autoFocus autoComplete="new-password" minLength={8} maxLength={128} required/><button type="button" onClick={()=>setVisible(value=>!value)} aria-label={visible?"Ocultar senha":"Mostrar senha"}>{visible?<EyeOff/>:<Eye/>}</button><button type="button" onClick={()=>setPassword(generatePassword())} aria-label="Gerar outra senha" title="Gerar outra senha"><RefreshCw/></button></span><small>Mínimo de 8 caracteres, sem espaços.</small></label>{error&&<div className="form-error">{error}</div>}<div className="modal-actions"><button type="button" className="secondary" onClick={onClose}>Cancelar</button><button className="primary" disabled={invalid||loading}>{loading?"Salvando...":"Definir senha provisória"}</button></div></form></Modal>;
 }
 
 function DeleteUserModal({user,onClose,onDeleted}:{user:User;onClose:()=>void;onDeleted:()=>Promise<void>}) {

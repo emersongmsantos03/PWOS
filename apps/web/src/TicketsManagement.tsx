@@ -3,7 +3,6 @@ import {
   Building2,
   CalendarDays,
   Check,
-  ChevronDown,
   CircleAlert,
   Clock3,
   Edit3,
@@ -15,10 +14,11 @@ import {
   Settings2,
   Trash2,
   UserRound,
-  Users,
   X,
 } from "lucide-react";
 import { systemConfirm } from "./SystemDialog";
+import { SearchableSelect } from "./SearchableSelect";
+import { DateTimePicker } from "./DateTimePicker";
 
 type User = { id: string; name: string; email: string; avatarDataUrl?: string };
 type Department = {
@@ -36,6 +36,7 @@ type Comment = {
   message: string;
   mentions: string[];
   createdAt: string;
+  kind?: "SYSTEM";
 };
 type Ticket = {
   id: string;
@@ -77,6 +78,10 @@ const date = (value: string) =>
         timeStyle: "short",
       }).format(new Date(value))
     : "Sem prazo";
+const isLate = (ticket: Ticket) =>
+  !!ticket.dueAt && !["RESOLVED", "CLOSED"].includes(ticket.status) && new Date(ticket.dueAt).getTime() < Date.now();
+const statusOptions = Object.entries(statusMeta).map(([value, item]) => ({ value, label: item.label }));
+const priorityOptions = Object.entries(priorityMeta).map(([value, item]) => ({ value, label: item.label }));
 
 export function TicketsManagement({ user }: { user: SessionUser }) {
   const [tickets, setTickets] = useState<Ticket[]>([]),
@@ -84,6 +89,9 @@ export function TicketsManagement({ user }: { user: SessionUser }) {
     [users, setUsers] = useState<User[]>([]);
   const [search, setSearch] = useState(""),
     [status, setStatus] = useState("ALL"),
+    [departmentFilter, setDepartmentFilter] = useState(""),
+    [priorityFilter, setPriorityFilter] = useState(""),
+    [scope, setScope] = useState<"ALL" | "MINE" | "REQUESTED" | "LATE">("ALL"),
     [view, setView] = useState<"LIST" | "KANBAN">("LIST");
   const [creating, setCreating] = useState(false),
     [editing, setEditing] = useState<Ticket | null>(null),
@@ -125,6 +133,12 @@ export function TicketsManagement({ user }: { user: SessionUser }) {
       tickets.filter(
         (ticket) =>
           (status === "ALL" || ticket.status === status) &&
+          (!departmentFilter || ticket.departmentId === departmentFilter) &&
+          (!priorityFilter || ticket.priority === priorityFilter) &&
+          (scope === "ALL" ||
+            (scope === "MINE" && ticket.assigneeId === user.id) ||
+            (scope === "REQUESTED" && ticket.requesterId === user.id) ||
+            (scope === "LATE" && isLate(ticket))) &&
           (!search ||
             [
               ticket.code,
@@ -136,7 +150,7 @@ export function TicketsManagement({ user }: { user: SessionUser }) {
               value?.toLowerCase().includes(search.toLowerCase()),
             )),
       ),
-    [tickets, status, search, departments],
+    [tickets, status, departmentFilter, priorityFilter, scope, search, departments, user.id],
   );
   const save = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -228,10 +242,10 @@ export function TicketsManagement({ user }: { user: SessionUser }) {
           </span>
         </article>
         <article>
-          <Users />
+          <CalendarDays />
           <span>
-            <small>Escopo de visualização</small>
-            <b>{canViewAll ? "Todos" : "Participante"}</b>
+            <small>Atrasados</small>
+            <b>{tickets.filter(isLate).length}</b>
           </span>
         </article>
       </section>
@@ -245,28 +259,55 @@ export function TicketsManagement({ user }: { user: SessionUser }) {
               placeholder="Buscar chamado, pessoa ou setor..."
             />
           </div>
-          <label className="ticket-filter">
-            Status
-            <select value={status} onChange={(e) => setStatus(e.target.value)}>
-              <option value="ALL">Todos</option>
-              {Object.entries(statusMeta).map(([key, item]) => (
-                <option key={key} value={key}>
-                  {item.label}
-                </option>
-              ))}
-            </select>
-            <ChevronDown />
-          </label>
+          <div className="ticket-filter-select">
+            <SearchableSelect
+              value={scope}
+              onChange={(value) => setScope(value as typeof scope)}
+              searchable={false}
+              options={[
+                { value: "ALL", label: canViewAll ? "Todos os chamados" : "Chamados que participo" },
+                { value: "MINE", label: "Atribuídos a mim" },
+                { value: "REQUESTED", label: "Abertos por mim" },
+                { value: "LATE", label: "Atrasados" },
+              ]}
+            />
+          </div>
+          <div className="ticket-filter-select">
+            <SearchableSelect
+              value={status}
+              onChange={setStatus}
+              searchable={false}
+              options={[{ value: "ALL", label: "Todos os status" }, ...statusOptions]}
+            />
+          </div>
+          <div className="ticket-filter-select">
+            <SearchableSelect
+              value={departmentFilter}
+              onChange={setDepartmentFilter}
+              searchPlaceholder="Buscar setor..."
+              options={[{ value: "", label: "Todos os setores" }, ...departments.map((d) => ({ value: d.id, label: d.name }))]}
+            />
+          </div>
+          <div className="ticket-filter-select">
+            <SearchableSelect
+              value={priorityFilter}
+              onChange={setPriorityFilter}
+              searchable={false}
+              options={[{ value: "", label: "Todas as prioridades" }, ...priorityOptions]}
+            />
+          </div>
           <div className="ticket-view-toggle">
             <button
               className={view === "LIST" ? "active" : ""}
               onClick={() => setView("LIST")}
+              aria-label="Ver em lista"
             >
               <List />
             </button>
             <button
               className={view === "KANBAN" ? "active" : ""}
               onClick={() => setView("KANBAN")}
+              aria-label="Ver em quadro"
             >
               <KanbanSquare />
             </button>
@@ -316,7 +357,10 @@ export function TicketsManagement({ user }: { user: SessionUser }) {
                 </span>
                 <TicketPill kind="priority" value={ticket.priority} />
                 <TicketPill kind="status" value={ticket.status} />
-                <span>{date(ticket.dueAt)}</span>
+                <span className={isLate(ticket) ? "ticket-due late" : "ticket-due"}>
+                  {date(ticket.dueAt)}
+                  {isLate(ticket) && <em>Atrasado</em>}
+                </span>
               </button>
             ))}
           </div>
@@ -346,6 +390,7 @@ export function TicketsManagement({ user }: { user: SessionUser }) {
                         }
                       </span>
                       <TicketPill kind="priority" value={ticket.priority} />
+                      {isLate(ticket) && <em className="ticket-late-badge">Atrasado · {date(ticket.dueAt)}</em>}
                     </button>
                   ))}
               </section>
@@ -465,87 +510,64 @@ function TicketForm({
               <span className="ticket-field-label">
                 <Building2 /> Setor *
               </span>
-              <div className="ticket-select-control">
-                <select
-                  name="departmentId"
-                  defaultValue={ticket?.departmentId}
-                  required
-                >
-                  <option value="">Selecione...</option>
-                  {departments
-                    .filter((d) => d.active)
-                    .map((d) => (
-                      <option value={d.id} key={d.id}>
-                        {d.name}
-                      </option>
-                    ))}
-                </select>
-                <ChevronDown />
-              </div>
+              <SearchableSelect
+                name="departmentId"
+                defaultValue={ticket?.departmentId || ""}
+                required
+                placeholder="Selecione o setor"
+                searchPlaceholder="Buscar setor..."
+                options={departments
+                  .filter((d) => d.active || d.id === ticket?.departmentId)
+                  .map((d) => ({ value: d.id, label: d.name, description: d.managerName ? `Responsável: ${d.managerName}` : undefined }))}
+              />
             </label>
             {canAssign && (
               <label>
                 <span className="ticket-field-label">
                   <UserRound /> Responsável *
                 </span>
-                <div className="ticket-select-control">
-                  <select
-                    name="assigneeId"
-                    defaultValue={ticket?.assigneeId}
-                    required
-                  >
-                    <option value="">Selecione...</option>
-                    {users.map((user) => (
-                      <option value={user.id} key={user.id}>
-                        {user.name}
-                      </option>
-                    ))}
-                  </select>
-                  <ChevronDown />
-                </div>
+                <SearchableSelect
+                  name="assigneeId"
+                  defaultValue={ticket?.assigneeId || ""}
+                  required
+                  placeholder="Selecione o responsável"
+                  searchPlaceholder="Buscar pessoa..."
+                  options={users.map((user) => ({ value: user.id, label: user.name, description: user.email }))}
+                />
               </label>
             )}
             <label>
               <span className="ticket-field-label">
                 <CircleAlert /> Prioridade
               </span>
-              <div className="ticket-select-control">
-                <select
-                  name="priority"
-                  defaultValue={ticket?.priority || "MEDIUM"}
-                >
-                  {Object.entries(priorityMeta).map(([key, item]) => (
-                    <option value={key} key={key}>
-                      {item.label}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown />
-              </div>
+              <SearchableSelect
+                name="priority"
+                defaultValue={ticket?.priority || "MEDIUM"}
+                searchable={false}
+                options={priorityOptions}
+              />
             </label>
             {ticket && (
               <label>
                 <span className="ticket-field-label">
                   <Check /> Status
                 </span>
-                <div className="ticket-select-control">
-                  <select name="status" defaultValue={ticket.status}>
-                    {Object.entries(statusMeta).map(([key, item]) => (
-                      <option value={key} key={key}>
-                        {item.label}
-                      </option>
-                    ))}
-                  </select>
-                  <ChevronDown />
-                </div>
+                <SearchableSelect
+                  name="status"
+                  defaultValue={ticket.status}
+                  searchable={false}
+                  options={statusOptions}
+                />
               </label>
             )}
             <label>
-              Prazo
-              <input
+              <span className="ticket-field-label">
+                <CalendarDays /> Prazo
+              </span>
+              <DateTimePicker
                 name="dueAt"
-                type="datetime-local"
-                defaultValue={ticket?.dueAt?.slice(0, 16)}
+                defaultValue={ticket?.dueAt || ""}
+                placeholder="Sem prazo"
               />
             </label>
             <label className="full">
@@ -687,7 +709,10 @@ function TicketDetails({
             </div>
             <div>
               <small>Prazo</small>
-              <b>{date(ticket.dueAt)}</b>
+              <b className={isLate(ticket) ? "negative" : ""}>
+                {date(ticket.dueAt)}
+                {isLate(ticket) && " · atrasado"}
+              </b>
             </div>
           </section>
           <section>
@@ -696,11 +721,18 @@ function TicketDetails({
           </section>
           <section>
             <div className="ticket-section-title">
-              <h3>Conversa e atualizações</h3>
-              <span>{ticket.comments.length}</span>
+              <h3>Conversa e histórico</h3>
+              <span>{ticket.comments.filter((item) => item.kind !== "SYSTEM").length}</span>
             </div>
             <div className="ticket-comments">
-              {ticket.comments.map((item) => (
+              {ticket.comments.map((item) => item.kind === "SYSTEM" ? (
+                <article key={item.id} className="system">
+                  <span><Clock3 /></span>
+                  <div>
+                    <p><b>{item.authorName}</b> {item.message} · <time>{date(item.createdAt)}</time></p>
+                  </div>
+                </article>
+              ) : (
                 <article key={item.id}>
                   <span>
                     {item.authorName
@@ -746,16 +778,14 @@ function TicketDetails({
                 {error && <small className="negative">{error}</small>}
                 <div>
                   {canEdit && (
-                    <select
-                      value={ticket.status}
-                      onChange={(e) => updateStatus(e.target.value)}
-                    >
-                      {Object.entries(statusMeta).map(([key, item]) => (
-                        <option key={key} value={key}>
-                          {item.label}
-                        </option>
-                      ))}
-                    </select>
+                    <div className="ticket-status-select">
+                      <SearchableSelect
+                        value={ticket.status}
+                        onChange={(value) => void updateStatus(value)}
+                        searchable={false}
+                        options={statusOptions}
+                      />
+                    </div>
                   )}
                   {canComment && (
                     <button

@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, symlinkSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, symlinkSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -10,6 +10,8 @@ mkdirSync(join(dir,'data')); symlinkSync(join(root,'dist'),join(dir,'dist'));
 const write=(name,value)=>writeFileSync(join(dir,'data',name),JSON.stringify(value));
 write('users.local.json',['reader','other','denied'].map(id=>({id,name:id,email:id+'@example.invalid',profile:'EMPLOYEE',roleId:'reader',permissionOverrides:{'media.view':id==='denied'?'DENY':'ALLOW','media.sync':'DENY'},salt:'test',passwordHash:scryptSync(password,'test',64).toString('hex'),mustChangePassword:false})));
 write('roles.local.json',[{id:'reader',name:'Reader',level:1,permissions:['media.view']}]);
+// Formato antigo (um único arquivo com todos os períodos): deve ser migrado na inicialização.
+write('media-metric-snapshots.local.json',[{id:'META_ADS:2020-02-01:2020-02-01',platform:'META_ADS',since:'2020-02-01',until:'2020-02-01',syncedAt:'2020-02-02T00:00:00.000Z',schemaVersion:11,accounts:[],campaigns:[{id:'legacy'}]}]);
 const calls=join(dir,'calls.log');writeFileSync(calls,'');
 const env={...process.env,PW_OS_MASTER_EMAIL:'master@example.invalid',PW_OS_MASTER_INITIAL_PASSWORD:password,FIREBASE_ENABLED:'false',META_ADS_ACCESS_TOKEN:'fixture-meta',GOOGLE_ADS_CLIENT_ID:'fixture-client',GOOGLE_ADS_CLIENT_SECRET:'fixture-secret',GOOGLE_ADS_DEVELOPER_TOKEN:'fixture-developer',GOOGLE_ADS_REFRESH_TOKEN:'fixture-refresh',MEDIA_TEST_CALLS:calls};
 const server=spawn(process.execPath,['--import',join(root,'scripts/fixtures/media-provider-fetch.mjs'),join(root,'node_modules/vite/bin/vite.js'),'preview','--config',join(root,'vite.config.ts'),'--host','127.0.0.1','--port','5199','--strictPort'],{cwd:dir,env,stdio:['ignore','pipe','pipe']});
@@ -20,11 +22,14 @@ try {
   let ready=false;
   for(let i=0;i<100;i++){try{if((await fetch(base+'/health')).ok){ready=true;break}}catch{}await new Promise(r=>setTimeout(r,200))}
   assert.ok(ready,output.slice(-2000));
+  assert.ok(existsSync(join(dir,'data','media-metric-snapshots.local.json.migrated')),'The legacy single-file history is migrated on startup');
   const sessions={};
   for(const id of ['reader','other','denied']){
     const login=await fetch(base+'/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:id+'@example.invalid',password})});
     assert.equal(login.status,200);sessions[id]={Cookie:login.headers.get('set-cookie').split(';')[0]};
   }
+  const migrated=await fetch(base+'/media/history?platform=META_ADS&since=2020-02-01&until=2020-02-01',{headers:sessions.reader});
+  assert.equal(migrated.status,200);assert.equal((await migrated.json()).campaigns[0].id,'legacy');
   const request=async(provider,since,extra='',user='reader')=>{
     const response=await fetch(base+'/media/'+provider+'/campaigns?since='+since+'&until='+since+extra,{headers:sessions[user]});
     return {status:response.status,payload:await response.json()};
@@ -52,11 +57,10 @@ try {
     const failed=await request(provider,'2020-01-01');
     assert.equal(failed.status,502,'Never return a different period on provider errors');
     assert.equal(failed.payload.since,undefined);
-    const historyPath=join(dir,'data','media-metric-snapshots.local.json');
-    const history=JSON.parse(readFileSync(historyPath,'utf8'));
-    const saved=history.find(item=>item.platform===(provider==='meta'?'META_ADS':'GOOGLE_ADS') && item.since==='2026-08-01');
+    const historyPath=join(dir,'data','media-metric-snapshots',(provider==='meta'?'META_ADS':'GOOGLE_ADS')+'_2026-08-01_2026-08-01.json');
+    const saved=JSON.parse(readFileSync(historyPath,'utf8'));
     saved.syncedAt='2021-01-01T00:00:00.000Z';
-    writeFileSync(historyPath,JSON.stringify(history));
+    writeFileSync(historyPath,JSON.stringify(saved));
     const expired=await request(provider,'2026-08-01');
     assert.equal(expired.status,200);
     assert.equal(expired.payload.cache?.status,'stale','A normal load never blocks on the provider; it serves the stale snapshot instantly');

@@ -102,10 +102,13 @@ type Campaign = {
   verifiedBy?: string | null;
   searchTerms?: Array<{ term: string; clicks: number; impressions: number; leads: number; spend: number }>;
   optimizationHistory?: Array<{ value: string; capturedAt: string }>;
-  verificationHistory?: Array<{ action: "ANALYSIS" | "REVIEW" | "REPORT_DOWNLOADED" | "REPORT_SENT"; createdAt: string; userId: string; userName: string; score?: number; spend?: number; leads?: number; cpl?: number | null; periodDays?: number; recipientCount?: number }>;
+  verificationHistory?: Array<{ action: "ANALYSIS" | "REVIEW" | "REPORT_DOWNLOADED" | "REPORT_SENT"; createdAt: string; userId: string; userName: string; score?: number; spend?: number; leads?: number; cpl?: number | null; periodDays?: number; recipientCount?: number; comment?: string; snapshot?: CampaignReviewSnapshot }>;
   geography?: Array<{ name: string; level: "REGION" | "CITY" | "NEIGHBORHOOD"; leads: number; clicks: number; spend: number; source?: "PERFORMANCE" | "TARGETING" }>;
   ads?: CampaignAd[];
 };
+// Dados da campanha registrados junto com cada revisão.
+type CampaignReviewSnapshot = { name?: string; status?: string; objective?: string; since?: string; until?: string; dailyBudget?: number; lifetimeBudget?: number; balance?: number | null; impressions?: number; clicks?: number; ctr?: number; reach?: number; frequency?: number };
+const campaignReviewCommentMinLength = 10;
 type CampaignCreative = {
   id?: string;
   name?: string;
@@ -636,7 +639,6 @@ function ClientCampaignGroup({
   canManage,
   periodDays,
   onAnalyze,
-  onVerify,
 }: {
   group: ClientGroup;
   initialOpen: boolean;
@@ -647,7 +649,6 @@ function ClientCampaignGroup({
   canManage: boolean;
   periodDays: number;
   onAnalyze: (campaign: Campaign) => void;
-  onVerify: (campaign: Campaign) => Promise<void>;
   onAssign: (
     platform: "META_ADS" | "GOOGLE_ADS",
     accountIds: string[],
@@ -959,7 +960,6 @@ function TvRotationBoard({
   onAssign,
   periodDays,
   onAnalyze,
-  onVerify,
   canManage,
   platformLabel,
 }: {
@@ -971,7 +971,6 @@ function TvRotationBoard({
   platformLabel: string;
   periodDays: number;
   onAnalyze: (campaign: Campaign) => void;
-  onVerify: (campaign: Campaign) => Promise<void>;
   canManage: boolean;
   onAssign: (
     platform: "META_ADS" | "GOOGLE_ADS",
@@ -1030,7 +1029,6 @@ function TvRotationBoard({
           canManage={canManage}
           periodDays={periodDays}
           onAnalyze={onAnalyze}
-          onVerify={onVerify}
         />
       </div>
     </section>
@@ -1778,19 +1776,6 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
     window.history.replaceState({}, "", `${window.location.pathname}?${params}`);
     setManagementView("CAMPAIGNS");
   };
-  const markCampaignAnalyzed = async (campaign: Campaign) => {
-    const response = await fetch("/api/media/campaigns/verification", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ platform: campaign.platform, accountId: campaign.accountId, campaignId: campaign.id, verified: true, action: "REVIEW", score: campaignScore(campaign), spend: campaign.spend, leads: campaign.leads, cpl: campaign.cpl }),
-    });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.message || "Não foi possível concluir a análise.");
-    campaign.verified = true;
-    campaign.verifiedAt = result.verifiedAt || new Date().toISOString();
-    campaign.verificationHistory = result.history || campaign.verificationHistory;
-    setData((current) => current ? { ...current, campaigns: [...current.campaigns] } : current);
-  };
   const todayTotalPages = Math.max(1, Math.ceil(todayRows.length / 20)), todaySafePage = Math.min(todayPage, todayTotalPages), todayVisible = todayRows.slice((todaySafePage - 1) * 20, todaySafePage * 20);
   const criticalCampaigns = allCampaigns.filter((item) => { const score = campaignScore(item); return hasDelivery(item) && (item.status === "WITH_ISSUES" || score < 70); }),
     spendWithoutResults = allCampaigns.filter((item) => hasDelivery(item) && item.spend > Math.max(item.dailyBudget * 2, 200) && item.leads + item.conversations === 0),
@@ -1922,7 +1907,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
                 </b>
                 <em>
                   {overall.reachAvailable
-                    ? "Usuários únicos informados pelo Google"
+                    ? `Usuários únicos informados ${platform === "GOOGLE_ADS" ? "pelo Google" : platform === "META_ADS" ? "pela Meta" : "pelas plataformas"}`
                     : "Métrica não fornecida"}
                 </em>
               </span>
@@ -2038,7 +2023,6 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
               onAssign={saveAssignment}
               periodDays={periodDays}
               onAnalyze={openCampaignAnalysis}
-              onVerify={markCampaignAnalyzed}
               canManage={canManageAssignments}
               platformLabel={platform === "GOOGLE_ADS" ? "Google Ads" : platform === "META_ADS" ? "Meta Ads" : "Todas as mídias"}
             />
@@ -2133,7 +2117,6 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
                     canManage={canManageAssignments}
                     periodDays={periodDays}
                     onAnalyze={openCampaignAnalysis}
-                    onVerify={markCampaignAnalyzed}
                   />
                 ))}
               </section>
@@ -2847,22 +2830,6 @@ function CampaignReport({
       };
     })
     .sort((a, b) => b.score - a.score);
-  const verifyCampaign = async (campaign: Campaign) => {
-    const response = await fetch("/api/media/campaigns/verification", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ platform: campaign.platform, accountId: campaign.accountId, campaignId: campaign.id, verified: true, action: "REVIEW", score: campaignScore(campaign), spend: campaign.spend, leads: campaign.leads, cpl: campaign.cpl }),
-    });
-    if (response.ok) {
-      const payload = await response.json();
-      campaign.verified = true;
-      campaign.verifiedAt = payload.verifiedAt || new Date().toISOString();
-      campaign.verificationHistory = payload.history || campaign.verificationHistory;
-      const source = campaigns.find((item) => item.id === campaign.id && item.accountId === campaign.accountId && item.platform === campaign.platform);
-      if (source) Object.assign(source, { verified: true, verifiedAt: campaign.verifiedAt, verificationHistory: campaign.verificationHistory });
-      setVerificationRevision((value) => value + 1);
-    }
-  };
   const analyzeCampaign = (campaign: Campaign, campaignKey: string) => {
     setSelectedId(campaignKey);
     void fetch("/api/media/campaigns/verification", {
@@ -2942,7 +2909,7 @@ function CampaignReport({
         <div className="campaign-review-filter" role="group" aria-label="Situação da verificação"><button type="button" className={review === "ALL" ? "active" : ""} onClick={() => setReview("ALL")}>Todas</button><button type="button" className={review === "PENDING" ? "active pending" : ""} onClick={() => setReview("PENDING")}><Clock3/> Pendentes <b>{pendingReviewCount}</b></button></div>
         <details className="campaign-more-filters"><summary>Ajustar filtros {advancedFilterCount > 0 && <b>{advancedFilterCount}</b>}<ChevronDown/></summary><div className="campaign-more-filters-popover"><header><span><b>Filtros da tabela</b><small>Refine somente quando necessário.</small></span>{advancedFilterCount > 0 && <button type="button" onClick={() => { setScope("ACTIVE"); setHealth("ALL"); setObjective("ALL"); setSort("spend"); }}>Limpar</button>}</header><div className="campaign-standard-filter"><SearchableSelect searchable={false} value={scope} onChange={(value) => setScope(value as typeof scope)} options={[{ value: "ACTIVE", label: "Campanhas ativas" }, { value: "INACTIVE", label: "Campanhas inativas" }, { value: "ALL", label: "Todas as campanhas" }]} /></div><div className="campaign-standard-filter campaign-health-filter"><SearchableSelect searchable={false} value={health} onChange={(value) => setHealth(value as typeof health)} options={[{ value: "ALL", label: "Todas as avaliações" }, { value: "NEEDS_ATTENTION", label: "Precisam de atenção" }, { value: "GOOD", label: "Bom (90–100)" }, { value: "WARNING", label: "Atenção (70–89)" }, { value: "CRITICAL", label: "Crítico (0–69)" }]} /></div><div className="campaign-standard-filter"><SearchableSelect searchable={false} value={objective} onChange={setObjective} options={[{ value: "ALL", label: "Todos os objetivos" }, ...objectives.map((item) => ({ value: item, label: objectiveLabel(item) }))]} /></div><div className="campaign-standard-filter"><SearchableSelect searchable={false} value={sort} onChange={(value) => setSort(value as typeof sort)} options={[{ value: "spend", label: "Maior investimento" }, { value: "lowest_spend", label: "Menor investimento" }, { value: "leads", label: "Mais conversões" }, { value: "fewest_leads", label: "Menos conversões" }, { value: "score", label: "Maior score" }, { value: "worst_score", label: "Menor score" }, { value: "cpl", label: "Menor CPL" }, { value: "highest_cpl", label: "Maior CPL" }]} /></div><footer><button type="button" className={`campaign-density ${compactTable ? "active" : ""}`} onClick={() => setCompactTable((value) => !value)}><Gauge/> {compactTable ? "Tabela compacta" : "Tabela confortável"}</button><details className="campaign-columns"><summary><Eye/> Escolher colunas</summary><div className="campaign-columns-popover">{Object.entries({ balance: "Saldo", impressions: "Impressões", clicks: "Cliques", ctr: "CTR", review: "Revisão" }).map(([key,label]) => <label key={key}><input type="checkbox" checked={visibleMetrics[key as keyof typeof visibleMetrics]} onChange={(event) => setVisibleMetrics((current) => ({ ...current, [key]: event.target.checked }))}/><span>{label}</span></label>)}</div></details></footer></div></details>
       </section>
-      {!!selectedCampaigns.length && <div className="campaign-bulk-bar"><b>{selectedCampaigns.length} selecionada(s)</b><button onClick={() => { const first = rows.find((item) => selectedCampaigns.includes(`${item.platform}:${item.accountId}:${item.id}`)); if (first) analyzeCampaign(first, `${first.platform}:${first.accountId}:${first.id}`); }}>Analisar primeira</button><button onClick={() => void Promise.all(rows.filter((item) => selectedCampaigns.includes(`${item.platform}:${item.accountId}:${item.id}`)).map(verifyCampaign)).then(() => setSelectedCampaigns([]))}>Marcar verificadas</button><button onClick={() => setSelectedCampaigns([])}>Limpar seleção</button></div>}
+      {!!selectedCampaigns.length && <div className="campaign-bulk-bar"><b>{selectedCampaigns.length} selecionada(s)</b><button onClick={() => { const first = rows.find((item) => selectedCampaigns.includes(`${item.platform}:${item.accountId}:${item.id}`)); if (first) analyzeCampaign(first, `${first.platform}:${first.accountId}:${first.id}`); }}>Analisar primeira</button><button onClick={() => setSelectedCampaigns([])}>Limpar seleção</button></div>}
       <div className={`campaign-report-table ${compactTable ? "compact" : ""} ${!visibleMetrics.balance ? "hide-balance" : ""} ${!visibleMetrics.impressions ? "hide-impressions" : ""} ${!visibleMetrics.clicks ? "hide-clicks" : ""} ${!visibleMetrics.ctr ? "hide-ctr" : ""} ${!visibleMetrics.review ? "hide-review" : ""}`} ref={tableRef}>
         <table>
           <colgroup>
@@ -3085,7 +3052,7 @@ function CampaignReport({
           )}
         </article>
       </section>}
-      {selected && <CampaignAnalysisDrawer campaign={selected} periodDays={periodDays} onClose={() => { setSelectedId(null); onAnalysisClosed?.(); }} onVerified={(history, verifiedAt) => {
+      {selected && <CampaignAnalysisDrawer campaign={selected} periodDays={periodDays} since={since} until={until} onClose={() => { setSelectedId(null); onAnalysisClosed?.(); }} onVerified={(history, verifiedAt) => {
         const source = campaigns.find((item) => item.id === selected.id && item.accountId === selected.accountId && item.platform === selected.platform);
         if (source) Object.assign(source, { verified: true, verifiedAt, verificationHistory: history });
         setVerificationRevision((value) => value + 1);
@@ -3130,9 +3097,11 @@ type AnalyzedCampaign = Campaign & {
   groupName: string;
 };
 
-function CampaignAnalysisDrawer({ campaign, periodDays, onClose, onVerified }: {
+function CampaignAnalysisDrawer({ campaign, periodDays, since, until, onClose, onVerified }: {
   campaign: AnalyzedCampaign;
   periodDays: number;
+  since: string;
+  until: string;
   onClose: () => void;
   onVerified: (history: NonNullable<Campaign["verificationHistory"]>, verifiedAt: string) => void;
 }) {
@@ -3141,6 +3110,8 @@ function CampaignAnalysisDrawer({ campaign, periodDays, onClose, onVerified }: {
     [reportNotice, setReportNotice] = useState(""),
     [reportAction, setReportAction] = useState<"EXPORT" | "SEND" | null>(null),
     [verifying, setVerifying] = useState(false),
+    [reviewComposerOpen, setReviewComposerOpen] = useState(false),
+    [reviewComment, setReviewComment] = useState(""),
     [campaignAi, setCampaignAi] = useState<MediaAiInsight | null>(null),
     [campaignAiLoading, setCampaignAiLoading] = useState(false),
     [campaignAiError, setCampaignAiError] = useState(""),
@@ -3275,16 +3246,20 @@ function CampaignAnalysisDrawer({ campaign, periodDays, onClose, onVerified }: {
     try { await recordReportAction("REPORT_SENT"); }
     finally { setReportAction(null); }
   };
-  const toggleVerified = async () => {
+  const reviewCommentReady = reviewComment.trim().length >= campaignReviewCommentMinLength;
+  const submitReview = async () => {
+    if (!reviewCommentReady || verifying) return;
+    const snapshot: CampaignReviewSnapshot = { name: campaign.name, status: campaign.status, objective: campaign.objective, since, until, dailyBudget: campaign.dailyBudget, lifetimeBudget: campaign.lifetimeBudget, balance: campaign.balanceAvailable ? campaign.balance : null, impressions: campaign.impressions, clicks: campaign.clicks, ctr, ...(campaign.reach >= 0 ? { reach: campaign.reach } : {}), ...(campaign.frequency >= 0 ? { frequency: campaign.frequency } : {}) };
     setVerifying(true); setReportNotice("");
     const controller = new AbortController(), timeout = window.setTimeout(() => controller.abort(), 15_000);
     try {
-      const response = await fetch("/api/media/campaigns/verification", { method: "PATCH", headers: { "Content-Type": "application/json" }, signal: controller.signal, body: JSON.stringify({ platform: campaign.platform, accountId: campaign.accountId, campaignId: campaign.id, verified: true, action: "REVIEW", score: campaign.score, spend: campaign.spend, leads: campaign.leads, cpl: campaign.cpl }) }), result = await response.json();
+      const response = await fetch("/api/media/campaigns/verification", { method: "PATCH", headers: { "Content-Type": "application/json" }, signal: controller.signal, body: JSON.stringify({ platform: campaign.platform, accountId: campaign.accountId, campaignId: campaign.id, verified: true, action: "REVIEW", score: campaign.score, spend: campaign.spend, leads: campaign.leads, cpl: campaign.cpl, periodDays, comment: reviewComment.trim(), snapshot }) }), result = await response.json();
       if (!response.ok) { setReportNotice(result.message || "Não foi possível concluir a revisão."); return; }
       campaign.verified = true;
       campaign.verifiedAt = result.verifiedAt;
       campaign.verificationHistory = result.history || campaign.verificationHistory;
       onVerified(result.history || [], result.verifiedAt);
+      setReviewComposerOpen(false); setReviewComment("");
       setReportNotice("Revisão concluída. A campanha ficará analisada pelos próximos 7 dias.");
     } catch (error) { setReportNotice(error instanceof DOMException && error.name === "AbortError" ? "A confirmação demorou mais que o esperado. Atualize a página para confirmar o resultado antes de tentar novamente." : "Falha de conexão ao concluir a revisão. Tente novamente."); }
     finally { window.clearTimeout(timeout); setVerifying(false); }
@@ -3368,8 +3343,10 @@ function CampaignAnalysisDrawer({ campaign, periodDays, onClose, onVerified }: {
               {[...campaign.verificationHistory].reverse().map((entry, index) => (
                 <article key={`${entry.createdAt}:${entry.action}:${index}`}>
                   <i className={entry.action.toLowerCase()}>{entry.action === "REVIEW" ? <CheckCircle2 /> : entry.action === "REPORT_DOWNLOADED" ? <Download /> : entry.action === "REPORT_SENT" ? <Send /> : <BarChart3 />}</i>
-                  <span><b>{entry.action === "REVIEW" ? "Campanha revisada" : entry.action === "REPORT_DOWNLOADED" ? "Relatório baixado" : entry.action === "REPORT_SENT" ? "Relatório enviado ao cliente" : "Análise aberta"}</b><small>{entry.userName} · {new Date(entry.createdAt).toLocaleString("pt-BR")}{entry.periodDays ? ` · Período de ${entry.periodDays} dias` : ""}</small></span>
+                  <span><b>{entry.action === "REVIEW" ? "Campanha revisada" : entry.action === "REPORT_DOWNLOADED" ? "Relatório baixado" : entry.action === "REPORT_SENT" ? "Relatório enviado ao cliente" : "Análise aberta"}</b><small>{entry.userName} · {new Date(entry.createdAt).toLocaleString("pt-BR")}{entry.snapshot?.since && entry.snapshot.until ? ` · Período ${shortDate(entry.snapshot.since)} a ${shortDate(entry.snapshot.until)}` : entry.periodDays ? ` · Período de ${entry.periodDays} dias` : ""}</small></span>
                   <dl><div><dt>Score</dt><dd>{entry.score != null && entry.score >= 0 ? entry.score : "—"}</dd></div><div><dt>Investimento</dt><dd>{entry.spend != null ? money(entry.spend, campaign.currency) : "—"}</dd></div><div><dt>Conversões</dt><dd>{entry.leads != null ? number(entry.leads) : "—"}</dd></div><div><dt>CPL</dt><dd>{entry.cpl != null ? money(entry.cpl, campaign.currency) : "—"}</dd></div></dl>
+                  {entry.action === "REVIEW" && <blockquote className={entry.comment ? "" : "empty"}>{entry.comment || "Revisão registrada antes da obrigatoriedade de comentário."}</blockquote>}
+                  {entry.snapshot && <details className="campaign-review-snapshot"><summary>Dados da campanha nesta revisão</summary><dl>{entry.snapshot.status && <div><dt>Status</dt><dd>{statusLabel[entry.snapshot.status] || entry.snapshot.status}</dd></div>}{entry.snapshot.dailyBudget != null && entry.snapshot.dailyBudget > 0 && <div><dt>Orçamento diário</dt><dd>{money(entry.snapshot.dailyBudget, campaign.currency)}</dd></div>}{entry.snapshot.lifetimeBudget != null && entry.snapshot.lifetimeBudget > 0 && <div><dt>Orçamento total</dt><dd>{money(entry.snapshot.lifetimeBudget, campaign.currency)}</dd></div>}<div><dt>Saldo restante</dt><dd>{entry.snapshot.balance != null ? money(entry.snapshot.balance, campaign.currency) : "—"}</dd></div>{entry.snapshot.impressions != null && <div><dt>Impressões</dt><dd>{number(entry.snapshot.impressions)}</dd></div>}{entry.snapshot.clicks != null && <div><dt>Cliques</dt><dd>{number(entry.snapshot.clicks)}</dd></div>}{entry.snapshot.ctr != null && <div><dt>CTR</dt><dd>{number(entry.snapshot.ctr, 2)}%</dd></div>}{entry.snapshot.reach != null && <div><dt>Alcance</dt><dd>{number(entry.snapshot.reach)}</dd></div>}{entry.snapshot.frequency != null && <div><dt>Frequência</dt><dd>{number(entry.snapshot.frequency, 2)}</dd></div>}</dl></details>}
                 </article>
               ))}
             </div>
@@ -3377,7 +3354,12 @@ function CampaignAnalysisDrawer({ campaign, periodDays, onClose, onVerified }: {
         </section>
         <section className="campaign-client-report"><header><div><small>RELATÓRIO DE PERFORMANCE</small><h2>{campaign.groupName}</h2><p>{campaign.name} · Últimos {periodDays} dias</p></div><span><CalendarDays /><b>{periodDays} dias</b><small>período analisado</small></span></header><div className="client-report-metrics"><ReportMetric label="Orçamento" value={money(budget, campaign.currency)} /><ReportMetric label="Investimento" value={money(campaign.spend, campaign.currency)} /><ReportMetric label="Saldo restante" value={campaign.balanceAvailable ? money(campaign.balance, campaign.currency) : "Não informado"} /><ReportMetric label="Impressões" value={number(campaign.impressions)} /><ReportMetric label="Cliques" value={number(campaign.clicks)} /><ReportMetric label="CTR" value={`${number(ctr, 2)}%`} /><ReportMetric label="Conversões" value={number(campaign.leads)} /><ReportMetric label="CPL" value={campaign.cpl == null ? "—" : money(campaign.cpl, campaign.currency)} /><ReportMetric label="Alcance" value={campaign.reach >= 0 ? number(campaign.reach) : "—"} /><ReportMetric label="Frequência" value={campaign.frequency >= 0 ? number(campaign.frequency, 2) : "—"} /><ReportMetric label="Conversão clique/lead" value={`${number(conversionRate, 2)}%`} /><ReportMetric label="Uso do orçamento" value={`${number(budgetUse, 1)}%`} /></div><div className="client-report-highlights"><article><span><Target /></span><div><small>RESULTADO DO PERÍODO</small><b>{number(campaign.leads)} conversões</b><p>{campaign.cpl == null ? "Custo por conversão ainda não calculável." : `Custo médio de ${money(campaign.cpl, campaign.currency)} por conversão.`}</p></div></article><article><span><TrendingUp /></span><div><small>LEITURA DE PERFORMANCE</small><b>{campaign.score >= 90 ? "Desempenho saudável" : campaign.score >= 70 ? "Boa entrega, com espaço para evoluir" : "Campanha em fase de otimização"}</b><p>{ctr >= 2 ? `CTR de ${number(ctr, 2)}% indica boa aderência do anúncio ao público.` : "Seguimos otimizando criativos e público para elevar a taxa de cliques."}</p></div></article></div><footer><span>PW OS</span><p>Relatório preparado automaticamente · Atualizado em {new Date().toLocaleDateString("pt-BR")}</p></footer></section>
       </main>
-      <footer><span className="campaign-footer-copy"><b>Verificação operacional a cada 7 dias</b><small>{campaign.verifiedAt && !verificationDue(campaign) ? `Revisão concluída em ${new Date(campaign.verifiedAt).toLocaleString("pt-BR")}.` : "Entre na plataforma, confira os ajustes e conclua a revisão."}</small></span><div className="campaign-footer-actions">{campaign.landingPageUrl && <a className="campaign-landing-button compact" href={campaign.landingPageUrl} target="_blank" rel="noreferrer"><ExternalLink /> Abrir landing page</a>}{verificationDue(campaign) ? <button type="button" className="campaign-verified" disabled={verifying} onClick={() => void toggleVerified()}>{verifying ? <RefreshCw className="spin"/> : <CheckCircle2 />} {verifying ? "Concluindo…" : "Concluir revisão"}</button> : <span className="campaign-review-complete"><CheckCircle2/><span><b>Revisão em dia</b><small>Volta em 7 dias</small></span></span>}</div></footer>
+      {reviewComposerOpen && verificationDue(campaign) && <section className="campaign-review-composer">
+        <label htmlFor="campaign-review-comment"><b>Comentário da revisão</b><small>Obrigatório. Os números atuais da campanha serão salvos junto com o comentário.</small></label>
+        <textarea id="campaign-review-comment" autoFocus rows={3} maxLength={2000} value={reviewComment} placeholder="O que você conferiu e ajustou? Ex.: pausei o conjunto com CPL alto, ampliei o orçamento do melhor anúncio…" onChange={(event) => setReviewComment(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) void submitReview(); }} />
+        <div><small className={reviewCommentReady ? "ready" : ""}>{reviewCommentReady ? `${reviewComment.trim().length}/2000` : `Mínimo de ${campaignReviewCommentMinLength} caracteres (${reviewComment.trim().length}/${campaignReviewCommentMinLength})`}</small><button type="button" className="cancel" disabled={verifying} onClick={() => setReviewComposerOpen(false)}>Cancelar</button><button type="button" className="save" disabled={!reviewCommentReady || verifying} onClick={() => void submitReview()}>{verifying ? <RefreshCw className="spin"/> : <CheckCircle2 />} {verifying ? "Salvando…" : "Salvar revisão"}</button></div>
+      </section>}
+      <footer><span className="campaign-footer-copy"><b>Verificação operacional a cada 7 dias</b><small>{campaign.verifiedAt && !verificationDue(campaign) ? `Revisão concluída em ${new Date(campaign.verifiedAt).toLocaleString("pt-BR")}.` : "Entre na plataforma, confira os ajustes e conclua a revisão."}</small></span><div className="campaign-footer-actions">{campaign.landingPageUrl && <a className="campaign-landing-button compact" href={campaign.landingPageUrl} target="_blank" rel="noreferrer"><ExternalLink /> Abrir landing page</a>}{verificationDue(campaign) ? <button type="button" className="campaign-verified" disabled={verifying || reviewComposerOpen} onClick={() => setReviewComposerOpen(true)}><CheckCircle2 /> Concluir revisão</button> : <span className="campaign-review-complete"><CheckCircle2/><span><b>Revisão em dia</b><small>Volta em 7 dias</small></span></span>}</div></footer>
     </aside>
   </div>;
 }

@@ -35,6 +35,7 @@ import {
   createWriteStream,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   renameSync,
   statSync,
@@ -328,6 +329,8 @@ type TicketComment = {
   message: string;
   mentions: string[];
   createdAt: string;
+  // Registro automático de mudanças (status, responsável, prazo…), exibido no histórico.
+  kind?: "SYSTEM";
 };
 type Ticket = {
   id: string;
@@ -589,6 +592,12 @@ type WorkTask = {
   createdAt: string;
   updatedAt: string;
   archivedAt: string;
+  // Espelho da tarefa no Google Agenda do responsável (evento curto no prazo).
+  googleEventId?: string;
+  googleOwnerId?: string;
+  googleSignature?: string;
+  googleUpdated?: string;
+  googleSyncError?: string;
 };
 type CalendarEvent = {
   id: string;
@@ -608,6 +617,75 @@ type CalendarEvent = {
   taskId: string;
   recurrence: string;
   reminderMinutes: number;
+  createdAt: string;
+  updatedAt: string;
+  source?: "GOOGLE";
+  googleEventId?: string;
+  googleOwnerId?: string;
+  googleHtmlLink?: string;
+  googleSyncError?: string;
+  // Valor de `updated` do Google após a última gravação do PW OS: diferente disso,
+  // o evento foi alterado no Google e a mudança volta para o PW OS.
+  googleUpdated?: string;
+  meetUrl?: string;
+};
+type MeetingAction = {
+  id: string;
+  title: string;
+  responsibleId: string;
+  responsibleName: string;
+  dueDate: string;
+  origin: "CLIENT_REQUEST" | "DIAGNOSIS" | "OPPORTUNITY" | "MEETING_DECISION";
+  status: "PENDING" | "IN_PROGRESS" | "WAITING_CLIENT" | "SCHEDULED" | "DONE";
+  notes: string;
+};
+type MeetingPerceptionLevel = "POSITIVE" | "NEUTRAL" | "NEGATIVE" | "GOOD" | "REGULAR" | "BAD" | "IMPROVE" | "LOW" | "MEDIUM" | "HIGH" | "";
+type Meeting = {
+  id: string;
+  clientId: string;
+  clientName: string;
+  unit: string;
+  contactName: string;
+  contactEmail: string;
+  contactRole: string;
+  startAt: string;
+  durationMinutes: number;
+  type: "FOLLOW_UP" | "PLANNING" | "RESULTS" | "ALIGNMENT" | "PRESENTATION" | "SUPPORT" | "OTHER";
+  format: "GOOGLE_MEET" | "PRESENTIAL" | "PHONE" | "WHATSAPP" | "OTHER";
+  meetingUrl: string;
+  subject: string;
+  notes: string;
+  responsibleId: string;
+  responsibleName: string;
+  participantIds: string[];
+  notifications: { email: boolean; calendar: boolean; reminder: boolean; shareTeam: boolean };
+  calendarEventId: string;
+  status: "SCHEDULED" | "IN_PROGRESS" | "PAUSED" | "COMPLETED" | "CANCELLED";
+  startedAt: string;
+  resumedAt: string;
+  elapsedSeconds: number;
+  completedAt: string;
+  statements: { id: string; text: string; kind: "" | "PRAISE" | "COMPLAINT" | "REQUEST" | "QUESTION" | "OPPORTUNITY"; createdAt: string }[];
+  perception: {
+    satisfaction: MeetingPerceptionLevel;
+    contactQuality: MeetingPerceptionLevel;
+    contactVolume: MeetingPerceptionLevel;
+    commercialService: MeetingPerceptionLevel;
+    churnRisk: MeetingPerceptionLevel;
+    expansionPotential: MeetingPerceptionLevel;
+    notes: string;
+  };
+  agenda: { id: string; label: string; done: boolean }[];
+  actions: MeetingAction[];
+  summary: string;
+  nextSteps: string;
+  nextContact: { date: string; type: string; addToCalendar: boolean };
+  nextMeeting: { enabled: boolean; date: string; time: string; invite: boolean };
+  followUpMeetingId: string;
+  attachments: { id: string; fileName: string; mimeType: string; size: number; dataUrl: string; createdAt: string; createdByName: string }[];
+  rescheduleCount: number;
+  createdById: string;
+  createdByName: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -699,6 +777,7 @@ const onboardingProjects = new Map<string, OnboardingProject>();
 const clientContacts = new Map<string, ClientContact>();
 const workTasks = new Map<string, WorkTask>();
 const calendarEvents = new Map<string, CalendarEvent>();
+const meetings = new Map<string, Meeting>();
 const financialAccounts = new Map<string, FinancialAccount>();
 const financialCategories = new Map<string, FinancialCategory>();
 const financialEntries = new Map<string, FinancialEntry>();
@@ -1020,6 +1099,7 @@ function localApi(
     senderName: string;
     secret?: ReturnType<typeof encryptIntegrationToken>;
     refreshToken?: ReturnType<typeof encryptIntegrationToken>;
+    scopes?: string;
     verifiedAt: string;
     updatedAt: string;
   };
@@ -1100,6 +1180,241 @@ function localApi(
     await transport.sendMail({ from: { name: azureEmailFromName || "PW OS", address: azureEmailFrom }, to: input.to, subject: input.subject, html: input.html });
   };
   const emailOAuthStates = new Map<string, { userId: string; redirectUri: string; createdAt: number }>();
+  // Google Workspace: o mesmo login do Gmail libera o Google Agenda e o Meet de cada usuário.
+  const googleCalendarScope = "https://www.googleapis.com/auth/calendar.events";
+  const googleTokenCache = new Map<string, { token: string; expiresAt: number }>();
+  const googleAgendaCache = new Map<string, { at: number; events: CalendarEvent[]; error: string }>();
+  // Os campos de data e hora do navegador enviam horário sem fuso ("2026-09-28T17:00").
+  // O Google Agenda recusa esse formato ("Bad Request") e o servidor, em UTC, leria o
+  // horário três horas adiantado. Horário sem fuso é sempre o de Brasília (sem horário de verão).
+  const withTimeZone = (value: string) =>
+    typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(value)
+      ? new Date(`${value.length === 16 ? `${value}:00` : value}-03:00`).toISOString()
+      : value;
+  const googleCalendarConnected = (userId: string) => {
+    const connection = userEmailConnections.get(userId);
+    return !!connection && connection.method === "GOOGLE" && !!connection.refreshToken && (connection.scopes || "").includes(googleCalendarScope);
+  };
+  const googleCalendarFetch = async (userId: string, path: string, init: { method?: string; body?: unknown } = {}) => {
+    const connection = userEmailConnections.get(userId);
+    if (!connection?.refreshToken) throw new Error("Conta Google não conectada.");
+    let cached = googleTokenCache.get(userId);
+    if (!cached || cached.expiresAt < Date.now()) {
+      cached = { token: await googleAccessToken(decryptIntegrationToken(connection.refreshToken)), expiresAt: Date.now() + 50 * 60000 };
+      googleTokenCache.set(userId, cached);
+    }
+    const response = await fetch(`https://www.googleapis.com/calendar/v3${path}`, {
+      method: init.method || "GET",
+      signal: AbortSignal.timeout(10000),
+      headers: { Authorization: `Bearer ${cached.token}`, ...(init.body ? { "Content-Type": "application/json" } : {}) },
+      body: init.body ? JSON.stringify(init.body) : undefined,
+    });
+    if (response.status === 401) googleTokenCache.delete(userId);
+    return response;
+  };
+  const validEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+  /** Cria ou atualiza o evento no Google Agenda do dono. Falhas ficam registradas no evento e não bloqueiam o PW OS. */
+  const pushCalendarEventToGoogle = async (event: CalendarEvent, options: { attendees?: string[]; createMeet?: boolean; notify?: boolean } = {}) => {
+    const ownerId = event.googleOwnerId && googleCalendarConnected(event.googleOwnerId) ? event.googleOwnerId : event.ownerId;
+    if (!googleCalendarConnected(ownerId)) return event;
+    const ownerEmail = userEmailConnections.get(ownerId)?.email.toLowerCase();
+    const attendees = [...new Set([...(options.attendees || []), ...event.participantIds.map((id) => users.get(id)?.email || "")].map((email) => email.trim().toLowerCase()))].filter((email) => validEmail(email) && email !== ownerEmail);
+    const payload: Record<string, unknown> = {
+      summary: event.title,
+      description: event.description,
+      location: event.location,
+      start: { dateTime: event.startAt },
+      end: { dateTime: event.endAt },
+      attendees: attendees.map((email) => ({ email })),
+      reminders: { useDefault: false, overrides: [{ method: "popup", minutes: Math.max(0, Math.min(40320, Number(event.reminderMinutes) || 15)) }] },
+      extendedProperties: { private: { pwOsEventId: event.id } },
+    };
+    if (options.createMeet && !event.meetUrl) payload.conferenceData = { createRequest: { requestId: randomUUID(), conferenceSolutionKey: { type: "hangoutsMeet" } } };
+    const query = `?conferenceDataVersion=1&sendUpdates=${options.notify ? "all" : "none"}`;
+    try {
+      let response = event.googleEventId && event.googleOwnerId === ownerId ? await googleCalendarFetch(ownerId, `/calendars/primary/events/${encodeURIComponent(event.googleEventId)}${query}`, { method: "PATCH", body: payload }) : undefined;
+      if (!response || response.status === 404 || response.status === 410) response = await googleCalendarFetch(ownerId, `/calendars/primary/events${query}`, { method: "POST", body: payload });
+      const result = await response.json().catch(() => ({})) as { id?: string; htmlLink?: string; hangoutLink?: string; updated?: string; error?: { message?: string } };
+      if (!response.ok || !result.id) throw new Error(result.error?.message || `O Google Agenda respondeu ${response.status}.`);
+      Object.assign(event, { googleEventId: result.id, googleOwnerId: ownerId, googleHtmlLink: result.htmlLink || "", meetUrl: result.hangoutLink || event.meetUrl || "", googleUpdated: result.updated || "", googleSyncError: "" });
+    } catch (error) {
+      event.googleSyncError = error instanceof Error ? error.message : "Falha ao sincronizar com o Google Agenda.";
+      console.error("[Google Agenda]", event.googleSyncError);
+    }
+    return event;
+  };
+  const removeCalendarEventFromGoogle = async (event: CalendarEvent, notify = false) => {
+    if (!event.googleEventId || !event.googleOwnerId || !googleCalendarConnected(event.googleOwnerId)) return;
+    try {
+      await googleCalendarFetch(event.googleOwnerId, `/calendars/primary/events/${encodeURIComponent(event.googleEventId)}?sendUpdates=${notify ? "all" : "none"}`, { method: "DELETE" });
+    } catch (error) {
+      console.error("[Google Agenda]", error instanceof Error ? error.message : error);
+    }
+  };
+  // Tarefas com prazo viram um evento curto (30 min, no horário do prazo) no Google Agenda
+  // do responsável. A assinatura registra o que já foi enviado: só tarefas com título,
+  // descrição, prazo, status ou responsável diferentes geram chamadas ao Google.
+  const taskGoogleSignature = (task: WorkTask) => [task.title, task.description.slice(0, 500), task.dueAt, task.status, task.responsibleId, task.archivedAt, task.type, task.details?.meetingLocation || ""].join("|");
+  // Reuniões e ligações agendadas no CRM também são tarefas: no Google aparecem com o tipo e o local.
+  const taskGoogleLabel = (task: WorkTask) => task.type === "MEETING" ? "Reunião" : task.type === "CALL" ? "Ligação" : "Tarefa";
+  // Tarefas com prazo há mais de 30 dias não são enviadas, para não lotar a agenda com o histórico.
+  const taskBelongsInGoogle = (task: WorkTask) => !task.archivedAt && task.status !== "CANCELLED" && !!task.dueAt &&
+    !Number.isNaN(new Date(task.dueAt).getTime()) && new Date(task.dueAt).getTime() >= Date.now() - 30 * 86400000;
+  const syncTaskToGoogle = async (task: WorkTask) => {
+    const signature = taskGoogleSignature(task), wanted = taskBelongsInGoogle(task) && googleCalendarConnected(task.responsibleId);
+    try {
+      // Sai da agenda anterior quando a tarefa deixa de valer ou muda de responsável.
+      if (task.googleEventId && task.googleOwnerId && (!wanted || task.googleOwnerId !== task.responsibleId)) {
+        if (googleCalendarConnected(task.googleOwnerId)) {
+          const removed = await googleCalendarFetch(task.googleOwnerId, `/calendars/primary/events/${encodeURIComponent(task.googleEventId)}?sendUpdates=none`, { method: "DELETE" });
+          if (!removed.ok && removed.status !== 404 && removed.status !== 410) throw new Error(`O Google Agenda respondeu ${removed.status} ao remover a tarefa.`);
+        }
+        Object.assign(task, { googleEventId: "", googleOwnerId: "", googleUpdated: "" });
+      }
+      if (wanted) {
+        const start = new Date(task.dueAt), payload = {
+          summary: `${task.status === "DONE" ? "✓ " : ""}${taskGoogleLabel(task)}: ${task.title}`,
+          location: task.details?.meetingLocation || "",
+          description: [task.description, "Tarefa do PW OS. Mudar o horário aqui altera o prazo no PW OS."].filter(Boolean).join("\n\n"),
+          start: { dateTime: start.toISOString() },
+          end: { dateTime: new Date(start.getTime() + 30 * 60000).toISOString() },
+          status: "confirmed",
+          colorId: "5",
+          extendedProperties: { private: { pwOsTaskId: task.id } },
+        };
+        let response = task.googleEventId ? await googleCalendarFetch(task.responsibleId, `/calendars/primary/events/${encodeURIComponent(task.googleEventId)}?sendUpdates=none`, { method: "PATCH", body: payload }) : undefined;
+        if (!response || response.status === 404 || response.status === 410) response = await googleCalendarFetch(task.responsibleId, "/calendars/primary/events?sendUpdates=none", { method: "POST", body: payload });
+        const result = await response.json().catch(() => ({})) as { id?: string; updated?: string; error?: { message?: string } };
+        if (!response.ok || !result.id) throw new Error(result.error?.message || `O Google Agenda respondeu ${response.status}.`);
+        Object.assign(task, { googleEventId: result.id, googleOwnerId: task.responsibleId, googleUpdated: result.updated || "" });
+      }
+      Object.assign(task, { googleSignature: signature, googleSyncError: "" });
+    } catch (error) {
+      task.googleSyncError = error instanceof Error ? error.message : "Falha ao sincronizar a tarefa com o Google Agenda.";
+      console.error("[Google Agenda] Tarefa", task.id, task.googleSyncError);
+    }
+  };
+  let taskGoogleSyncTimer: ReturnType<typeof setTimeout> | undefined, taskGoogleSyncRunning = false, taskGoogleSyncAgain = false;
+  const runTaskGoogleSync = async () => {
+    if (taskGoogleSyncRunning) { taskGoogleSyncAgain = true; return; }
+    taskGoogleSyncRunning = true;
+    try {
+      const pending = [...workTasks.values()].filter((task) => task.googleSignature !== taskGoogleSignature(task) &&
+        (!!task.googleEventId || (taskBelongsInGoogle(task) && googleCalendarConnected(task.responsibleId))));
+      if (!pending.length) return;
+      await forEachConcurrent(pending, 3, syncTaskToGoogle);
+      writeWorkTasksFile();
+    } finally {
+      taskGoogleSyncRunning = false;
+      if (taskGoogleSyncAgain) { taskGoogleSyncAgain = false; scheduleTaskGoogleSync(); }
+    }
+  };
+  // Chamado a cada gravação de tarefas; agrupa alterações seguidas em um único envio.
+  const scheduleTaskGoogleSync = () => {
+    clearTimeout(taskGoogleSyncTimer);
+    taskGoogleSyncTimer = setTimeout(() => void runTaskGoogleSync().catch((error) => console.error("[Google Agenda] Tarefas", error)), 1500);
+  };
+  // O Google alterou o item depois da última gravação do PW OS? Sem registro do Google,
+  // compara com a última alteração no PW OS (com folga para o próprio envio).
+  const changedInGoogle = (googleUpdated: string | undefined, localUpdated: string | undefined, knownUpdated: string | undefined) =>
+    !!googleUpdated && (knownUpdated ? googleUpdated !== knownUpdated : new Date(googleUpdated).getTime() > new Date(localUpdated || 0).getTime() + 5000);
+  /**
+   * Lê o Google Agenda do usuário: devolve os eventos criados direto no Google e traz de volta
+   * ao PW OS as mudanças feitas no Google em compromissos, reuniões e tarefas do PW OS.
+   */
+  const googleAgendaEvents = async (user: User) => {
+    if (!googleCalendarConnected(user.id)) return { at: 0, events: [] as CalendarEvent[], error: "" };
+    const cached = googleAgendaCache.get(user.id);
+    if (cached && Date.now() - cached.at < (cached.error ? 60000 : 120000)) return cached;
+    type GoogleTime = { dateTime?: string; date?: string };
+    type GoogleItem = { id: string; status?: string; summary?: string; description?: string; location?: string; hangoutLink?: string; htmlLink?: string; created?: string; updated?: string; start?: GoogleTime; end?: GoogleTime; extendedProperties?: { private?: Record<string, string> } };
+    const toIso = (value: GoogleTime | undefined) => value?.dateTime ? new Date(value.dateTime).toISOString() : new Date(`${value?.date}T00:00:00-03:00`).toISOString();
+    let result: { at: number; events: CalendarEvent[]; error: string };
+    try {
+      // `showDeleted` traz também o que foi excluído no Google, para refletir exclusões.
+      const items: GoogleItem[] = [];
+      let pageToken = "";
+      for (let page = 0; page < 5; page++) {
+        const params = new URLSearchParams({ timeMin: new Date(Date.now() - 30 * 86400000).toISOString(), timeMax: new Date(Date.now() + 120 * 86400000).toISOString(), singleEvents: "true", showDeleted: "true", maxResults: "500", ...(pageToken ? { pageToken } : {}) });
+        const response = await googleCalendarFetch(user.id, `/calendars/primary/events?${params}`);
+        const payload = await response.json().catch(() => ({})) as { items?: GoogleItem[]; nextPageToken?: string; error?: { message?: string } };
+        if (!response.ok) throw new Error(payload.error?.message || `O Google Agenda respondeu ${response.status}.`);
+        items.push(...(payload.items || []));
+        if (!payload.nextPageToken) break;
+        pageToken = payload.nextPageToken;
+      }
+      let eventsChanged = false, tasksChanged = false, meetingsChanged = false;
+      const now = new Date().toISOString();
+      // Evento excluído no Google volta na lista só com `id` e `status` (sem as marcações do
+      // PW OS), então a correspondência também é feita pelo id do evento no Google.
+      const eventsByGoogleId = new Map([...calendarEvents.values()].filter((value) => value.googleEventId && value.googleOwnerId === user.id).map((value) => [value.googleEventId!, value]));
+      const tasksByGoogleId = new Map([...workTasks.values()].filter((value) => value.googleEventId && value.googleOwnerId === user.id).map((value) => [value.googleEventId!, value]));
+      for (const item of items) {
+        const pwOsEventId = item.extendedProperties?.private?.pwOsEventId, pwOsTaskId = item.extendedProperties?.private?.pwOsTaskId;
+        const event = (pwOsEventId ? calendarEvents.get(pwOsEventId) : undefined) ?? eventsByGoogleId.get(item.id);
+        if (event && event.googleEventId === item.id && event.googleOwnerId === user.id) {
+          const meeting = [...meetings.values()].find((value) => value.calendarEventId === event.id);
+          if (item.status === "cancelled") {
+            // Excluído no Google: sai da agenda do PW OS; reunião ainda não iniciada é cancelada.
+            calendarEvents.delete(event.id);
+            eventsChanged = true;
+            if (meeting) {
+              if (["SCHEDULED", "PAUSED"].includes(meeting.status)) meeting.status = "CANCELLED";
+              Object.assign(meeting, { calendarEventId: "", updatedAt: now });
+              meetingsChanged = true;
+            }
+          } else if ((item.start?.dateTime || item.start?.date) && changedInGoogle(item.updated, event.updatedAt, event.googleUpdated)) {
+            const next = { title: item.summary || event.title, description: item.description || "", location: item.location || "", startAt: toIso(item.start), endAt: toIso(item.end || item.start) };
+            const moved = next.startAt !== event.startAt || next.endAt !== event.endAt;
+            Object.assign(event, next, { updatedAt: item.updated, googleUpdated: item.updated, googleHtmlLink: item.htmlLink || event.googleHtmlLink });
+            eventsChanged = true;
+            if (meeting && moved && ["SCHEDULED", "PAUSED"].includes(meeting.status)) {
+              meeting.startAt = next.startAt;
+              meeting.durationMinutes = Math.max(15, Math.min(480, Math.round((new Date(next.endAt).getTime() - new Date(next.startAt).getTime()) / 60000)));
+              meeting.updatedAt = now;
+              meetingsChanged = true;
+            }
+          }
+          continue;
+        }
+        const task = (pwOsTaskId ? workTasks.get(pwOsTaskId) : undefined) ?? tasksByGoogleId.get(item.id);
+        if (task && task.googleEventId === item.id && task.googleOwnerId === user.id) {
+          if (item.status === "cancelled") {
+            // Excluída no Google: a tarefa continua no PW OS e só volta ao Google se mudar de novo.
+            Object.assign(task, { googleEventId: "", googleOwnerId: "", googleUpdated: "" });
+            tasksChanged = true;
+          } else if (item.start?.dateTime && changedInGoogle(item.updated, task.updatedAt, task.googleUpdated)) {
+            const dueAt = toIso(item.start);
+            if (new Date(dueAt).getTime() !== new Date(task.dueAt).getTime()) {
+              task.dueAt = dueAt;
+              task.updatedAt = now;
+              task.activity.push({ id: randomUUID(), actorId: user.id, actorName: user.name, action: "alterou o prazo pelo Google Agenda", createdAt: now });
+            }
+            Object.assign(task, { googleUpdated: item.updated, googleSignature: taskGoogleSignature(task) });
+            tasksChanged = true;
+          }
+        }
+      }
+      // Compromissos que o Google recusou antes (por exemplo, horário sem fuso) são reenviados.
+      const failed = [...calendarEvents.values()].filter((event) => event.ownerId === user.id && !event.googleEventId && !!event.googleSyncError).slice(0, 10);
+      for (const event of failed) await pushCalendarEventToGoogle(event);
+      if (eventsChanged || failed.length) persistCalendarEvents();
+      if (meetingsChanged) persistMeetings();
+      if (tasksChanged) writeWorkTasksFile();
+      // Também envia tarefas pendentes (por exemplo, de quem acabou de conectar o Google).
+      scheduleTaskGoogleSync();
+      const events = items.filter((item) => item.status !== "cancelled" && !item.extendedProperties?.private?.pwOsEventId && !item.extendedProperties?.private?.pwOsTaskId && (item.start?.dateTime || item.start?.date)).map((item): CalendarEvent => ({
+        id: `google:${item.id}`, title: item.summary || "(Sem título)", description: item.description || "", ownerId: user.id, ownerName: user.name, participantIds: [],
+        startAt: toIso(item.start), endAt: toIso(item.end || item.start), location: item.hangoutLink || item.location || "", category: "GOOGLE", clientId: "", projectId: "", opportunityId: "", taskId: "",
+        recurrence: "NONE", reminderMinutes: 0, createdAt: item.created || "", updatedAt: item.updated || "", source: "GOOGLE", googleHtmlLink: item.htmlLink || "", meetUrl: item.hangoutLink || "",
+      }));
+      result = { at: Date.now(), events, error: "" };
+    } catch (error) {
+      result = { at: Date.now(), events: cached?.events || [], error: error instanceof Error ? error.message : "Não foi possível ler o Google Agenda." };
+    }
+    googleAgendaCache.set(user.id, result);
+    return result;
+  };
   const mediaOAuthStates = new Map<string, { provider: "google" | "meta"; userId: string; redirectUri: string; createdAt: number }>();
   if (existsSync(localMetaConnectionsPath)) {
     try {
@@ -1198,32 +1513,54 @@ function localApi(
   const localNotificationReadsPath = "data/notification-reads.local.json";
   const localMetaDashboardCachePath = "data/meta-dashboard-cache.local.json";
   const localGoogleDashboardCachePath = "data/google-dashboard-cache.local.json";
-  const localMediaMetricSnapshotsPath = "data/media-metric-snapshots.local.json";
   const localCampaignVerificationsPath = "data/campaign-verifications.local.json";
   const localCampaignOptimizationHistoryPath = "data/campaign-optimization-history.local.json";
   const mediaSyncIntervalMs = 24 * 60 * 60 * 1000;
   const mediaManualRefreshCooldownMs = 5 * 60 * 1000;
-  // Este arquivo pode chegar a dezenas de MB, com anúncios e criativos completos por
-  // campanha. Uma versão anterior manteve o conteúdo já interpretado em memória entre
-  // requisições para economizar CPU, mas a sincronização diária da Meta reescreve este
-  // arquivo várias vezes em sequência (uma por período): cada gravação invalidava o
-  // cache e forçava uma nova leitura e interpretação completas logo em seguida, então
-  // o ganho nunca se realizava, apenas mantinha uma cópia extra retida. Em produção,
-  // isso esgotou a memória do contêiner (1 GiB) durante a primeira sincronização em
-  // que a Meta chegou a concluir vários períodos seguidos. Lê e interpreta o arquivo a
-  // cada chamada, como antes, para que o resultado seja descartado assim que a
-  // requisição termina.
-  const readMediaSnapshots = (): Record<string, any>[] => {
-    try {
-      return JSON.parse(readFileSync(localMediaMetricSnapshotsPath, "utf8")) as Record<string, any>[];
-    } catch {
-      return [];
-    }
+  // Cada período fica no seu próprio arquivo. Antes, todos os períodos ficavam em um
+  // único JSON que era lido, interpretado e regravado por inteiro a cada gravação. Como a
+  // coleta diária cria períodos novos todos os dias (últimos 7/15/30 dias, mês atual…) e
+  // cada período da Meta ocupa ~7 MB, o arquivo passou de 300 MB e só interpretá-lo já
+  // esgotava a memória do Node (~1 GB), derrubando o contêiner em loop. Com um arquivo
+  // por período, cada leitura ou gravação toca apenas o período pedido.
+  const mediaSnapshotsDir = "data/media-metric-snapshots";
+  const mediaSnapshotRetentionMs = 60 * 24 * 60 * 60 * 1000;
+  const mediaSnapshotMaxFiles = 300;
+  const mediaSnapshotFile = (platform: string, since: string, until: string) =>
+    `${mediaSnapshotsDir}/${platform.replace(/[^A-Z_]/g, "")}_${since.replace(/[^\d-]/g, "")}_${until.replace(/[^\d-]/g, "")}.json`;
+  const writeMediaSnapshotFile = (snapshot: Record<string, any>) => {
+    mkdirSync(mediaSnapshotsDir, { recursive: true });
+    const target = mediaSnapshotFile(String(snapshot.platform), String(snapshot.since), String(snapshot.until)), temporary = `${target}.tmp`;
+    writeFileSync(temporary, JSON.stringify(snapshot), { mode: 0o600 });
+    renameSync(temporary, target);
   };
+  const pruneMediaSnapshots = () => {
+    try {
+      const files = readdirSync(mediaSnapshotsDir).filter((name) => name.endsWith(".json"))
+        .map((name) => { const path = `${mediaSnapshotsDir}/${name}`; return { path, mtime: statSync(path).mtimeMs }; })
+        .sort((a, b) => b.mtime - a.mtime);
+      files.filter((file, index) => index >= mediaSnapshotMaxFiles || Date.now() - file.mtime > mediaSnapshotRetentionMs)
+        .forEach((file) => { try { unlinkSync(file.path); } catch { /* outro processo já removeu */ } });
+    } catch { /* diretório ainda não existe */ }
+  };
+  // Migra o arquivo único antigo. Só é interpretado se for pequeno o bastante para caber
+  // com folga na memória; caso contrário é apenas renomeado (os períodos serão coletados
+  // de novo pela sincronização diária), porque interpretá-lo é justamente o que travava.
+  const legacyMediaSnapshotsPath = "data/media-metric-snapshots.local.json";
+  if (existsSync(legacyMediaSnapshotsPath)) {
+    try {
+      if (statSync(legacyMediaSnapshotsPath).size > 64 * 1024 * 1024) throw new Error("arquivo grande demais para migrar em memória");
+      (JSON.parse(readFileSync(legacyMediaSnapshotsPath, "utf8")) as Record<string, any>[])
+        .filter((item) => item?.platform && item.since && item.until)
+        .forEach((item) => { if (!existsSync(mediaSnapshotFile(item.platform, item.since, item.until))) writeMediaSnapshotFile(item); });
+      renameSync(legacyMediaSnapshotsPath, `${legacyMediaSnapshotsPath}.migrated`);
+    } catch (cause) {
+      try { renameSync(legacyMediaSnapshotsPath, `${legacyMediaSnapshotsPath}.legacy-${Date.now()}`); } catch { /* segue sem o histórico antigo */ }
+      console.warn("[Mídia] Histórico antigo de períodos não migrado; será recoletado:", cause instanceof Error ? cause.message : cause);
+    }
+  }
   const persistMediaMetricSnapshot = (platform: "META_ADS" | "GOOGLE_ADS", payload: { schemaVersion: number; since: string; until: string; syncedAt: string; accounts: Record<string, any>[]; campaigns: Record<string, any>[] }) => {
-    mkdirSync("data", { recursive: true });
-    let snapshots: Record<string, any>[] = readMediaSnapshots();
-    const snapshot = {
+    writeMediaSnapshotFile({
       id: `${platform}:${payload.since}:${payload.until}`,
       platform,
       since: payload.since,
@@ -1232,22 +1569,16 @@ function localApi(
       schemaVersion: payload.schemaVersion,
       accounts: payload.accounts,
       campaigns: payload.campaigns,
-    };
-    snapshots = [snapshot, ...snapshots.filter((item) => item.id !== snapshot.id)]
-      .sort((a, b) => String(b.syncedAt).localeCompare(String(a.syncedAt))).slice(0, 800);
-    writeFileSync(localMediaMetricSnapshotsPath, JSON.stringify(snapshots, null, 2), { mode: 0o600 });
+    });
+    pruneMediaSnapshots();
   };
-  const readMediaMetricSnapshot = (
-    platform: "META_ADS" | "GOOGLE_ADS",
-    since: string,
-    until: string,
-  ) =>
-    readMediaSnapshots().find(
-      (item) =>
-        item.platform === platform &&
-        item.since === since &&
-        item.until === until,
-    );
+  const readMediaMetricSnapshot = (platform: string, since: string, until: string): Record<string, any> | undefined => {
+    try {
+      return JSON.parse(readFileSync(mediaSnapshotFile(platform, since, until), "utf8")) as Record<string, any>;
+    } catch {
+      return undefined;
+    }
+  };
   // Cache entries belong to an exact platform/period, never to a user session.
   const readStoredMediaPeriod = (platform: "META_ADS" | "GOOGLE_ADS", since: string, until: string) => {
     // Alterar a versão quando a semântica do saldo mudar. Assim, um snapshot
@@ -1286,6 +1617,37 @@ function localApi(
     cpl?: number | null;
     periodDays?: number;
     recipientCount?: number;
+    comment?: string;
+    snapshot?: CampaignReviewSnapshot;
+  };
+  // Foto da campanha no momento da revisão, para auditoria posterior.
+  type CampaignReviewSnapshot = {
+    name?: string;
+    status?: string;
+    objective?: string;
+    since?: string;
+    until?: string;
+    dailyBudget?: number;
+    lifetimeBudget?: number;
+    balance?: number | null;
+    impressions?: number;
+    clicks?: number;
+    ctr?: number;
+    reach?: number;
+    frequency?: number;
+  };
+  const campaignReviewCommentMinLength = 10;
+  const sanitizeCampaignReviewSnapshot = (input: unknown): CampaignReviewSnapshot | undefined => {
+    if (!input || typeof input !== "object") return undefined;
+    const raw = input as Record<string, unknown>, snapshot: CampaignReviewSnapshot = {};
+    for (const field of ["name", "status", "objective"] as const)
+      if (typeof raw[field] === "string" && raw[field]) snapshot[field] = String(raw[field]).slice(0, 300);
+    for (const field of ["since", "until"] as const)
+      if (typeof raw[field] === "string" && /^\d{4}-\d{2}-\d{2}$/.test(String(raw[field]))) snapshot[field] = String(raw[field]);
+    for (const field of ["dailyBudget", "lifetimeBudget", "impressions", "clicks", "ctr", "reach", "frequency"] as const)
+      if (raw[field] != null && Number.isFinite(Number(raw[field]))) snapshot[field] = Number(raw[field]);
+    if (raw.balance === null || (raw.balance != null && Number.isFinite(Number(raw.balance)))) snapshot.balance = raw.balance === null ? null : Number(raw.balance);
+    return Object.keys(snapshot).length ? snapshot : undefined;
   };
   const campaignVerifications: Record<string, { verified: boolean; verifiedAt: string; verifiedBy: string; history?: CampaignReviewEntry[] }> = existsSync(localCampaignVerificationsPath)
     ? JSON.parse(readFileSync(localCampaignVerificationsPath, "utf8"))
@@ -1885,6 +2247,7 @@ function localApi(
   const localTasksPath = "data/tasks.local.json";
   const localTaskAttachmentsPath = "data/task-attachments";
   const localCalendarPath = "data/calendar.local.json";
+  const localMeetingsPath = "data/meetings.local.json";
   const localFinancialAccountsPath = "data/financial-accounts.local.json";
   const localFinancialCategoriesPath = "data/financial-categories.local.json";
   const localFinancialEntriesPath = "data/financial-entries.local.json";
@@ -2096,7 +2459,7 @@ function localApi(
     ).forEach((item) => departments.set(item.id, item));
   if (existsSync(localTicketsPath))
     (JSON.parse(readFileSync(localTicketsPath, "utf8")) as Ticket[]).forEach(
-      (item) => tickets.set(item.id, item),
+      (item) => tickets.set(item.id, { ...item, dueAt: withTimeZone(item.dueAt || "") }),
     );
   const persistDepartments = () => {
     mkdirSync("data", { recursive: true });
@@ -2216,6 +2579,7 @@ function localApi(
     ).forEach((item) =>
       opportunities.set(item.id, {
         ...item,
+        nextActionAt: withTimeZone(item.nextActionAt || ""),
         contactIds: item.contactIds || [],
         teamIds: item.teamIds || [],
         tags: item.tags || [],
@@ -2261,6 +2625,9 @@ function localApi(
         const legacyStatus = String(item.status);
         workTasks.set(item.id, {
           ...item,
+          dueAt: withTimeZone(item.dueAt),
+          startAt: withTimeZone(item.startAt),
+          plannedAt: withTimeZone(item.plannedAt || ""),
           type: item.type || "OTHER",
           subtype: item.subtype || "custom",
           status:
@@ -2270,7 +2637,6 @@ function localApi(
                 ? "WAITING_APPROVAL"
                 : item.status,
           approvalStatus: item.approvalStatus || "NOT_REQUIRED",
-          plannedAt: item.plannedAt || "",
           publishedAt: item.publishedAt || "",
           completedAt: item.completedAt || "",
           details: item.details || {},
@@ -2289,7 +2655,11 @@ function localApi(
   if (existsSync(localCalendarPath))
     (
       JSON.parse(readFileSync(localCalendarPath, "utf8")) as CalendarEvent[]
-    ).forEach((item) => calendarEvents.set(item.id, item));
+    ).forEach((item) => calendarEvents.set(item.id, { ...item, startAt: withTimeZone(item.startAt), endAt: withTimeZone(item.endAt) }));
+  if (existsSync(localMeetingsPath))
+    (
+      JSON.parse(readFileSync(localMeetingsPath, "utf8")) as Meeting[]
+    ).forEach((item) => meetings.set(item.id, item));
   if (existsSync(localFinancialAccountsPath))
     (
       JSON.parse(
@@ -2383,13 +2753,18 @@ function localApi(
       { mode: 0o600 },
     );
   };
-  const persistWorkTasks = () => {
+  const writeWorkTasksFile = () => {
     mkdirSync("data", { recursive: true });
     writeFileSync(
       localTasksPath,
       JSON.stringify([...workTasks.values()], null, 2),
       { mode: 0o600 },
     );
+  };
+  // Toda gravação de tarefas também atualiza o espelho no Google Agenda dos responsáveis.
+  const persistWorkTasks = () => {
+    writeWorkTasksFile();
+    scheduleTaskGoogleSync();
   };
   const removeTaskAttachmentFile = (attachment: WorkTask["attachments"][number]) => {
     if (
@@ -2422,6 +2797,14 @@ function localApi(
     writeFileSync(
       localCalendarPath,
       JSON.stringify([...calendarEvents.values()], null, 2),
+      { mode: 0o600 },
+    );
+  };
+  const persistMeetings = () => {
+    mkdirSync("data", { recursive: true });
+    writeFileSync(
+      localMeetingsPath,
+      JSON.stringify([...meetings.values()], null, 2),
       { mode: 0o600 },
     );
   };
@@ -2879,7 +3262,7 @@ function localApi(
           const requestUrl = new URL(request.url || "", "http://localhost"), platform = requestUrl.searchParams.get("platform"), since = requestUrl.searchParams.get("since"), until = requestUrl.searchParams.get("until");
           if (platform === "GOOGLE_ADS" && since && until && coversPeriod(googleDaily, since, until, saoPauloDay(new Date())))
             return json(response, 200, { source: "DATABASE", ...buildGooglePeriod(googleDaily, since, until) });
-          const snapshot = readMediaSnapshots().find((item) => item.platform === platform && item.since === since && item.until === until);
+          const snapshot = platform && since && until ? readMediaMetricSnapshot(platform, since, until) : undefined;
           if (!snapshot) return json(response, 404, { message: "Este período ainda não foi armazenado no histórico.", campaigns: [] });
           return json(response, 200, { source: "DATABASE", ...snapshot });
         }
@@ -3110,20 +3493,22 @@ function localApi(
           if (!pending || Date.now() - pending.createdAt > 10 * 60 * 1000 || !code) { response.statusCode = 302; response.setHeader("Location", "/configuracoes?email=error"); return response.end(); }
           emailOAuthStates.delete(state);
           try {
-            const tokenResponse = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ code, client_id: runtimeGoogleClientId, client_secret: runtimeGoogleClientSecret, redirect_uri: pending.redirectUri, grant_type: "authorization_code" }) }), tokenPayload = await tokenResponse.json() as { access_token?: string; refresh_token?: string };
+            const tokenResponse = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ code, client_id: runtimeGoogleClientId, client_secret: runtimeGoogleClientSecret, redirect_uri: pending.redirectUri, grant_type: "authorization_code" }) }), tokenPayload = await tokenResponse.json() as { access_token?: string; refresh_token?: string; scope?: string };
             if (!tokenResponse.ok || !tokenPayload.access_token) throw new Error("Autorização recusada.");
             const profileResponse = await fetch("https://openidconnect.googleapis.com/v1/userinfo", { headers: { Authorization: `Bearer ${tokenPayload.access_token}` } }), profile = await profileResponse.json() as { email?: string; name?: string };
             if (!profile.email || !tokenPayload.refresh_token) throw new Error("O Google não retornou a autorização permanente.");
             const now = new Date().toISOString();
-            userEmailConnections.set(pending.userId, { userId: pending.userId, method: "GOOGLE", email: profile.email, senderName: profile.name || users.get(pending.userId)?.name || "PW OS", refreshToken: encryptIntegrationToken(tokenPayload.refresh_token), verifiedAt: now, updatedAt: now });
+            userEmailConnections.set(pending.userId, { userId: pending.userId, method: "GOOGLE", email: profile.email, senderName: profile.name || users.get(pending.userId)?.name || "PW OS", refreshToken: encryptIntegrationToken(tokenPayload.refresh_token), scopes: tokenPayload.scope || "", verifiedAt: now, updatedAt: now });
             persistUserEmailConnections();
+            googleTokenCache.delete(pending.userId);
+            googleAgendaCache.delete(pending.userId);
             response.statusCode = 302; response.setHeader("Location", "/configuracoes?email=connected"); return response.end();
           } catch { response.statusCode = 302; response.setHeader("Location", "/configuracoes?email=error"); return response.end(); }
         }
         if (url === "/email-connection" && request.method === "GET") {
           if (!currentUser || currentUser.profile === "CLIENT") return json(response, 401, { message: "Sessão necessária." });
           const connection = userEmailConnections.get(currentUser.id);
-          return json(response, 200, { connection: connection ? { method: connection.method, email: connection.email, senderName: connection.senderName, verifiedAt: connection.verifiedAt, configured: true } : null, googleOAuthAvailable: !!runtimeGoogleClientId && !!runtimeGoogleClientSecret });
+          return json(response, 200, { connection: connection ? { method: connection.method, email: connection.email, senderName: connection.senderName, verifiedAt: connection.verifiedAt, configured: true, calendar: googleCalendarConnected(currentUser.id) } : null, googleOAuthAvailable: !!runtimeGoogleClientId && !!runtimeGoogleClientSecret });
         }
         if (url === "/email-connection" && request.method === "PUT") {
           if (!currentUser || currentUser.profile === "CLIENT") return json(response, 401, { message: "Sessão necessária." });
@@ -3145,12 +3530,12 @@ function localApi(
           if (!runtimeGoogleClientId || !runtimeGoogleClientSecret) return json(response, 409, { message: "Configure GOOGLE_ADS_CLIENT_ID e GOOGLE_ADS_CLIENT_SECRET no ambiente para habilitar o login Google." });
           const origin = `${request.headers["x-forwarded-proto"] || "http"}://${request.headers.host}`, redirectUri = `${origin}/api/email/google/callback`, state = randomBytes(24).toString("hex");
           emailOAuthStates.set(state, { userId: currentUser.id, redirectUri, createdAt: Date.now() });
-          const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?${new URLSearchParams({ client_id: runtimeGoogleClientId, redirect_uri: redirectUri, response_type: "code", scope: "openid email profile https://mail.google.com/", access_type: "offline", prompt: "consent", state })}`;
+          const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?${new URLSearchParams({ client_id: runtimeGoogleClientId, redirect_uri: redirectUri, response_type: "code", scope: `openid email profile https://mail.google.com/ ${googleCalendarScope}`, access_type: "offline", prompt: "consent", include_granted_scopes: "true", state })}`;
           return json(response, 200, { authUrl });
         }
         if (url === "/email-connection" && request.method === "DELETE") {
           if (!currentUser || currentUser.profile === "CLIENT") return json(response, 401, { message: "Sessão necessária." });
-          userEmailConnections.delete(currentUser.id); persistUserEmailConnections(); return json(response, 200, { ok: true });
+          userEmailConnections.delete(currentUser.id); persistUserEmailConnections(); googleTokenCache.delete(currentUser.id); googleAgendaCache.delete(currentUser.id); return json(response, 200, { ok: true });
         }
         if (url === "/openai-settings" && request.method === "GET") {
           if (!hasPermission(currentUser, "settings.view")) return json(response, 403, { message: "Permissão insuficiente." });
@@ -4151,11 +4536,16 @@ function localApi(
             return json(response, 400, {
               message: "Selecione um responsável válido.",
             });
-          const now = new Date().toISOString();
-          const sequence = String(tickets.size + 1).padStart(4, "0");
+          const now = new Date().toISOString(), year = new Date().getFullYear();
+          // Próximo número do ano a partir do maior código existente: contar os chamados
+          // repetiria códigos depois de uma exclusão.
+          const sequence = String(Math.max(0, ...[...tickets.values()].map((item) => {
+            const match = item.code.match(new RegExp(`^CH-${year}-(\\d+)$`));
+            return match ? Number(match[1]) : 0;
+          })) + 1).padStart(4, "0");
           const ticket: Ticket = {
             id: randomUUID(),
-            code: `CH-${new Date().getFullYear()}-${sequence}`,
+            code: `CH-${year}-${sequence}`,
             title,
             description: String(input.description || "").trim(),
             departmentId: String(input.departmentId),
@@ -4169,7 +4559,7 @@ function localApi(
               ? input.priority
               : "MEDIUM",
             status: "OPEN",
-            dueAt: String(input.dueAt || ""),
+            dueAt: withTimeZone(String(input.dueAt || "")),
             participantIds: [currentUser.id, assignee.id],
             comments: [],
             createdAt: now,
@@ -4249,6 +4639,7 @@ function localApi(
             return json(response, 400, {
               message: "Selecione um responsável válido.",
             });
+          const before = { status: ticket.status, assigneeName: ticket.assigneeName, priority: ticket.priority, dueAt: ticket.dueAt, departmentId: ticket.departmentId };
           if (input.title) ticket.title = String(input.title).trim();
           if (input.description !== undefined)
             ticket.description = String(input.description).trim();
@@ -4269,8 +4660,21 @@ function localApi(
             )
           )
             ticket.status = input.status;
-          if (input.dueAt !== undefined) ticket.dueAt = String(input.dueAt);
+          if (input.dueAt !== undefined) ticket.dueAt = withTimeZone(String(input.dueAt));
           ticket.updatedAt = new Date().toISOString();
+          // Histórico: cada mudança relevante vira um registro na conversa do chamado.
+          const statusLabels: Record<string, string> = { OPEN: "Aberto", IN_PROGRESS: "Em andamento", WAITING: "Aguardando", RESOLVED: "Resolvido", CLOSED: "Fechado" };
+          const priorityLabels: Record<string, string> = { LOW: "Baixa", MEDIUM: "Média", HIGH: "Alta", URGENT: "Urgente" };
+          const dueLabel = (value: string) => value ? new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short", timeZone: "America/Sao_Paulo" }).format(new Date(value)) : "sem prazo";
+          const changes = [
+            before.status !== ticket.status && `alterou o status para ${statusLabels[ticket.status]}`,
+            before.assigneeName !== ticket.assigneeName && `transferiu para ${ticket.assigneeName}`,
+            before.priority !== ticket.priority && `alterou a prioridade para ${priorityLabels[ticket.priority]}`,
+            before.departmentId !== ticket.departmentId && `moveu para o setor ${departments.get(ticket.departmentId)?.name || "—"}`,
+            (before.dueAt || "") !== (ticket.dueAt || "") && `alterou o prazo para ${dueLabel(ticket.dueAt)}`,
+          ].filter(Boolean) as string[];
+          if (changes.length)
+            ticket.comments.push({ id: randomUUID(), authorId: currentUser.id, authorName: currentUser.name, message: changes.join(" · "), mentions: [], createdAt: ticket.updatedAt, kind: "SYSTEM" });
           tickets.set(ticket.id, ticket);
           persistTickets();
           return json(response, 200, { ticket });
@@ -4411,9 +4815,9 @@ function localApi(
               approvalStatus: input.approvalRequired
                 ? "PENDING"
                 : "NOT_REQUIRED",
-              startAt: String(input.startAt || ""),
-              dueAt: String(input.dueAt || ""),
-              plannedAt: String(input.plannedAt || ""),
+              startAt: withTimeZone(String(input.startAt || "")),
+              dueAt: withTimeZone(String(input.dueAt || "")),
+              plannedAt: withTimeZone(String(input.plannedAt || "")),
               publishedAt: "",
               completedAt: "",
               estimateMinutes: Number(input.estimateMinutes || 0),
@@ -4899,7 +5303,7 @@ function localApi(
             )
               ? input.priority
               : task.priority,
-            dueAt: input.dueAt !== undefined ? String(input.dueAt) : task.dueAt,
+            dueAt: input.dueAt !== undefined ? withTimeZone(String(input.dueAt)) : task.dueAt,
             estimateMinutes:
               input.estimateMinutes !== undefined
                 ? Number(input.estimateMinutes || 0)
@@ -4966,10 +5370,13 @@ function localApi(
             return json(response, 403, {
               message: "Você não possui acesso à agenda.",
             });
+          const google = await googleAgendaEvents(currentUser);
           return json(response, 200, {
             events: [...calendarEvents.values()]
               .filter(canSeeEvent)
+              .concat(google.events)
               .sort((a, b) => a.startAt.localeCompare(b.startAt)),
+            google: { connected: googleCalendarConnected(currentUser.id), error: google.error },
             canViewTeam: hasPermission(currentUser, "calendar.view_team"),
             canEditAll: hasPermission(currentUser, "calendar.edit_all"),
           });
@@ -4981,8 +5388,8 @@ function localApi(
             });
           const input = await body(request),
             title = String(input.title || "").trim(),
-            startAt = String(input.startAt || ""),
-            endAt = String(input.endAt || "");
+            startAt = withTimeZone(String(input.startAt || "")),
+            endAt = withTimeZone(String(input.endAt || ""));
           if (
             title.length < 3 ||
             !startAt ||
@@ -5017,6 +5424,7 @@ function localApi(
               updatedAt: now,
             };
           calendarEvents.set(event.id, event);
+          await pushCalendarEventToGoogle(event, { createMeet: input.googleMeet === true || input.googleMeet === "on", notify: true });
           persistCalendarEvents();
           return json(response, 201, { event });
         }
@@ -5028,6 +5436,35 @@ function localApi(
           const input=await body(request),status=String(input.status);
           if(!["ACCEPTED","DECLINED"].includes(status))return json(response,400,{message:"Resposta inválida."});
           event.participantResponses={...(event.participantResponses||{}),[currentUser.id]:status as "ACCEPTED"|"DECLINED"};event.updatedAt=new Date().toISOString();calendarEvents.set(event.id,event);persistCalendarEvents();return json(response,200,{event});
+        }
+        // Evento criado direto no Google Agenda do próprio usuário: a edição vai direto para o Google.
+        const googleOnlyMatch = url.match(/^\/calendar\/events\/google:([^/]+)$/);
+        if (googleOnlyMatch && request.method === "PATCH") {
+          if (!hasPermission(currentUser, "calendar.edit"))
+            return json(response, 403, { message: "Você não possui permissão para editar eventos." });
+          if (!googleCalendarConnected(currentUser.id))
+            return json(response, 409, { message: "Conecte sua conta Google em Configurações para editar eventos do Google Agenda." });
+          const input = await body(request), patch: Record<string, unknown> = {};
+          if (input.title !== undefined) {
+            const title = String(input.title).trim();
+            if (!title) return json(response, 400, { message: "Informe o título do evento." });
+            patch.summary = title;
+          }
+          if (input.description !== undefined) patch.description = String(input.description).trim();
+          if (input.location !== undefined) patch.location = String(input.location).trim();
+          if (input.startAt !== undefined || input.endAt !== undefined) {
+            const startAt = new Date(String(input.startAt || "")), endAt = new Date(String(input.endAt || ""));
+            if (Number.isNaN(startAt.getTime()) || Number.isNaN(endAt.getTime()) || endAt <= startAt)
+              return json(response, 400, { message: "Informe um período válido." });
+            patch.start = { dateTime: startAt.toISOString() };
+            patch.end = { dateTime: endAt.toISOString() };
+          }
+          const googleResponse = await googleCalendarFetch(currentUser.id, `/calendars/primary/events/${encodeURIComponent(decodeURIComponent(googleOnlyMatch[1]))}?sendUpdates=all`, { method: "PATCH", body: patch });
+          const result = await googleResponse.json().catch(() => ({})) as { error?: { message?: string } };
+          if (!googleResponse.ok)
+            return json(response, googleResponse.status === 404 || googleResponse.status === 410 ? 404 : 502, { message: result.error?.message || "Não foi possível atualizar o evento no Google Agenda." });
+          googleAgendaCache.delete(currentUser.id);
+          return json(response, 200, { ok: true });
         }
         if (calendarMatch && request.method === "PATCH") {
           const event = calendarEvents.get(calendarMatch[1]);
@@ -5053,10 +5490,10 @@ function localApi(
                 : event.description,
             startAt:
               input.startAt !== undefined
-                ? String(input.startAt)
+                ? withTimeZone(String(input.startAt))
                 : event.startAt,
             endAt:
-              input.endAt !== undefined ? String(input.endAt) : event.endAt,
+              input.endAt !== undefined ? withTimeZone(String(input.endAt)) : event.endAt,
             location:
               input.location !== undefined
                 ? String(input.location)
@@ -5087,6 +5524,15 @@ function localApi(
             updatedAt: new Date().toISOString(),
           });
           calendarEvents.set(event.id, event);
+          // Compromisso de uma reunião: mover na agenda também remarca a reunião.
+          const linkedMeeting = [...meetings.values()].find((value) => value.calendarEventId === event.id);
+          if (linkedMeeting && ["SCHEDULED", "PAUSED"].includes(linkedMeeting.status) && (linkedMeeting.startAt !== event.startAt || input.endAt !== undefined)) {
+            linkedMeeting.startAt = event.startAt;
+            linkedMeeting.durationMinutes = Math.max(15, Math.min(480, Math.round((new Date(event.endAt).getTime() - new Date(event.startAt).getTime()) / 60000)));
+            linkedMeeting.updatedAt = event.updatedAt;
+            persistMeetings();
+          }
+          await pushCalendarEventToGoogle(event, { createMeet: input.googleMeet === true || input.googleMeet === "on", notify: true });
           persistCalendarEvents();
           return json(response, 200, { event });
         }
@@ -5101,9 +5547,401 @@ function localApi(
             return json(response, 403, {
               message: "Você não pode excluir este evento.",
             });
+          await removeCalendarEventFromGoogle(event, true);
           calendarEvents.delete(event.id);
           persistCalendarEvents();
           return json(response, 200, { ok: true });
+        }
+        const meetingPath = url.split("?")[0];
+        if (meetingPath === "/meetings" || meetingPath.startsWith("/meetings/")) {
+          if (!hasPermission(currentUser, "meetings.view"))
+            return json(response, 403, {
+              message: "Você não possui acesso às reuniões.",
+            });
+          const canSeeMeeting = (meeting: Meeting) =>
+            hasPermission(currentUser, "meetings.view_team") ||
+            meeting.responsibleId === currentUser.id ||
+            meeting.createdById === currentUser.id ||
+            meeting.participantIds.includes(currentUser.id);
+          const meetingTypes = ["FOLLOW_UP", "PLANNING", "RESULTS", "ALIGNMENT", "PRESENTATION", "SUPPORT", "OTHER"];
+          const meetingTypeLabels: Record<string, string> = { FOLLOW_UP: "Acompanhamento", PLANNING: "Planejamento", RESULTS: "Resultados", ALIGNMENT: "Alinhamento", PRESENTATION: "Apresentação", SUPPORT: "Suporte / Dúvidas", OTHER: "Outros" };
+          const meetingFormats = ["GOOGLE_MEET", "PRESENTIAL", "PHONE", "WHATSAPP", "OTHER"];
+          const perceptionFields = ["satisfaction", "contactQuality", "contactVolume", "commercialService", "churnRisk", "expansionPotential"] as const;
+          const perceptionValues = ["", "POSITIVE", "NEUTRAL", "NEGATIVE", "GOOD", "REGULAR", "BAD", "IMPROVE", "LOW", "MEDIUM", "HIGH"];
+          const actionOrigins = ["CLIENT_REQUEST", "DIAGNOSIS", "OPPORTUNITY", "MEETING_DECISION"];
+          const actionStatuses = ["PENDING", "IN_PROGRESS", "WAITING_CLIENT", "SCHEDULED", "DONE"];
+          const statementKinds = ["", "PRAISE", "COMPLAINT", "REQUEST", "QUESTION", "OPPORTUNITY"];
+          const text = (value: unknown, max: number) => String(value ?? "").trim().slice(0, max);
+          const validDate = (value: string) => !!value && !Number.isNaN(new Date(value).getTime());
+          const escapeMeetingHtml = (value: string) => value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char] as string);
+          const meetingEnd = (meeting: Meeting) => new Date(new Date(meeting.startAt).getTime() + meeting.durationMinutes * 60000).toISOString();
+          const elapsed = (meeting: Meeting) =>
+            meeting.elapsedSeconds + (meeting.status === "IN_PROGRESS" && meeting.resumedAt ? Math.max(0, Math.round((Date.now() - new Date(meeting.resumedAt).getTime()) / 1000)) : 0);
+          const listMeeting = (meeting: Meeting) => {
+            const event = meeting.calendarEventId ? calendarEvents.get(meeting.calendarEventId) : undefined;
+            return { ...meeting, elapsedSeconds: elapsed(meeting), attachments: meeting.attachments.map(({ dataUrl: _, ...attachment }) => attachment), google: event?.googleEventId || event?.googleSyncError ? { synced: !!event.googleEventId && !event.googleSyncError, link: event.googleHtmlLink || "", error: event.googleSyncError || "" } : null };
+          };
+          const defaultAgenda = ["Resultados do último mês", "Análise de campanhas (Google e Meta)", "Volume e qualidade de leads", "Novos criativos e materiais", "Oportunidades de expansão", "Alinhamento próximo mês", "Outros assuntos"];
+          const syncMeetingEvent = async (meeting: Meeting) => {
+            if (!meeting.notifications.calendar || meeting.status === "CANCELLED") {
+              const previous = meeting.calendarEventId ? calendarEvents.get(meeting.calendarEventId) : undefined;
+              if (previous) await removeCalendarEventFromGoogle(previous, meeting.status === "CANCELLED" && meeting.notifications.email);
+              if (meeting.calendarEventId) calendarEvents.delete(meeting.calendarEventId);
+              meeting.calendarEventId = "";
+              persistCalendarEvents();
+              return;
+            }
+            const now = new Date().toISOString(),
+              existing = meeting.calendarEventId ? calendarEvents.get(meeting.calendarEventId) : undefined,
+              participantIds = [...new Set([meeting.responsibleId, ...(meeting.notifications.shareTeam ? meeting.participantIds : [])])].filter((id) => id && users.has(id) && id !== (existing?.ownerId || meeting.createdById));
+            const event: CalendarEvent = {
+              ...existing,
+              id: existing?.id || randomUUID(),
+              title: `${meeting.clientName} · ${meetingTypeLabels[meeting.type] || "Reunião"}`,
+              description: [meeting.subject, meeting.notes].filter(Boolean).join("\n\n"),
+              ownerId: existing?.ownerId || meeting.createdById,
+              ownerName: existing?.ownerName || meeting.createdByName,
+              participantIds,
+              participantResponses: Object.fromEntries(participantIds.map((id) => [id, existing?.participantResponses?.[id] || "PENDING"])),
+              startAt: meeting.startAt,
+              endAt: meetingEnd(meeting),
+              location: meeting.meetingUrl || (meeting.format === "GOOGLE_MEET" ? "Google Meet" : meeting.format === "PRESENTIAL" ? meeting.unit || "Presencial" : ""),
+              category: "MEETING",
+              clientId: meeting.clientId,
+              projectId: "",
+              opportunityId: "",
+              taskId: "",
+              recurrence: "NONE",
+              reminderMinutes: meeting.notifications.reminder ? 60 : 15,
+              createdAt: existing?.createdAt || now,
+              updatedAt: now,
+            };
+            calendarEvents.set(event.id, event);
+            meeting.calendarEventId = event.id;
+            // No Google Agenda: convida o contato do cliente e a equipe, e gera o link do Meet quando o formato pede.
+            await pushCalendarEventToGoogle(event, {
+              attendees: [meeting.notifications.email ? meeting.contactEmail : "", users.get(meeting.responsibleId)?.email || ""],
+              createMeet: meeting.format === "GOOGLE_MEET" && !meeting.meetingUrl,
+              notify: meeting.notifications.email || meeting.notifications.shareTeam,
+            });
+            if (meeting.format === "GOOGLE_MEET" && !meeting.meetingUrl && event.meetUrl) {
+              meeting.meetingUrl = event.meetUrl;
+              event.location = event.meetUrl;
+            }
+            persistCalendarEvents();
+          };
+          const googleWarning = (meeting: Meeting) => {
+            const event = meeting.calendarEventId ? calendarEvents.get(meeting.calendarEventId) : undefined;
+            return event?.googleSyncError ? `A reunião foi salva no PW OS, mas não foi sincronizada com o Google Agenda: ${event.googleSyncError}` : "";
+          };
+          const sendMeetingInvite = async (meeting: Meeting) => {
+            if (!meeting.notifications.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(meeting.contactEmail)) return "";
+            // Com o Google Agenda sincronizado, o próprio Google envia o convite ao cliente.
+            const syncedEvent = meeting.calendarEventId ? calendarEvents.get(meeting.calendarEventId) : undefined;
+            if (syncedEvent?.googleEventId && !syncedEvent.googleSyncError) return "";
+            const when = new Intl.DateTimeFormat("pt-BR", { dateStyle: "full", timeStyle: "short", timeZone: "America/Sao_Paulo" }).format(new Date(meeting.startAt));
+            try {
+              await sendUserEmail(currentUser.id, {
+                to: [meeting.contactEmail],
+                subject: `Convite: ${meetingTypeLabels[meeting.type] || "Reunião"} · ${meeting.clientName}`,
+                html: `<p>Olá, ${escapeMeetingHtml(meeting.contactName)}!</p><p>Confirmamos nossa reunião de <b>${escapeMeetingHtml((meetingTypeLabels[meeting.type] || "acompanhamento").toLowerCase())}</b> para <b>${escapeMeetingHtml(when)}</b> (${meeting.durationMinutes} minutos).</p><p><b>Pauta:</b> ${escapeMeetingHtml(meeting.subject)}</p>${meeting.meetingUrl ? `<p><a href="${escapeMeetingHtml(meeting.meetingUrl)}">Acessar a reunião</a></p>` : ""}<p>Até lá,<br/>${escapeMeetingHtml(meeting.responsibleName)}</p>`,
+              });
+              return "";
+            } catch (error) {
+              return `A reunião foi agendada, mas o convite por e-mail não foi enviado: ${error instanceof Error ? error.message : "falha no envio"}`;
+            }
+          };
+          const applyMeetingInput = (meeting: Meeting, input: Record<string, any>) => {
+            if (input.clientId !== undefined) {
+              const client = clients.get(String(input.clientId));
+              if (!client) return "Selecione um cliente válido.";
+              meeting.clientId = client.id;
+              meeting.clientName = client.name;
+            }
+            if (input.unit !== undefined) meeting.unit = text(input.unit, 80);
+            if (input.contactName !== undefined) meeting.contactName = text(input.contactName, 120);
+            if (input.contactEmail !== undefined) meeting.contactEmail = text(input.contactEmail, 160).toLowerCase();
+            if (input.contactRole !== undefined) meeting.contactRole = text(input.contactRole, 80);
+            if (input.startAt !== undefined) {
+              const startAt = String(input.startAt);
+              if (!validDate(startAt)) return "Informe data e horário válidos.";
+              const normalized = new Date(startAt).toISOString();
+              if (meeting.startAt && normalized !== meeting.startAt && meeting.status === "SCHEDULED") meeting.rescheduleCount += 1;
+              meeting.startAt = normalized;
+            }
+            if (input.durationMinutes !== undefined) meeting.durationMinutes = Math.min(480, Math.max(10, Number(input.durationMinutes) || 30));
+            if (input.type !== undefined && meetingTypes.includes(String(input.type))) meeting.type = input.type;
+            if (input.format !== undefined && meetingFormats.includes(String(input.format))) meeting.format = input.format;
+            if (input.meetingUrl !== undefined) {
+              const meetingUrl = text(input.meetingUrl, 300);
+              if (meetingUrl && !/^https?:\/\//i.test(meetingUrl)) return "O link da reunião deve começar com http:// ou https://.";
+              meeting.meetingUrl = meetingUrl;
+            }
+            if (input.subject !== undefined) meeting.subject = text(input.subject, 150);
+            if (input.notes !== undefined) meeting.notes = text(input.notes, 500);
+            if (input.responsibleId !== undefined) {
+              const responsible = users.get(String(input.responsibleId));
+              if (!responsible || responsible.profile === "CLIENT") return "Selecione um responsável válido.";
+              if (responsible.id !== currentUser.id && responsible.id !== meeting.responsibleId && !hasPermission(currentUser, "meetings.view_team")) return "Você só pode agendar reuniões sob sua responsabilidade.";
+              meeting.responsibleId = responsible.id;
+              meeting.responsibleName = responsible.name;
+            }
+            if (Array.isArray(input.participantIds))
+              meeting.participantIds = [...new Set(input.participantIds.map(String))].filter((id) => users.get(id) && users.get(id)!.profile !== "CLIENT").slice(0, 20);
+            if (input.notifications && typeof input.notifications === "object")
+              meeting.notifications = {
+                email: !!input.notifications.email,
+                calendar: !!input.notifications.calendar,
+                reminder: !!input.notifications.reminder,
+                shareTeam: !!input.notifications.shareTeam,
+              };
+            if (Array.isArray(input.statements))
+              meeting.statements = input.statements.slice(0, 100).map((item: any) => ({
+                id: text(item?.id, 60) || randomUUID(),
+                text: text(item?.text, 400),
+                kind: statementKinds.includes(String(item?.kind || "")) ? String(item?.kind || "") as Meeting["statements"][number]["kind"] : "",
+                createdAt: validDate(String(item?.createdAt || "")) ? String(item.createdAt) : new Date().toISOString(),
+              })).filter((item: Meeting["statements"][number]) => item.text);
+            if (input.perception && typeof input.perception === "object") {
+              perceptionFields.forEach((field) => {
+                if (input.perception[field] !== undefined && perceptionValues.includes(String(input.perception[field]))) meeting.perception[field] = input.perception[field];
+              });
+              if (input.perception.notes !== undefined) meeting.perception.notes = text(input.perception.notes, 500);
+            }
+            if (Array.isArray(input.agenda))
+              meeting.agenda = input.agenda.slice(0, 30).map((item: any) => ({ id: text(item?.id, 60) || randomUUID(), label: text(item?.label, 120), done: !!item?.done })).filter((item: Meeting["agenda"][number]) => item.label);
+            if (Array.isArray(input.actions)) {
+              const actions: MeetingAction[] = [];
+              for (const item of input.actions.slice(0, 50)) {
+                const title = text(item?.title, 160);
+                if (!title) continue;
+                const responsibleId = String(item?.responsibleId || ""),
+                  responsible = users.get(responsibleId);
+                actions.push({
+                  id: text(item?.id, 60) || randomUUID(),
+                  title,
+                  responsibleId: responsible ? responsible.id : responsibleId === "CLIENT" ? "CLIENT" : "",
+                  responsibleName: responsible ? responsible.name : responsibleId === "CLIENT" ? "Cliente" : "",
+                  dueDate: /^\d{4}-\d{2}-\d{2}$/.test(String(item?.dueDate || "")) ? String(item.dueDate) : "",
+                  origin: actionOrigins.includes(String(item?.origin)) ? item.origin : "MEETING_DECISION",
+                  status: actionStatuses.includes(String(item?.status)) ? item.status : "PENDING",
+                  notes: text(item?.notes, 200),
+                });
+              }
+              meeting.actions = actions;
+            }
+            if (input.summary !== undefined) meeting.summary = text(input.summary, 3000);
+            if (input.nextSteps !== undefined) meeting.nextSteps = text(input.nextSteps, 500);
+            if (input.nextContact && typeof input.nextContact === "object")
+              meeting.nextContact = {
+                date: /^\d{4}-\d{2}-\d{2}$/.test(String(input.nextContact.date || "")) ? String(input.nextContact.date) : "",
+                type: text(input.nextContact.type, 80),
+                addToCalendar: !!input.nextContact.addToCalendar,
+              };
+            if (input.nextMeeting && typeof input.nextMeeting === "object")
+              meeting.nextMeeting = {
+                enabled: !!input.nextMeeting.enabled,
+                date: /^\d{4}-\d{2}-\d{2}$/.test(String(input.nextMeeting.date || "")) ? String(input.nextMeeting.date) : "",
+                time: /^\d{2}:\d{2}$/.test(String(input.nextMeeting.time || "")) ? String(input.nextMeeting.time) : "",
+                invite: !!input.nextMeeting.invite,
+              };
+            return "";
+          };
+          const newMeeting = (): Meeting => {
+            const now = new Date().toISOString();
+            return {
+              id: randomUUID(), clientId: "", clientName: "", unit: "", contactName: "", contactEmail: "", contactRole: "",
+              startAt: "", durationMinutes: 30, type: "FOLLOW_UP", format: "GOOGLE_MEET", meetingUrl: "", subject: "", notes: "",
+              responsibleId: currentUser.id, responsibleName: currentUser.name, participantIds: [],
+              notifications: { email: true, calendar: true, reminder: true, shareTeam: false }, calendarEventId: "",
+              status: "SCHEDULED", startedAt: "", resumedAt: "", elapsedSeconds: 0, completedAt: "", statements: [],
+              perception: { satisfaction: "", contactQuality: "", contactVolume: "", commercialService: "", churnRisk: "", expansionPotential: "", notes: "" },
+              agenda: defaultAgenda.map((label) => ({ id: randomUUID(), label, done: false })), actions: [], summary: "", nextSteps: "",
+              nextContact: { date: "", type: "", addToCalendar: true }, nextMeeting: { enabled: false, date: "", time: "10:00", invite: true },
+              followUpMeetingId: "", attachments: [], rescheduleCount: 0,
+              createdById: currentUser.id, createdByName: currentUser.name, createdAt: now, updatedAt: now,
+            };
+          };
+          if (meetingPath === "/meetings" && request.method === "GET") {
+            const canSchedule = hasPermission(currentUser, "meetings.create") || hasPermission(currentUser, "meetings.edit");
+            return json(response, 200, {
+              meetings: [...meetings.values()].filter(canSeeMeeting).sort((a, b) => a.startAt.localeCompare(b.startAt)).map(listMeeting),
+              clients: [...clients.values()].map((client) => ({ id: client.id, name: client.name, status: client.status, segment: client.segment, website: client.website, createdAt: client.createdAt })).sort((a, b) => a.name.localeCompare(b.name, "pt-BR")),
+              contacts: canSchedule ? [...clientContacts.values()].map((contact) => ({ id: contact.id, clientId: contact.clientId, name: contact.name, role: contact.role, email: contact.email })) : [],
+              users: [...users.values()].filter((user) => user.profile !== "CLIENT").map((user) => ({ id: user.id, name: user.name, role: user.role, departmentName: user.departmentName || "" })).sort((a, b) => a.name.localeCompare(b.name, "pt-BR")),
+              canViewTeam: hasPermission(currentUser, "meetings.view_team"),
+              googleConnected: googleCalendarConnected(currentUser.id),
+            });
+          }
+          if (meetingPath === "/meetings" && request.method === "POST") {
+            if (!hasPermission(currentUser, "meetings.create"))
+              return json(response, 403, { message: "Você não possui permissão para agendar reuniões." });
+            const input = await body(request), meeting = newMeeting();
+            if (!input.clientId || !text(input.contactName, 120) || !input.startAt || !text(input.subject, 150))
+              return json(response, 400, { message: "Preencha cliente, participante, data, horário e pauta." });
+            const error = applyMeetingInput(meeting, input);
+            if (error) return json(response, 400, { message: error });
+            meetings.set(meeting.id, meeting);
+            await syncMeetingEvent(meeting);
+            persistMeetings();
+            const warning = [googleWarning(meeting), await sendMeetingInvite(meeting)].filter(Boolean).join(" ");
+            return json(response, 201, { meeting: listMeeting(meeting), warning });
+          }
+          const aiSummaryMatch = meetingPath.match(/^\/meetings\/([^/]+)\/ai-summary$/);
+          if (aiSummaryMatch && request.method === "POST") {
+            const meeting = meetings.get(aiSummaryMatch[1]);
+            if (!meeting || !canSeeMeeting(meeting)) return json(response, 404, { message: "Reunião não encontrada." });
+            if (!hasPermission(currentUser, "meetings.edit")) return json(response, 403, { message: "Você não possui permissão para editar reuniões." });
+            const openai = openAiClient();
+            if (!openai) return json(response, 503, { code: "AI_NOT_CONFIGURED", message: "Configure a chave da OpenAI em Configurações para gerar o resumo com IA." });
+            const statementKindLabels: Record<string, string> = { PRAISE: "Elogio", COMPLAINT: "Reclamação", REQUEST: "Solicitação", QUESTION: "Dúvida", OPPORTUNITY: "Oportunidade" };
+            const perceptionFieldLabels: Record<string, string> = { satisfaction: "Satisfação geral", contactQuality: "Qualidade dos contatos", contactVolume: "Volume de contatos", commercialService: "Atendimento comercial", churnRisk: "Risco de cancelamento", expansionPotential: "Potencial de expansão" };
+            const perceptionValueLabels: Record<string, string> = { POSITIVE: "Positiva", NEUTRAL: "Neutra", NEGATIVE: "Negativa", GOOD: "Boa", REGULAR: "Regular", BAD: "Ruim", IMPROVE: "Precisa melhorar", LOW: "Baixo", MEDIUM: "Médio", HIGH: "Alto" };
+            const originLabels: Record<string, string> = { CLIENT_REQUEST: "Solicitação do cliente", DIAGNOSIS: "Diagnóstico", OPPORTUNITY: "Oportunidade", MEETING_DECISION: "Decisão da reunião" };
+            const statements = meeting.statements.map((item) => ({ tipo: statementKindLabels[item.kind] || "Anotação", texto: item.text }));
+            const perception = Object.fromEntries(perceptionFields.filter((field) => meeting.perception[field]).map((field) => [perceptionFieldLabels[field], perceptionValueLabels[meeting.perception[field]] || meeting.perception[field]]));
+            const actions = meeting.actions.filter((action) => action.title.trim()).map((action) => ({ titulo: action.title, responsavel: action.responsibleName, prazo: action.dueDate, origem: originLabels[action.origin] }));
+            if (!statements.length && !actions.length && !meeting.perception.notes.trim() && !Object.keys(perception).length)
+              return json(response, 400, { code: "AI_NOT_ENOUGH_DATA", message: "Registre ao menos uma anotação, ação ou percepção do cliente antes de gerar o resumo com IA." });
+            const context = {
+              cliente: meeting.clientName, unidade: meeting.unit, participante: [meeting.contactName, meeting.contactRole].filter(Boolean).join(" — "),
+              tipo: meetingTypeLabels[meeting.type] || meeting.type, pauta: meeting.subject, observacoesDoAgendamento: meeting.notes,
+              itensDaPauta: meeting.agenda.map((item) => `${item.done ? "[discutido]" : "[não discutido]"} ${item.label}`),
+              anotacoes: statements, percepcao: perception, observacoesDaPercepcao: meeting.perception.notes, acoesRegistradas: actions, proximosPassosJaRegistrados: meeting.nextSteps,
+            };
+            try {
+              const aiResponse = await openai.responses.create({
+                model: activeOpenAiModel(),
+                reasoning: { effort: "low" },
+                store: false,
+                max_output_tokens: 2500,
+                prompt_cache_key: "pw-meeting-summary-v1",
+                input: [
+                  { role: "developer", content: "Você é gestor de contas sênior de uma agência de performance. Escreva a ata de uma reunião com cliente em português do Brasil, baseada somente nas anotações fornecidas. Não invente fatos, números, compromissos ou nomes; se algo não foi registrado, não mencione. Resumo: até 900 caracteres, em prosa objetiva, cobrindo o que o cliente disse, decisões e clima da relação. Próximos passos: até 400 caracteres. Ações sugeridas: somente tarefas concretas que decorrem das anotações e que ainda não estejam em acoesRegistradas (lista vazia se não houver); título até 120 caracteres, começando por verbo." },
+                  { role: "user", content: `Anotações da reunião:\n${JSON.stringify(context)}` },
+                ],
+                text: { verbosity: "low", format: { type: "json_schema", name: "meeting_summary_v1", strict: true, schema: { type: "object", additionalProperties: false, properties: { summary: { type: "string" }, nextSteps: { type: "string" }, suggestedActions: { type: "array", maxItems: 5, items: { type: "object", additionalProperties: false, properties: { title: { type: "string" }, origin: { type: "string", enum: actionOrigins } }, required: ["title", "origin"] } } }, required: ["summary", "nextSteps", "suggestedActions"] } } },
+              });
+              const parsed = JSON.parse(aiResponse.output_text) as { summary: string; nextSteps: string; suggestedActions: { title: string; origin: string }[] };
+              return json(response, 200, {
+                summary: text(parsed.summary, 3000), nextSteps: text(parsed.nextSteps, 500),
+                suggestedActions: parsed.suggestedActions.map((item) => ({ title: text(item.title, 120), origin: actionOrigins.includes(item.origin) ? item.origin : "MEETING_DECISION" })).filter((item) => item.title),
+                model: activeOpenAiModel(),
+              });
+            } catch (cause: any) {
+              const apiCode = String(cause?.code || cause?.error?.code || "");
+              if (apiCode === "insufficient_quota" || apiCode === "billing_hard_limit_reached") return json(response, 402, { code: "AI_QUOTA_EXHAUSTED", message: "Os créditos da OpenAI acabaram. Recarregue o saldo para voltar a usar a IA." });
+              if (Number(cause?.status) === 429) return json(response, 429, { code: "AI_RATE_LIMIT", message: "A OpenAI está temporariamente no limite de requisições. Aguarde um pouco e tente novamente." });
+              console.error("[OpenAI meeting summary]", cause instanceof Error ? cause.message : cause);
+              return json(response, 502, { code: "AI_GENERATION_FAILED", message: "Não foi possível gerar o resumo com IA agora. Você pode escrever o resumo manualmente." });
+            }
+          }
+          const attachmentMatch = meetingPath.match(/^\/meetings\/([^/]+)\/attachments(?:\/([^/]+))?$/);
+          if (attachmentMatch) {
+            const meeting = meetings.get(attachmentMatch[1]);
+            if (!meeting || !canSeeMeeting(meeting)) return json(response, 404, { message: "Reunião não encontrada." });
+            if (!attachmentMatch[2] && request.method === "POST") {
+              if (!hasPermission(currentUser, "meetings.edit")) return json(response, 403, { message: "Você não possui permissão para editar reuniões." });
+              const input = await body(request), dataUrl = String(input.dataUrl || ""), fileName = text(input.fileName, 160);
+              const match = dataUrl.match(/^data:([\w.+-]+\/[\w.+-]+)?;base64,(.+)$/);
+              if (!fileName || !match) return json(response, 400, { message: "Arquivo inválido." });
+              const size = Math.floor(match[2].length * 3 / 4);
+              if (size > 8 * 1024 * 1024) return json(response, 400, { message: "O anexo pode ter no máximo 8 MB." });
+              if (meeting.attachments.length >= 15) return json(response, 400, { message: "Limite de 15 anexos por reunião." });
+              const attachment = { id: randomUUID(), fileName, mimeType: match[1] || "application/octet-stream", size, dataUrl, createdAt: new Date().toISOString(), createdByName: currentUser.name };
+              meeting.attachments.push(attachment);
+              meeting.updatedAt = attachment.createdAt;
+              persistMeetings();
+              return json(response, 201, { meeting: listMeeting(meeting) });
+            }
+            const attachment = meeting.attachments.find((item) => item.id === attachmentMatch[2]);
+            if (!attachment) return json(response, 404, { message: "Anexo não encontrado." });
+            if (request.method === "GET") return json(response, 200, { attachment });
+            if (request.method === "DELETE") {
+              if (!hasPermission(currentUser, "meetings.edit")) return json(response, 403, { message: "Você não possui permissão para editar reuniões." });
+              meeting.attachments = meeting.attachments.filter((item) => item.id !== attachment.id);
+              meeting.updatedAt = new Date().toISOString();
+              persistMeetings();
+              return json(response, 200, { meeting: listMeeting(meeting) });
+            }
+          }
+          const meetingMatch = meetingPath.match(/^\/meetings\/([^/]+)$/);
+          if (meetingMatch) {
+            const meeting = meetings.get(meetingMatch[1]);
+            if (!meeting || !canSeeMeeting(meeting)) return json(response, 404, { message: "Reunião não encontrada." });
+            if (request.method === "GET") return json(response, 200, { meeting: listMeeting(meeting) });
+            if (request.method === "DELETE") {
+              if (!hasPermission(currentUser, "meetings.delete")) return json(response, 403, { message: "Você não possui permissão para excluir reuniões." });
+              const event = meeting.calendarEventId ? calendarEvents.get(meeting.calendarEventId) : undefined;
+              if (event) { await removeCalendarEventFromGoogle(event, meeting.notifications.email && meeting.status === "SCHEDULED"); calendarEvents.delete(event.id); persistCalendarEvents(); }
+              meetings.delete(meeting.id);
+              persistMeetings();
+              return json(response, 200, { ok: true });
+            }
+            if (request.method === "PATCH") {
+              if (!hasPermission(currentUser, "meetings.edit")) return json(response, 403, { message: "Você não possui permissão para editar reuniões." });
+              const input = await body(request), previousStart = meeting.startAt, previousDuration = meeting.durationMinutes, now = new Date().toISOString();
+              const error = applyMeetingInput(meeting, input);
+              if (error) return json(response, 400, { message: error });
+              let warning = "";
+              const transition = String(input.transition || "");
+              if (transition === "start" && ["SCHEDULED", "PAUSED"].includes(meeting.status)) {
+                meeting.startedAt ||= now;
+                meeting.resumedAt = now;
+                meeting.status = "IN_PROGRESS";
+              } else if (transition === "pause" && meeting.status === "IN_PROGRESS") {
+                meeting.elapsedSeconds = elapsed(meeting);
+                meeting.resumedAt = "";
+                meeting.status = "PAUSED";
+              } else if (transition === "finish" && ["SCHEDULED", "IN_PROGRESS", "PAUSED"].includes(meeting.status)) {
+                meeting.elapsedSeconds = elapsed(meeting);
+                meeting.resumedAt = "";
+                meeting.startedAt ||= meeting.startAt;
+                meeting.completedAt = now;
+                meeting.status = "COMPLETED";
+                if (meeting.nextMeeting.enabled && meeting.nextMeeting.date && !meeting.followUpMeetingId) {
+                  const followUp = newMeeting(), startAt = new Date(`${meeting.nextMeeting.date}T${meeting.nextMeeting.time || "10:00"}:00-03:00`);
+                  if (!Number.isNaN(startAt.getTime())) {
+                    Object.assign(followUp, {
+                      clientId: meeting.clientId, clientName: meeting.clientName, unit: meeting.unit, contactName: meeting.contactName, contactEmail: meeting.contactEmail,
+                      contactRole: meeting.contactRole, startAt: startAt.toISOString(), durationMinutes: meeting.durationMinutes, type: "FOLLOW_UP", format: meeting.format,
+                      meetingUrl: meeting.meetingUrl, subject: "Reunião mensal de acompanhamento", responsibleId: meeting.responsibleId, responsibleName: meeting.responsibleName,
+                      participantIds: meeting.participantIds, notifications: { ...meeting.notifications, email: meeting.nextMeeting.invite },
+                    });
+                    meetings.set(followUp.id, followUp);
+                    await syncMeetingEvent(followUp);
+                    meeting.followUpMeetingId = followUp.id;
+                    warning = await sendMeetingInvite(followUp);
+                  }
+                }
+                if (meeting.nextContact.addToCalendar && meeting.nextContact.date) {
+                  const eventStart = new Date(`${meeting.nextContact.date}T09:00:00-03:00`), eventId = randomUUID();
+                  calendarEvents.set(eventId, {
+                    id: eventId, title: `Retorno · ${meeting.clientName}`, description: [meeting.nextContact.type, meeting.nextSteps].filter(Boolean).join("\n\n"),
+                    ownerId: meeting.responsibleId, ownerName: meeting.responsibleName, participantIds: [], participantResponses: {},
+                    startAt: eventStart.toISOString(), endAt: new Date(eventStart.getTime() + 30 * 60000).toISOString(), location: "", category: "CLIENT_RETURN",
+                    clientId: meeting.clientId, projectId: "", opportunityId: "", taskId: "", recurrence: "NONE", reminderMinutes: 60, createdAt: now, updatedAt: now,
+                  });
+                  await pushCalendarEventToGoogle(calendarEvents.get(eventId)!);
+                  persistCalendarEvents();
+                }
+              } else if (transition === "cancel" && ["SCHEDULED", "PAUSED"].includes(meeting.status)) {
+                meeting.status = "CANCELLED";
+              } else if (transition === "reopen" && meeting.status === "CANCELLED") {
+                meeting.status = "SCHEDULED";
+              } else if (transition) {
+                return json(response, 400, { message: "Esta ação não está disponível para o status atual da reunião." });
+              }
+              meeting.updatedAt = now;
+              if (transition === "cancel" || transition === "reopen" || previousStart !== meeting.startAt || previousDuration !== meeting.durationMinutes || input.notifications || input.participantIds || input.responsibleId || input.subject !== undefined || input.type !== undefined || input.format !== undefined || input.meetingUrl !== undefined || input.contactEmail !== undefined) {
+                await syncMeetingEvent(meeting);
+                warning = [warning, googleWarning(meeting)].filter(Boolean).join(" ");
+              }
+              persistMeetings();
+              return json(response, 200, { meeting: listMeeting(meeting), warning });
+            }
+          }
+          return json(response, 404, { message: "Recurso de reuniões não encontrado." });
         }
         const canUseCampaignReportAgenda =
           hasPermission(currentUser, "reports.view_operations") ||
@@ -6731,7 +7569,7 @@ function localApi(
             stageId: stage.id,
             status: "OPEN",
             nextAction: String(input.nextAction || "").trim(),
-            nextActionAt: String(input.nextActionAt || ""),
+            nextActionAt: withTimeZone(String(input.nextActionAt || "")),
             stageEnteredAt: now,
             createdAt: now,
             updatedAt: now,
@@ -7406,7 +8244,7 @@ function localApi(
                   .map((item) => item.trim())
                   .filter(Boolean),
             nextAction: String(input.nextAction || "").trim(),
-            nextActionAt: String(input.nextActionAt || ""),
+            nextActionAt: withTimeZone(String(input.nextActionAt || "")),
             updatedAt: new Date().toISOString(),
           });
           crmContacts.forEach((contact) => {
@@ -8007,6 +8845,76 @@ function localApi(
               targetUrl: `/tarefas?task=${encodeURIComponent(task.id)}`,
             });
           }
+          const bellRecent = Date.now() - 30 * 86400000;
+          // Creative Ops: demanda atribuída por outra pessoa e menções nos comentários.
+          if (hasPermission(currentUser, "tasks.view")) {
+            for (const task of workTasks.values()) {
+              if (task.archivedAt) continue;
+              const target = { accountId: task.id, campaignName: task.title, clientName: clients.get(task.clientId)?.name || "Creative Ops", responsibleId: task.responsibleId, responsibleName: task.responsibleName, targetUrl: `/tarefas?task=${encodeURIComponent(task.id)}` };
+              if (task.responsibleId === currentUser.id && task.createdBy !== currentUser.id && !["DONE", "CANCELLED", "PUBLISHED"].includes(task.status) && new Date(task.createdAt).getTime() >= bellRecent) {
+                const id = `task-assigned:${task.id}:${task.responsibleId}`;
+                alerts.push({ ...target, id, type: "TASK_ASSIGNED", severity: ["HIGH", "URGENT"].includes(task.priority) ? "WARNING" : "INFO", title: "Nova demanda para você", message: `${users.get(task.createdBy)?.name || "Alguém"} atribuiu esta demanda a você.`, createdAt: task.createdAt, read: notificationReads.has(`${currentUser.id}:${id}`) });
+              }
+              for (const comment of task.comments || []) {
+                if (comment.authorId === currentUser.id || !comment.mentions?.includes(currentUser.id) || new Date(comment.createdAt).getTime() < bellRecent) continue;
+                const id = `task-mention:${comment.id}`;
+                alerts.push({ ...target, id, type: "TASK_MENTION", severity: "INFO", title: `${comment.authorName} mencionou você`, message: comment.message.slice(0, 180), createdAt: comment.createdAt, read: notificationReads.has(`${currentUser.id}:${id}`) });
+              }
+            }
+          }
+          // CRM e Propostas: próxima ação vencendo hoje ou atrasada; proposta assinada ou perto de vencer.
+          if (hasPermission(currentUser, "opportunities.view")) {
+            const endOfToday = new Date(`${saoPauloDay(new Date())}T23:59:59-03:00`).getTime();
+            for (const opportunity of opportunities.values()) {
+              if (opportunity.responsibleId !== currentUser.id) continue;
+              const target = { accountId: opportunity.id, campaignName: opportunity.name, clientName: opportunity.company || "CRM", responsibleId: opportunity.responsibleId, responsibleName: opportunity.responsibleName, targetUrl: `/crm?opportunity=${encodeURIComponent(opportunity.id)}` };
+              const due = opportunity.nextActionAt ? new Date(opportunity.nextActionAt).getTime() : NaN;
+              if (opportunity.status === "OPEN" && !Number.isNaN(due) && due <= endOfToday) {
+                const id = `crm-next-action:${opportunity.id}:${opportunity.nextActionAt}`, late = due < Date.now();
+                alerts.push({ ...target, id, type: "CRM_NEXT_ACTION", severity: late ? "WARNING" : "INFO", title: late ? "Próxima ação atrasada" : "Próxima ação para hoje", message: opportunity.nextAction || "Ação comercial agendada para este lead.", createdAt: opportunity.nextActionAt, read: notificationReads.has(`${currentUser.id}:${id}`) });
+              }
+              for (const proposal of opportunity.proposals) {
+                if (proposal.status === "ACCEPTED" && proposal.signedAt && new Date(proposal.signedAt).getTime() >= bellRecent) {
+                  const id = `proposal-signed:${proposal.id}`;
+                  alerts.push({ ...target, id, type: "PROPOSAL_SIGNED", severity: "INFO", title: "Proposta assinada", message: `${proposal.customer?.name || "O cliente"} assinou "${proposal.title}" (${proposal.value.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}).`, createdAt: proposal.signedAt, read: notificationReads.has(`${currentUser.id}:${id}`) });
+                }
+                const validUntil = proposal.validUntil ? new Date(/^\d{4}-\d{2}-\d{2}$/.test(proposal.validUntil) ? `${proposal.validUntil}T23:59:59-03:00` : proposal.validUntil).getTime() : NaN;
+                if (proposal.status === "SENT" && !Number.isNaN(validUntil) && validUntil - Date.now() <= 2 * 86400000 && Date.now() - validUntil <= 7 * 86400000) {
+                  const id = `proposal-expiring:${proposal.id}:${proposal.validUntil}`, expired = validUntil < Date.now();
+                  alerts.push({ ...target, id, type: "PROPOSAL_EXPIRING", severity: "WARNING", title: expired ? "Proposta vencida sem assinatura" : "Proposta vence em breve", message: `"${proposal.title}" ${expired ? "venceu" : "vence"} em ${new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo" }).format(validUntil)}.`, createdAt: new Date(validUntil).toISOString(), read: notificationReads.has(`${currentUser.id}:${id}`) });
+                }
+              }
+            }
+          }
+          // Chamados: novo chamado atribuído, menção, atualização feita por outra pessoa e atraso.
+          if (hasPermission(currentUser, "tickets.view")) {
+            const recent = Date.now() - 30 * 86400000;
+            for (const ticket of tickets.values()) {
+              const involved = ticket.assigneeId === currentUser.id || ticket.requesterId === currentUser.id;
+              const openTicket = !["RESOLVED", "CLOSED"].includes(ticket.status);
+              const base = {
+                accountId: ticket.id, campaignName: `${ticket.code} · ${ticket.title}`,
+                clientName: departments.get(ticket.departmentId)?.name || "Chamados internos",
+                responsibleId: ticket.assigneeId, responsibleName: ticket.assigneeName,
+                targetUrl: `/chamados?ticket=${encodeURIComponent(ticket.id)}`,
+              };
+              const add = (id: string, alert: Pick<OperationalAlert, "type" | "severity" | "title" | "message" | "createdAt">) =>
+                alerts.push({ ...base, ...alert, id, read: notificationReads.has(`${currentUser.id}:${id}`) });
+              if (openTicket && ticket.assigneeId === currentUser.id && ticket.requesterId !== currentUser.id)
+                add(`ticket-assigned:${ticket.id}:${ticket.assigneeId}`, { type: "TICKET_ASSIGNED", severity: ["HIGH", "URGENT"].includes(ticket.priority) ? "WARNING" : "INFO", title: "Novo chamado para você", message: `${ticket.requesterName} abriu este chamado.`, createdAt: ticket.createdAt });
+              if (openTicket && ticket.assigneeId === currentUser.id && ticket.dueAt && new Date(ticket.dueAt).getTime() < Date.now())
+                add(`ticket-late:${ticket.id}:${ticket.dueAt}`, { type: "TICKET_LATE", severity: "CRITICAL", title: "Chamado atrasado", message: "O prazo deste chamado já passou.", createdAt: ticket.dueAt });
+              if (new Date(ticket.updatedAt).getTime() < recent) continue;
+              for (const comment of ticket.comments) {
+                if (comment.authorId !== currentUser.id && comment.mentions.includes(currentUser.id))
+                  add(`ticket-mention:${comment.id}`, { type: "TICKET_MENTION", severity: "INFO", title: `${comment.authorName} mencionou você`, message: comment.message.slice(0, 180), createdAt: comment.createdAt });
+              }
+              // Só a última atualização de outra pessoa, para não repetir a conversa inteira no sino.
+              const latest = [...ticket.comments].reverse().find((comment) => comment.authorId !== currentUser.id);
+              if (involved && latest && !latest.mentions.includes(currentUser.id))
+                add(`ticket-update:${latest.id}`, { type: "TICKET_UPDATE", severity: "INFO", title: latest.kind === "SYSTEM" ? "Chamado atualizado" : `${latest.authorName} respondeu`, message: latest.kind === "SYSTEM" ? `${latest.authorName} ${latest.message}` : latest.message.slice(0, 180), createdAt: latest.createdAt });
+            }
+          }
           for (const schedule of clientReportSchedules.values()) {
             if (!schedule.active || (currentUser.profile !== "MASTER" && schedule.responsibleId !== currentUser.id)) continue;
             const dueDays = Math.round((new Date(`${schedule.nextDueAt}T12:00:00`).getTime() - new Date(`${new Date().toISOString().slice(0, 10)}T12:00:00`).getTime()) / 86400000);
@@ -8170,11 +9078,15 @@ function localApi(
             platform = String(input.platform || ""),
             accountId = String(input.accountId || ""),
             campaignId = String(input.campaignId || ""),
-            action: CampaignReviewEntry["action"] = ["ANALYSIS", "REVIEW", "REPORT_DOWNLOADED", "REPORT_SENT"].includes(input.action) ? input.action : "REVIEW";
+            action: CampaignReviewEntry["action"] = ["ANALYSIS", "REVIEW", "REPORT_DOWNLOADED", "REPORT_SENT"].includes(input.action) ? input.action : "REVIEW",
+            comment = typeof input.comment === "string" ? input.comment.trim().slice(0, 2000) : "",
+            snapshot = sanitizeCampaignReviewSnapshot(input.snapshot);
           if (!hasPermission(currentUser, "media.view"))
             return json(response, 403, { message: "Você não possui acesso às campanhas." });
           if (!(["META_ADS", "GOOGLE_ADS"].includes(platform)) || !accountId || !campaignId)
             return json(response, 400, { message: "Campanha inválida." });
+          if (action === "REVIEW" && comment.length < campaignReviewCommentMinLength)
+            return json(response, 400, { message: `Descreva a revisão em um comentário com pelo menos ${campaignReviewCommentMinLength} caracteres.` });
           const key = campaignVerificationKey(platform, accountId, campaignId),
             current = campaignVerifications[key] || { verified: false, verifiedAt: "", verifiedBy: "", history: [] },
             createdAt = new Date().toISOString(),
@@ -8189,11 +9101,16 @@ function localApi(
               ...(input.cpl === null || Number.isFinite(Number(input.cpl)) ? { cpl: input.cpl === null ? null : Number(input.cpl) } : {}),
               ...(Number.isFinite(Number(input.periodDays)) ? { periodDays: Number(input.periodDays) } : {}),
               ...(Number.isFinite(Number(input.recipientCount)) ? { recipientCount: Number(input.recipientCount) } : {}),
-            };
+              ...(action === "REVIEW" ? { comment, ...(snapshot ? { snapshot } : {}) } : {}),
+            },
+            // Revisões são registro de auditoria e nunca saem do histórico;
+            // o limite de 200 vale só para as demais ações.
+            fullHistory = [...(current.history || []), entry],
+            keptActivities = new Set(fullHistory.filter((item) => item.action !== "REVIEW").slice(-200));
           campaignVerifications[key] = {
             ...current,
             ...(action === "REVIEW" ? { verified: true, verifiedAt: createdAt, verifiedBy: currentUser.id } : {}),
-            history: [...(current.history || []), entry].slice(-200),
+            history: fullHistory.filter((item) => item.action === "REVIEW" || keptActivities.has(item)),
           };
           persistCampaignVerifications();
           let reportSchedule: ClientReportSchedule | null = null;
@@ -9622,6 +10539,33 @@ function localApi(
                 : "ROLE",
             })),
           });
+        }
+        const temporaryPasswordMatch = url.match(/^\/users\/([^/]+)\/temporary-password$/);
+        if (temporaryPasswordMatch && request.method === "POST") {
+          if (!hasPermission(currentUser, "users.reset_password"))
+            return json(response, 403, { message: "Você não possui permissão para redefinir senhas." });
+          const user = users.get(temporaryPasswordMatch[1]);
+          if (!user) return json(response, 404, { message: "Usuário não encontrado." });
+          if (user.profile === "MASTER")
+            return json(response, 403, { message: "A senha da conta do dono é protegida." });
+          if (user.id === currentUser.id)
+            return json(response, 400, { message: "Para alterar a sua própria senha, use Minha conta → Segurança." });
+          // Quem redefine não pode agir sobre um cargo acima do seu.
+          const targetLevel = user.roleId ? roles.get(user.roleId)?.level ?? 0 : 0,
+            currentLevel = currentUser.roleId ? roles.get(currentUser.roleId)?.level ?? 0 : 0;
+          if (currentUser.profile !== "MASTER" && targetLevel > currentLevel)
+            return json(response, 403, { message: "Você não pode redefinir a senha de um cargo acima do seu." });
+          const input = await body(request), password = String(input.password || "");
+          if (password.length < 8 || password.length > 128 || /\s/.test(password))
+            return json(response, 400, { message: "A senha provisória precisa ter ao menos 8 caracteres e não pode conter espaços." });
+          // Trocar o hash invalida as sessões abertas; a pessoa entra com a provisória e cria a própria senha.
+          user.salt = randomBytes(16).toString("hex");
+          user.passwordHash = hash(password, user.salt);
+          user.mustChangePassword = true;
+          persistUser(user);
+          passwordResets = passwordResets.filter((item) => item.userId !== user.id);
+          persistPasswordResets();
+          return json(response, 200, { user: publicUser(user) });
         }
         const userMatch = url.match(/^\/users\/([^/]+)$/);
         if (userMatch && request.method === "DELETE") {
