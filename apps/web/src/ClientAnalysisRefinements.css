@@ -39,3 +39,28 @@
 .client-analysis-dialog .portfolio-total-grid>div:nth-child(4n){border-right:0}
 .client-analysis-dialog .portfolio-total-grid>div:nth-last-child(-n+4){border-bottom:0}
 @media(max-width:640px){.client-analysis-dialog .portfolio-total-grid>div:nth-child(2n){border-right:0}.client-analysis-dialog .portfolio-total-grid>div:nth-last-child(-n+4){border-bottom:1px solid var(--border)}.client-analysis-dialog .portfolio-total-grid>div:nth-last-child(-n+2){border-bottom:0}}
+.portfolio-reviews{margin-top:28px;padding-top:4px;border-top:1px solid var(--border)}
+.portfolio-review-composer{display:flex;flex-direction:column;gap:10px;padding:16px;border:1px solid var(--border);border-radius:12px;background:var(--surface-soft)}
+.portfolio-review-composer p{margin:0;font-size:12px;line-height:1.5;color:var(--subtle)}
+.portfolio-review-composer textarea{box-sizing:border-box;width:100%;min-height:76px;padding:10px 12px;border:1px solid var(--border);border-radius:9px;background:var(--surface);color:var(--heading);font:inherit;font-size:13px;resize:vertical}
+.portfolio-review-composer textarea:focus{outline:2px solid color-mix(in srgb,var(--accent) 40%,transparent);outline-offset:1px}
+.portfolio-review-composer>div{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.portfolio-review-composer>div small{font-size:12px;color:#b87808}.portfolio-review-composer>div small.ready{color:var(--subtle)}
+.portfolio-review-composer button{display:inline-flex;align-items:center;gap:8px;min-height:36px;padding:8px 14px;border:1px solid #24a66f;border-radius:8px;background:#24a66f;color:#fff;font-size:12px;font-weight:650;cursor:pointer}
+.portfolio-review-composer button svg{width:15px;height:15px}.portfolio-review-composer button:disabled{cursor:not-allowed;opacity:.55}
+.portfolio-review-composer .portfolio-review-notice{color:var(--heading);font-weight:600}
+.portfolio-review-empty{margin:0;padding:18px 0;font-size:12px;color:var(--subtle)}
+.portfolio-review-entry{padding:16px 0;border-top:1px solid var(--border)}
+.portfolio-review-entry>header{display:flex;align-items:baseline;flex-wrap:wrap;gap:6px 10px}
+.portfolio-review-entry>header b{font-size:13px;color:var(--heading);overflow-wrap:anywhere}
+.portfolio-review-entry>header small{font-size:12px;color:var(--subtle)}
+.portfolio-review-entry em{display:inline-block;margin-left:6px;padding:2px 8px;border-radius:999px;background:#fff3de;color:#8a5a06;font-size:11px;font-style:normal;font-weight:600;white-space:nowrap}
+.portfolio-review-entry>header em{margin-left:0}
+.portfolio-review-entry>blockquote{margin:10px 0;padding:10px 12px;border-left:3px solid #24a66f;border-radius:0 8px 8px 0;background:var(--surface-soft);color:var(--heading);font-size:13px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere}
+.portfolio-review-entry>blockquote.empty{border-left-color:var(--divider);color:var(--subtle);font-style:italic}
+.portfolio-review-entry summary{color:var(--accent);font-size:12px;font-weight:650;cursor:pointer}
+.portfolio-review-data{margin-top:10px;overflow-x:auto}
+.portfolio-review-data table{width:100%;min-width:720px;border-collapse:collapse;font-size:12px}
+.portfolio-review-data th{padding:8px;text-align:left;font-size:11px;font-weight:600;color:var(--subtle);border-bottom:1px solid var(--border);white-space:nowrap}
+.portfolio-review-data td{padding:8px;color:var(--heading);border-bottom:1px solid var(--divider);white-space:nowrap}
+.portfolio-review-data td:first-child{white-space:normal;overflow-wrap:anywhere;min-width:200px}

@@ -1,6 +1,7 @@
 import "./ClientAnalysisRefinements.css";
 import { MediaUserContext, mediaPreferenceKey, readMediaPreference } from "./mediaPreferences";
 import { requestMediaPeriod } from "./mediaPeriodRequest";
+import { googleOptimizationScore } from "./optimizationScore";
 import "./SimpleClientTable.css";
 import { portfolioMetrics } from "./portfolioMetrics";
 import "./PortfolioTotals.css";
@@ -102,7 +103,7 @@ type Campaign = {
   verifiedBy?: string | null;
   searchTerms?: Array<{ term: string; clicks: number; impressions: number; leads: number; spend: number }>;
   optimizationHistory?: Array<{ value: string; capturedAt: string }>;
-  verificationHistory?: Array<{ action: "ANALYSIS" | "REVIEW" | "REPORT_DOWNLOADED" | "REPORT_SENT"; createdAt: string; userId: string; userName: string; score?: number; spend?: number; leads?: number; cpl?: number | null; periodDays?: number; recipientCount?: number; comment?: string; snapshot?: CampaignReviewSnapshot }>;
+  verificationHistory?: Array<{ action: "ANALYSIS" | "REVIEW" | "REPORT_DOWNLOADED" | "REPORT_SENT"; createdAt: string; userId: string; userName: string; score?: number; spend?: number; leads?: number; cpl?: number | null; periodDays?: number; recipientCount?: number; comment?: string; snapshot?: CampaignReviewSnapshot; portfolioReviewId?: string; portfolioName?: string }>;
   geography?: Array<{ name: string; level: "REGION" | "CITY" | "NEIGHBORHOOD"; leads: number; clicks: number; spend: number; source?: "PERFORMANCE" | "TARGETING" }>;
   ads?: CampaignAd[];
 };
@@ -735,6 +736,7 @@ function ClientCampaignGroup({
     setLinkError(""); setSaved(false); setLinkOpen(true);
   };
   const [clientAnalysisOpen, setClientAnalysisOpen] = useState(false);
+  const [, setReviewRevision] = useState(0);
   useEffect(() => {
     if (!clientAnalysisOpen) return;
     const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") setClientAnalysisOpen(false); };
@@ -999,7 +1001,7 @@ function ClientCampaignGroup({
         )}
       </section>
 </>)}
-      {clientAnalysisOpen && createPortal(<div className="campaign-ad-modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setClientAnalysisOpen(false); }}><section className="campaign-ad-modal client-analysis-dialog" role="dialog" aria-modal="true" aria-label={`Análise de ${name}`}><header><div><h2>Análise de {name}</h2></div><button type="button" autoFocus aria-label="Fechar análise" onClick={() => setClientAnalysisOpen(false)}><X/></button></header><div className="portfolio-client-analysis"><div className="client-analysis-overview"><div><span className="client-analysis-eyebrow">Visão geral do cliente</span><p>{group.campaigns.length} campanhas <span>·</span> {group.active} ativas</p><div className="client-analysis-owner"><ResponsibleAvatar user={selectedResponsible}/><span>{selectedResponsible?.name || "Responsável não atribuído"}</span>{canManage && <button type="button" onClick={() => { setClientAnalysisOpen(false); editAssignment(); }}>Editar vínculo <Settings2/></button>}</div></div><div className={`client-analysis-score ${scoreTone(portfolioScore)}`}><span>Score do cliente</span><strong>{portfolioScore < 0 ? "—" : portfolioScore}<small>/100</small></strong><span>{toneLabel[scoreTone(portfolioScore)]}</span></div></div>{portfolioMetrics(group.campaigns).map(total => <div className="portfolio-total-grid" key={total.currency}>{[["Investimento diário", total.dailyBudget == null ? "—" : money(total.dailyBudget,total.currency)], ["Impressões", number(total.impressions)], ["Cliques", number(total.clicks)], ["CTR", total.ctr == null ? "—" : `${number(total.ctr,2)}%`], ["CPC", total.cpc == null ? "—" : money(total.cpc,total.currency)], ["Conversões", number(total.leads)], ["Custo", money(total.spend,total.currency)], ["Saldo", total.remainingBudget == null ? "—" : money(total.remainingBudget,total.currency)]].map(([label,value]) => <div key={label}><small>{label}</small><b>{value}</b></div>)}</div>)}<h3>Campanhas do cliente</h3>{group.campaigns.map(item => <div className="portfolio-analysis-campaign" key={`${item.platform}:${item.id}`}><b>{item.name}</b><span className="client-campaign-score">{campaignScore(item) < 0 ? "Sem avaliação" : `Score ${campaignScore(item)}`}</span><button type="button" className="client-analysis-action" aria-label={`Analisar campanha ${item.name}`} onClick={() => { setClientAnalysisOpen(false); onAnalyze(item); }}>Ver análise <ArrowUpRight/></button></div>)}</div></section></div>, document.body)}
+      {clientAnalysisOpen && createPortal(<div className="campaign-ad-modal-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) setClientAnalysisOpen(false); }}><section className="campaign-ad-modal client-analysis-dialog" role="dialog" aria-modal="true" aria-label={`Análise de ${name}`}><header><div><h2>Análise de {name}</h2></div><button type="button" autoFocus aria-label="Fechar análise" onClick={() => setClientAnalysisOpen(false)}><X/></button></header><div className="portfolio-client-analysis"><div className="client-analysis-overview"><div><span className="client-analysis-eyebrow">Visão geral do cliente</span><p>{group.campaigns.length} campanhas <span>·</span> {group.active} ativas</p><div className="client-analysis-owner"><ResponsibleAvatar user={selectedResponsible}/><span>{selectedResponsible?.name || "Responsável não atribuído"}</span>{canManage && <button type="button" onClick={() => { setClientAnalysisOpen(false); editAssignment(); }}>Editar vínculo <Settings2/></button>}</div></div><div className={`client-analysis-score ${scoreTone(portfolioScore)}`}><span>Score do cliente</span><strong>{portfolioScore < 0 ? "—" : portfolioScore}<small>/100</small></strong><span>{toneLabel[scoreTone(portfolioScore)]}</span></div></div>{portfolioMetrics(group.campaigns).map(total => <div className="portfolio-total-grid" key={total.currency}>{[["Investimento diário", total.dailyBudget == null ? "—" : money(total.dailyBudget,total.currency)], ["Impressões", number(total.impressions)], ["Cliques", number(total.clicks)], ["CTR", total.ctr == null ? "—" : `${number(total.ctr,2)}%`], ["CPC", total.cpc == null ? "—" : money(total.cpc,total.currency)], ["Conversões", number(total.leads)], ["Custo", money(total.spend,total.currency)], ["Saldo", total.remainingBudget == null ? "—" : money(total.remainingBudget,total.currency)]].map(([label,value]) => <div key={label}><small>{label}</small><b>{value}</b></div>)}</div>)}<h3>Campanhas do cliente</h3>{group.campaigns.map(item => <div className="portfolio-analysis-campaign" key={`${item.platform}:${item.id}`}><b>{item.name}</b><span className="client-campaign-score">{campaignScore(item) < 0 ? "Sem avaliação" : `Score ${campaignScore(item)}`}</span><button type="button" className="client-analysis-action" aria-label={`Analisar campanha ${item.name}`} onClick={() => { setClientAnalysisOpen(false); onAnalyze(item); }}>Ver análise <ArrowUpRight/></button></div>)}<PortfolioReviews group={group} name={name} periodDays={periodDays} onReviewed={() => setReviewRevision(value => value + 1)}/></div></section></div>, document.body)}
     </article>
   );
 }
@@ -2244,8 +2246,89 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
   );
 }
 
+type CampaignReviewEntry = NonNullable<Campaign["verificationHistory"]>[number];
+type ReviewedCampaign = { platform: "META_ADS" | "GOOGLE_ADS"; accountId: string; campaignId: string; name: string | null; reviews: CampaignReviewEntry[] };
+
+// Revisão feita no portfólio: um comentário único, gravado em cada campanha com os dados dela.
+// O histórico vem do servidor pelo ID da campanha, então inclui campanhas que já saíram da lista.
+function PortfolioReviews({ group, name, periodDays, onReviewed }: { group: ClientGroup; name: string; periodDays: number; onReviewed: () => void }) {
+  const [stored, setStored] = useState<ReviewedCampaign[]>([]), [loading, setLoading] = useState(true), [error, setError] = useState(""),
+    [comment, setComment] = useState(""), [saving, setSaving] = useState(false), [notice, setNotice] = useState(""), [reload, setReload] = useState(0);
+  const campaignKey = (item: Campaign) => `${item.platform || group.platform}:${item.accountId}:${item.id}`,
+    accounts = [...new Set(group.campaigns.map((item) => `${item.platform || group.platform}:${item.accountId}`))].sort().join(",");
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true); setError("");
+    fetch(`/api/media/portfolio/reviews?accounts=${encodeURIComponent(accounts)}`)
+      .then(async (response) => { const payload = await response.json(); if (!response.ok) throw new Error(payload.message); if (!cancelled) setStored(payload.campaigns || []); })
+      .catch((cause) => { if (!cancelled) setError(cause instanceof Error && cause.message ? cause.message : "Não foi possível carregar o histórico de revisões."); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [accounts, reload]);
+  const listed = new Map(group.campaigns.map((item) => [campaignKey(item), item])),
+    timeline = [...stored.reduce((items, campaign) => {
+      const key = `${campaign.platform}:${campaign.accountId}:${campaign.campaignId}`, current = listed.get(key),
+        row = { key, name: current?.name || campaign.name || `Campanha ${campaign.campaignId}`, listed: !!current, currency: current?.currency || group.account.currency };
+      campaign.reviews.forEach((entry) => {
+        const id = entry.portfolioReviewId || `${key}:${entry.createdAt}`, item = items.get(id) || { id, entry, rows: [] };
+        item.rows.push({ ...row, entry });
+        items.set(id, item);
+      });
+      return items;
+    }, new Map<string, { id: string; entry: CampaignReviewEntry; rows: Array<{ key: string; name: string; listed: boolean; currency: string; entry: CampaignReviewEntry }> }>()).values()]
+      .sort((a, b) => b.entry.createdAt.localeCompare(a.entry.createdAt)),
+    ready = comment.trim().length >= campaignReviewCommentMinLength;
+  const submit = async () => {
+    if (!ready || saving) return;
+    setSaving(true); setNotice("");
+    try {
+      const response = await fetch("/api/media/portfolio/reviews", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+          portfolioName: name, comment: comment.trim(), periodDays,
+          campaigns: group.campaigns.map((item) => ({
+            platform: item.platform || group.platform, accountId: item.accountId, campaignId: item.id, score: campaignScore(item), spend: item.spend, leads: item.leads, cpl: item.cpl,
+            snapshot: { name: item.name, status: item.status, objective: item.objective, dailyBudget: item.dailyBudget, lifetimeBudget: item.lifetimeBudget, balance: item.remainingBudget ?? null, impressions: item.impressions, clicks: item.clicks, ctr: item.impressions ? (item.clicks / item.impressions) * 100 : 0, ...(item.reach >= 0 ? { reach: item.reach } : {}), ...(item.frequency >= 0 ? { frequency: item.frequency } : {}) },
+          })),
+        }) }), result = await response.json();
+      if (!response.ok) { setNotice(result.message || "Não foi possível salvar a revisão do portfólio."); return; }
+      (result.campaigns || []).forEach((saved: { platform: string; accountId: string; campaignId: string; verifiedAt: string; history: CampaignReviewEntry[] }) => {
+        const source = listed.get(`${saved.platform}:${saved.accountId}:${saved.campaignId}`);
+        if (source) Object.assign(source, { verified: true, verifiedAt: saved.verifiedAt, verificationHistory: saved.history });
+      });
+      setComment(""); setNotice(`Revisão salva em ${group.campaigns.length} campanha(s) do portfólio.`); setReload((value) => value + 1); onReviewed();
+    } catch { setNotice("Falha de conexão ao salvar a revisão. Tente novamente."); }
+    finally { setSaving(false); }
+  };
+  return <section className="portfolio-reviews">
+    <h3>Revisão do portfólio</h3>
+    <div className="portfolio-review-composer">
+      <p>Um comentário para as {group.campaigns.length} campanhas listadas. Os números atuais de cada campanha são salvos junto e a revisão fica em dia em todas elas.</p>
+      <textarea aria-label="Comentário da revisão do portfólio" rows={3} maxLength={2000} value={comment} placeholder="O que você conferiu e ajustou neste portfólio?" onChange={(event) => setComment(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) void submit(); }} />
+      <div><small className={ready ? "ready" : ""}>{ready ? `${comment.trim().length}/2000` : `Mínimo de ${campaignReviewCommentMinLength} caracteres (${comment.trim().length}/${campaignReviewCommentMinLength})`}</small><button type="button" disabled={!ready || saving} onClick={() => void submit()}>{saving ? <RefreshCw className="spin"/> : <CheckCircle2 />} {saving ? "Salvando…" : "Salvar revisão do portfólio"}</button></div>
+      {notice && <p role="status" className="portfolio-review-notice">{notice}</p>}
+    </div>
+    <h3>Histórico de revisões{timeline.length ? ` (${timeline.length})` : ""}</h3>
+    {loading && !timeline.length ? <p className="portfolio-review-empty">Carregando histórico…</p> : error ? <p className="portfolio-review-empty" role="alert">{error}</p> : !timeline.length ? <p className="portfolio-review-empty">Nenhuma revisão comentada neste portfólio ainda.</p> : timeline.map(({ id, entry, rows }) => <article className="portfolio-review-entry" key={id}>
+      <header><b>{entry.portfolioReviewId ? "Revisão do portfólio" : rows[0].name}</b>{!entry.portfolioReviewId && !rows[0].listed && <em>Fora da lista atual</em>}<small>{entry.userName} · {new Date(entry.createdAt).toLocaleString("pt-BR")}{entry.snapshot?.since && entry.snapshot.until ? ` · Período ${shortDate(entry.snapshot.since)} a ${shortDate(entry.snapshot.until)}` : entry.periodDays ? ` · Período de ${entry.periodDays} dias` : ""}</small></header>
+      <blockquote className={entry.comment ? "" : "empty"}>{entry.comment || "Revisão registrada antes da obrigatoriedade de comentário."}</blockquote>
+      <details><summary>{entry.portfolioReviewId ? `Dados por campanha (${rows.length})` : "Dados da campanha nesta revisão"}</summary><div className="portfolio-review-data"><table><thead><tr><th>Campanha</th><th>Score</th><th>Investimento</th><th>Conversões</th><th>CPL</th><th>Impressões</th><th>Cliques</th><th>CTR</th></tr></thead><tbody>{rows.map((row) => <tr key={row.key}>
+        <td>{row.name}{!row.listed && <em>Fora da lista atual</em>}</td>
+        <td>{row.entry.score != null && row.entry.score >= 0 ? row.entry.score : "—"}</td>
+        <td>{row.entry.spend != null ? money(row.entry.spend, row.currency) : "—"}</td>
+        <td>{row.entry.leads != null ? number(row.entry.leads) : "—"}</td>
+        <td>{row.entry.cpl != null ? money(row.entry.cpl, row.currency) : "—"}</td>
+        <td>{row.entry.snapshot?.impressions != null ? number(row.entry.snapshot.impressions) : "—"}</td>
+        <td>{row.entry.snapshot?.clicks != null ? number(row.entry.snapshot.clicks) : "—"}</td>
+        <td>{row.entry.snapshot?.ctr != null ? `${number(row.entry.snapshot.ctr, 2)}%` : "—"}</td>
+      </tr>)}</tbody></table></div></details>
+    </article>)}
+  </section>;
+}
+
 function campaignScore(item: Campaign) {
   if (!hasDelivery(item)) return -1;
+  // No Google Ads vale a pontuação de otimização da própria plataforma.
+  const optimization = googleOptimizationScore(item);
+  if (optimization != null) return optimization;
   const ctr = item.impressions ? (item.clicks / item.impressions) * 100 : 0,
     conversionRate = item.clicks ? (item.leads / item.clicks) * 100 : 0,
     budgetUse = item.dailyBudget ? item.spend / (item.dailyBudget * 7) : 1;
@@ -2273,6 +2356,18 @@ function campaignScoreBreakdown(item: Campaign) {
     improvements: ["Ative ou revise a veiculação para gerar dados avaliáveis."],
     dimensions: [] as Array<{ label: "Performance" | "Entrega" | "Operação"; value: number; tone: "good" | "warning" | "bad"; detail: string }>,
   };
+  const optimization = googleOptimizationScore(item);
+  if (optimization != null) {
+    const tone = optimization >= 90 ? "good" as const : optimization >= 70 ? "warning" as const : "bad" as const;
+    return {
+      score: optimization,
+      summary: "A nota é a pontuação de otimização informada pelo Google Ads para esta campanha.",
+      factors: [{ label: "Otimização Google", value: `${optimization}%`, points: optimization, max: 100, tone }],
+      strengths: optimization >= 90 ? ["O Google Ads considera a campanha bem otimizada."] : [] as string[],
+      improvements: optimization >= 100 ? [] as string[] : ["Aplicar ou dispensar as recomendações pendentes no Google Ads para elevar a pontuação."],
+      dimensions: [] as Array<{ label: "Performance" | "Entrega" | "Operação"; value: number; tone: "good" | "warning" | "bad"; detail: string }>,
+    };
+  }
   const ctr = item.impressions ? (item.clicks / item.impressions) * 100 : 0,
     conversionRate = item.clicks ? (item.leads / item.clicks) * 100 : 0,
     budgetUse = item.dailyBudget ? item.spend / (item.dailyBudget * 7) : 1,
@@ -3373,7 +3468,7 @@ function CampaignAnalysisDrawer({ campaign, periodDays, since, until, onClose, o
               {[...campaign.verificationHistory].reverse().map((entry, index) => (
                 <article key={`${entry.createdAt}:${entry.action}:${index}`}>
                   <i className={entry.action.toLowerCase()}>{entry.action === "REVIEW" ? <CheckCircle2 /> : entry.action === "REPORT_DOWNLOADED" ? <Download /> : entry.action === "REPORT_SENT" ? <Send /> : <BarChart3 />}</i>
-                  <span><b>{entry.action === "REVIEW" ? "Campanha revisada" : entry.action === "REPORT_DOWNLOADED" ? "Relatório baixado" : entry.action === "REPORT_SENT" ? "Relatório enviado ao cliente" : "Análise aberta"}</b><small>{entry.userName} · {new Date(entry.createdAt).toLocaleString("pt-BR")}{entry.snapshot?.since && entry.snapshot.until ? ` · Período ${shortDate(entry.snapshot.since)} a ${shortDate(entry.snapshot.until)}` : entry.periodDays ? ` · Período de ${entry.periodDays} dias` : ""}</small></span>
+                  <span><b>{entry.action === "REVIEW" ? entry.portfolioReviewId ? "Revisada na revisão do portfólio" : "Campanha revisada" : entry.action === "REPORT_DOWNLOADED" ? "Relatório baixado" : entry.action === "REPORT_SENT" ? "Relatório enviado ao cliente" : "Análise aberta"}</b><small>{entry.userName} · {new Date(entry.createdAt).toLocaleString("pt-BR")}{entry.snapshot?.since && entry.snapshot.until ? ` · Período ${shortDate(entry.snapshot.since)} a ${shortDate(entry.snapshot.until)}` : entry.periodDays ? ` · Período de ${entry.periodDays} dias` : ""}</small></span>
                   <dl><div><dt>Score</dt><dd>{entry.score != null && entry.score >= 0 ? entry.score : "—"}</dd></div><div><dt>Investimento</dt><dd>{entry.spend != null ? money(entry.spend, campaign.currency) : "—"}</dd></div><div><dt>Conversões</dt><dd>{entry.leads != null ? number(entry.leads) : "—"}</dd></div><div><dt>CPL</dt><dd>{entry.cpl != null ? money(entry.cpl, campaign.currency) : "—"}</dd></div></dl>
                   {entry.action === "REVIEW" && <blockquote className={entry.comment ? "" : "empty"}>{entry.comment || "Revisão registrada antes da obrigatoriedade de comentário."}</blockquote>}
                   {entry.snapshot && <details className="campaign-review-snapshot"><summary>Dados da campanha nesta revisão</summary><dl>{entry.snapshot.status && <div><dt>Status</dt><dd>{statusLabel[entry.snapshot.status] || entry.snapshot.status}</dd></div>}{entry.snapshot.dailyBudget != null && entry.snapshot.dailyBudget > 0 && <div><dt>Orçamento diário</dt><dd>{money(entry.snapshot.dailyBudget, campaign.currency)}</dd></div>}{entry.snapshot.lifetimeBudget != null && entry.snapshot.lifetimeBudget > 0 && <div><dt>Orçamento total</dt><dd>{money(entry.snapshot.lifetimeBudget, campaign.currency)}</dd></div>}<div><dt>Saldo restante</dt><dd>{entry.snapshot.balance != null ? money(entry.snapshot.balance, campaign.currency) : "—"}</dd></div>{entry.snapshot.impressions != null && <div><dt>Impressões</dt><dd>{number(entry.snapshot.impressions)}</dd></div>}{entry.snapshot.clicks != null && <div><dt>Cliques</dt><dd>{number(entry.snapshot.clicks)}</dd></div>}{entry.snapshot.ctr != null && <div><dt>CTR</dt><dd>{number(entry.snapshot.ctr, 2)}%</dd></div>}{entry.snapshot.reach != null && <div><dt>Alcance</dt><dd>{number(entry.snapshot.reach)}</dd></div>}{entry.snapshot.frequency != null && <div><dt>Frequência</dt><dd>{number(entry.snapshot.frequency, 2)}</dd></div>}</dl></details>}

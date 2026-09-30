@@ -1619,6 +1619,9 @@ function localApi(
     recipientCount?: number;
     comment?: string;
     snapshot?: CampaignReviewSnapshot;
+    // Preenchidos quando a revisão foi feita no portfólio e replicada em cada campanha.
+    portfolioReviewId?: string;
+    portfolioName?: string;
   };
   // Foto da campanha no momento da revisão, para auditoria posterior.
   type CampaignReviewSnapshot = {
@@ -1666,6 +1669,20 @@ function localApi(
     campaignVerificationsPersistTimer.unref();
   };
   const campaignVerificationKey = (platform: string, accountId: string, campaignId: string) => `${platform}:${accountId}:${campaignId}`;
+  // O histórico fica gravado pelo ID da campanha e nunca é apagado, mesmo que ela saia da conta.
+  const recordCampaignReviewEntry = (key: string, entry: CampaignReviewEntry, userId: string) => {
+    const current = campaignVerifications[key] || { verified: false, verifiedAt: "", verifiedBy: "", history: [] },
+      // Revisões são registro de auditoria e nunca saem do histórico;
+      // o limite de 200 vale só para as demais ações.
+      fullHistory = [...(current.history || []), entry],
+      keptActivities = new Set(fullHistory.filter((item) => item.action !== "REVIEW").slice(-200));
+    campaignVerifications[key] = {
+      ...current,
+      ...(entry.action === "REVIEW" ? { verified: true, verifiedAt: entry.createdAt, verifiedBy: userId } : {}),
+      history: fullHistory.filter((item) => item.action === "REVIEW" || keptActivities.has(item)),
+    };
+    persistCampaignVerifications();
+  };
   const withCampaignVerifications = (payload: any, platform: string) => ({
     ...payload,
     campaigns: (payload.campaigns || []).map((campaign: any) => ({
@@ -9070,6 +9087,57 @@ function localApi(
             return response.end();
           }
         }
+        // Revisões de todas as campanhas das contas do portfólio, inclusive das que já saíram da conta.
+        if (url.startsWith("/media/portfolio/reviews") && request.method === "GET") {
+          if (!hasPermission(currentUser, "media.view"))
+            return json(response, 403, { message: "Você não possui acesso às campanhas." });
+          const prefixes = (new URL(url, "http://localhost").searchParams.get("accounts") || "")
+            .split(",").map((value) => value.trim()).filter((value) => /^(META_ADS|GOOGLE_ADS):[^:]+$/.test(value)).slice(0, 200).map((value) => `${value}:`);
+          const campaigns = Object.entries(campaignVerifications).flatMap(([key, value]) => {
+            const prefix = prefixes.find((candidate) => key.startsWith(candidate)),
+              reviews = (value.history || []).filter((entry) => entry.action === "REVIEW");
+            if (!prefix || !reviews.length) return [];
+            const [platform, accountId] = prefix.split(":"), campaignId = key.slice(prefix.length);
+            return [{ platform, accountId, campaignId, name: [...reviews].reverse().find((entry) => entry.snapshot?.name)?.snapshot?.name || null, reviews }];
+          });
+          return json(response, 200, { campaigns });
+        }
+        if (url === "/media/portfolio/reviews" && request.method === "POST") {
+          if (!hasPermission(currentUser, "media.view"))
+            return json(response, 403, { message: "Você não possui acesso às campanhas." });
+          const input = await body(request),
+            comment = typeof input.comment === "string" ? input.comment.trim().slice(0, 2000) : "",
+            portfolioName = String(input.portfolioName || "").trim().slice(0, 200),
+            items = (Array.isArray(input.campaigns) ? input.campaigns : []).slice(0, 500).filter((item: any) =>
+              item && ["META_ADS", "GOOGLE_ADS"].includes(item.platform) && item.accountId && item.campaignId);
+          if (comment.length < campaignReviewCommentMinLength)
+            return json(response, 400, { message: `Descreva a revisão em um comentário com pelo menos ${campaignReviewCommentMinLength} caracteres.` });
+          if (!items.length) return json(response, 400, { message: "O portfólio não possui campanhas para revisar." });
+          const createdAt = new Date().toISOString(), portfolioReviewId = randomUUID();
+          const campaigns = items.map((item: any) => {
+            const platform = String(item.platform), accountId = String(item.accountId), campaignId = String(item.campaignId),
+              key = campaignVerificationKey(platform, accountId, campaignId),
+              snapshot = sanitizeCampaignReviewSnapshot(item.snapshot);
+            recordCampaignReviewEntry(key, {
+              action: "REVIEW",
+              createdAt,
+              userId: currentUser.id,
+              userName: currentUser.name,
+              ...(Number.isFinite(Number(item.score)) ? { score: Number(item.score) } : {}),
+              ...(Number.isFinite(Number(item.spend)) ? { spend: Number(item.spend) } : {}),
+              ...(Number.isFinite(Number(item.leads)) ? { leads: Number(item.leads) } : {}),
+              ...(item.cpl === null || Number.isFinite(Number(item.cpl)) ? { cpl: item.cpl === null ? null : Number(item.cpl) } : {}),
+              ...(Number.isFinite(Number(input.periodDays)) ? { periodDays: Number(input.periodDays) } : {}),
+              comment,
+              ...(snapshot ? { snapshot } : {}),
+              portfolioReviewId,
+              ...(portfolioName ? { portfolioName } : {}),
+            }, currentUser.id);
+            return { platform, accountId, campaignId, verifiedAt: createdAt, history: campaignVerifications[key]?.history || [] };
+          });
+          scheduleDatabaseMirror();
+          return json(response, 200, { portfolioReviewId, createdAt, campaigns });
+        }
         if (
           url === "/media/campaigns/verification" &&
           request.method === "PATCH"
@@ -9088,7 +9156,6 @@ function localApi(
           if (action === "REVIEW" && comment.length < campaignReviewCommentMinLength)
             return json(response, 400, { message: `Descreva a revisão em um comentário com pelo menos ${campaignReviewCommentMinLength} caracteres.` });
           const key = campaignVerificationKey(platform, accountId, campaignId),
-            current = campaignVerifications[key] || { verified: false, verifiedAt: "", verifiedBy: "", history: [] },
             createdAt = new Date().toISOString(),
             entry: CampaignReviewEntry = {
               action,
@@ -9102,17 +9169,8 @@ function localApi(
               ...(Number.isFinite(Number(input.periodDays)) ? { periodDays: Number(input.periodDays) } : {}),
               ...(Number.isFinite(Number(input.recipientCount)) ? { recipientCount: Number(input.recipientCount) } : {}),
               ...(action === "REVIEW" ? { comment, ...(snapshot ? { snapshot } : {}) } : {}),
-            },
-            // Revisões são registro de auditoria e nunca saem do histórico;
-            // o limite de 200 vale só para as demais ações.
-            fullHistory = [...(current.history || []), entry],
-            keptActivities = new Set(fullHistory.filter((item) => item.action !== "REVIEW").slice(-200));
-          campaignVerifications[key] = {
-            ...current,
-            ...(action === "REVIEW" ? { verified: true, verifiedAt: createdAt, verifiedBy: currentUser.id } : {}),
-            history: fullHistory.filter((item) => item.action === "REVIEW" || keptActivities.has(item)),
-          };
-          persistCampaignVerifications();
+            };
+          recordCampaignReviewEntry(key, entry, currentUser.id);
           let reportSchedule: ClientReportSchedule | null = null;
           if (action === "REPORT_SENT") {
             const assignment = mediaAssignments.get(`${platform}:${accountId}`);
