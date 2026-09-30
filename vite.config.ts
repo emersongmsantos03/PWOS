@@ -1514,6 +1514,7 @@ function localApi(
   const localMetaDashboardCachePath = "data/meta-dashboard-cache.local.json";
   const localGoogleDashboardCachePath = "data/google-dashboard-cache.local.json";
   const localCampaignVerificationsPath = "data/campaign-verifications.local.json";
+  const localPortfolioReviewsPath = "data/portfolio-reviews.local.json";
   const localCampaignOptimizationHistoryPath = "data/campaign-optimization-history.local.json";
   const mediaSyncIntervalMs = 24 * 60 * 60 * 1000;
   const mediaManualRefreshCooldownMs = 5 * 60 * 1000;
@@ -1693,6 +1694,34 @@ function localApi(
       verificationHistory: campaignVerifications[campaignVerificationKey(platform, campaign.accountId, campaign.id)]?.history || [],
     })),
   });
+  // Revisões feitas no portfólio, gravadas pela chave do portfólio para continuarem visíveis
+  // mesmo que as campanhas revisadas saiam da conta.
+  type PortfolioReview = {
+    id: string;
+    createdAt: string;
+    userId: string;
+    userName: string;
+    comment: string;
+    portfolioName?: string;
+    periodDays?: number;
+    campaigns: Array<{ platform: string; accountId: string; campaignId: string; score?: number; spend?: number; leads?: number; cpl?: number | null; snapshot?: CampaignReviewSnapshot }>;
+  };
+  const portfolioReviews: Record<string, PortfolioReview[]> = existsSync(localPortfolioReviewsPath)
+    ? JSON.parse(readFileSync(localPortfolioReviewsPath, "utf8"))
+    : {};
+  let portfolioReviewsPersistTimer: ReturnType<typeof setTimeout> | undefined;
+  const persistPortfolioReviews = () => {
+    clearTimeout(portfolioReviewsPersistTimer);
+    portfolioReviewsPersistTimer = setTimeout(() => {
+      try {
+        mkdirSync("data", { recursive: true });
+        writeFileSync(localPortfolioReviewsPath, JSON.stringify(portfolioReviews, null, 2), { mode: 0o600 });
+      } catch (error) {
+        console.error("Não foi possível persistir as revisões de portfólio.", error);
+      }
+    }, 80);
+    portfolioReviewsPersistTimer.unref();
+  };
   const campaignOptimizationHistory: Record<string, Array<{ value: string; capturedAt: string }>> = existsSync(localCampaignOptimizationHistoryPath)
     ? JSON.parse(readFileSync(localCampaignOptimizationHistoryPath, "utf8"))
     : {};
@@ -9087,11 +9116,12 @@ function localApi(
             return response.end();
           }
         }
-        // Revisões de todas as campanhas das contas do portfólio, inclusive das que já saíram da conta.
+        // Revisões do portfólio e das campanhas das contas dele, inclusive das que já saíram da conta.
         if (url.startsWith("/media/portfolio/reviews") && request.method === "GET") {
           if (!hasPermission(currentUser, "media.view"))
             return json(response, 403, { message: "Você não possui acesso às campanhas." });
-          const prefixes = (new URL(url, "http://localhost").searchParams.get("accounts") || "")
+          const params = new URL(url, "http://localhost").searchParams;
+          const prefixes = (params.get("accounts") || "")
             .split(",").map((value) => value.trim()).filter((value) => /^(META_ADS|GOOGLE_ADS):[^:]+$/.test(value)).slice(0, 200).map((value) => `${value}:`);
           const campaigns = Object.entries(campaignVerifications).flatMap(([key, value]) => {
             const prefix = prefixes.find((candidate) => key.startsWith(candidate)),
@@ -9100,41 +9130,51 @@ function localApi(
             const [platform, accountId] = prefix.split(":"), campaignId = key.slice(prefix.length);
             return [{ platform, accountId, campaignId, name: [...reviews].reverse().find((entry) => entry.snapshot?.name)?.snapshot?.name || null, reviews }];
           });
-          return json(response, 200, { campaigns });
+          return json(response, 200, { reviews: portfolioReviews[params.get("key") || ""] || [], campaigns });
         }
         if (url === "/media/portfolio/reviews" && request.method === "POST") {
           if (!hasPermission(currentUser, "media.view"))
             return json(response, 403, { message: "Você não possui acesso às campanhas." });
           const input = await body(request),
             comment = typeof input.comment === "string" ? input.comment.trim().slice(0, 2000) : "",
+            portfolioKey = String(input.portfolioKey || "").trim().slice(0, 200),
             portfolioName = String(input.portfolioName || "").trim().slice(0, 200),
             items = (Array.isArray(input.campaigns) ? input.campaigns : []).slice(0, 500).filter((item: any) =>
               item && ["META_ADS", "GOOGLE_ADS"].includes(item.platform) && item.accountId && item.campaignId);
           if (comment.length < campaignReviewCommentMinLength)
             return json(response, 400, { message: `Descreva a revisão em um comentário com pelo menos ${campaignReviewCommentMinLength} caracteres.` });
-          if (!items.length) return json(response, 400, { message: "O portfólio não possui campanhas para revisar." });
-          const createdAt = new Date().toISOString(), portfolioReviewId = randomUUID();
+          if (!portfolioKey || !items.length) return json(response, 400, { message: "O portfólio não possui campanhas para revisar." });
+          const createdAt = new Date().toISOString(), portfolioReviewId = randomUUID(),
+            periodDays = Number.isFinite(Number(input.periodDays)) ? { periodDays: Number(input.periodDays) } : {},
+            review: PortfolioReview = { id: portfolioReviewId, createdAt, userId: currentUser.id, userName: currentUser.name, comment, ...(portfolioName ? { portfolioName } : {}), ...periodDays, campaigns: [] };
           const campaigns = items.map((item: any) => {
             const platform = String(item.platform), accountId = String(item.accountId), campaignId = String(item.campaignId),
               key = campaignVerificationKey(platform, accountId, campaignId),
               snapshot = sanitizeCampaignReviewSnapshot(item.snapshot);
+            const data = {
+              ...(Number.isFinite(Number(item.score)) ? { score: Number(item.score) } : {}),
+              ...(Number.isFinite(Number(item.spend)) ? { spend: Number(item.spend) } : {}),
+              ...(Number.isFinite(Number(item.leads)) ? { leads: Number(item.leads) } : {}),
+              ...(item.cpl === null || Number.isFinite(Number(item.cpl)) ? { cpl: item.cpl === null ? null : Number(item.cpl) } : {}),
+              ...(snapshot ? { snapshot } : {}),
+            };
+            review.campaigns.push({ platform, accountId, campaignId, ...data });
+            // A mesma revisão entra no histórico de cada campanha e a deixa com a revisão em dia.
             recordCampaignReviewEntry(key, {
               action: "REVIEW",
               createdAt,
               userId: currentUser.id,
               userName: currentUser.name,
-              ...(Number.isFinite(Number(item.score)) ? { score: Number(item.score) } : {}),
-              ...(Number.isFinite(Number(item.spend)) ? { spend: Number(item.spend) } : {}),
-              ...(Number.isFinite(Number(item.leads)) ? { leads: Number(item.leads) } : {}),
-              ...(item.cpl === null || Number.isFinite(Number(item.cpl)) ? { cpl: item.cpl === null ? null : Number(item.cpl) } : {}),
-              ...(Number.isFinite(Number(input.periodDays)) ? { periodDays: Number(input.periodDays) } : {}),
+              ...data,
+              ...periodDays,
               comment,
-              ...(snapshot ? { snapshot } : {}),
               portfolioReviewId,
               ...(portfolioName ? { portfolioName } : {}),
             }, currentUser.id);
             return { platform, accountId, campaignId, verifiedAt: createdAt, history: campaignVerifications[key]?.history || [] };
           });
+          portfolioReviews[portfolioKey] = [...(portfolioReviews[portfolioKey] || []), review];
+          persistPortfolioReviews();
           scheduleDatabaseMirror();
           return json(response, 200, { portfolioReviewId, createdAt, campaigns });
         }
