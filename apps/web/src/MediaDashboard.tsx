@@ -1510,9 +1510,9 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
       }
     }
   };
-  // O servidor coleta os dados uma vez por dia. Reler o histórico salvo com
+  // O servidor coleta os dados às 08:00, 13:00 e 16:00. Reler o histórico salvo com
   // frequência só devolve o mesmo conteúdo, então a tela confere de tempos em
-  // tempos para pegar a coleta das 04:00 ou uma sincronização feita por outra pessoa.
+  // tempos para pegar as coletas agendadas ou uma sincronização feita por outra pessoa.
   const sharedReloadRef = useRef(() => {});
   const lastSharedReloadRef = useRef(Date.now());
   sharedReloadRef.current = () => {
@@ -1904,7 +1904,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
             {isFullscreen ? <Minimize2 /> : <Maximize2 />}
             {isFullscreen ? "Sair da tela cheia" : "Tela cheia"}
           </button>
-          <span className="traffic-auto-sync" title="Sincronização automática diariamente às 04:00"><RefreshCw/><b>Sincroniza às 04:00</b></span>
+          <span className="traffic-auto-sync" title="Sincronização automática diária às 08:00, 13:00 e 16:00"><RefreshCw/><b>Sincroniza às 8h, 13h e 16h</b></span>
         </div>}
       </header>
       {(section === "CLIENTS" || section === "CAMPAIGNS") && <div className="media-ai-top-instance"><MediaAiBoundary><MediaAiInsights campaigns={allCampaigns} since={since} until={until} context="Gestão de mídia · visão geral" /></MediaAiBoundary></div>}

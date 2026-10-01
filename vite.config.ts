@@ -1,6 +1,6 @@
 import { forEachConcurrent } from "./asyncPool";
 import { mediaConnectionSummary } from "./mediaConnectionSummary";
-import { addDays, isMediaSnapshotFresh, saoPauloDay } from "./mediaFreshness";
+import { addDays, currentSyncSlot, isMediaSnapshotFresh, saoPauloDay } from "./mediaFreshness";
 import {
   GoogleApiError,
   GoogleQuotaError,
@@ -1601,8 +1601,9 @@ function localApi(
     return candidates.sort((a, b) => String(b.syncedAt).localeCompare(String(a.syncedAt)))[0];
   };
   // Com `force`, vale apenas o intervalo mínimo entre atualizações manuais.
-  // Sem `force`, vale a regra da coleta diária (mediaFreshness.ts): o dado do
-  // dia é o coletado depois das 04:00, e períodos encerrados não expiram mais.
+  // Sem `force`, vale a regra da coleta agendada (mediaFreshness.ts): o dado atual
+  // é o coletado depois do último horário (08:00, 13:00 ou 16:00), e períodos
+  // encerrados não expiram mais.
   const mediaPeriodIsFresh = (snapshot: Record<string, any>, force: boolean) =>
     force
       ? Date.now() - new Date(snapshot.syncedAt || 0).getTime() < mediaManualRefreshCooldownMs
@@ -1709,6 +1710,21 @@ function localApi(
   const portfolioReviews: Record<string, PortfolioReview[]> = existsSync(localPortfolioReviewsPath)
     ? JSON.parse(readFileSync(localPortfolioReviewsPath, "utf8"))
     : {};
+  // Controle manual do pedido de crédito por conta ("PLATAFORMA:contaId"): quem marcou
+  // que o crédito foi solicitado ao cliente e quando ele foi recebido.
+  const localCreditRequestsPath = "data/credit-requests.local.json";
+  type CreditRequestMark = { requestedAt?: string; requestedBy?: string; receivedAt?: string; receivedBy?: string };
+  const creditRequests: Record<string, CreditRequestMark> = existsSync(localCreditRequestsPath)
+    ? JSON.parse(readFileSync(localCreditRequestsPath, "utf8"))
+    : {};
+  const persistCreditRequests = () => {
+    try {
+      mkdirSync("data", { recursive: true });
+      writeFileSync(localCreditRequestsPath, JSON.stringify(creditRequests, null, 2), { mode: 0o600 });
+    } catch (error) {
+      console.error("Não foi possível persistir os pedidos de crédito.", error);
+    }
+  };
   let portfolioReviewsPersistTimer: ReturnType<typeof setTimeout> | undefined;
   const persistPortfolioReviews = () => {
     clearTimeout(portfolioReviewsPersistTimer);
@@ -2274,7 +2290,7 @@ function localApi(
     }
   });
   let googleDailySyncRun: Promise<GoogleDailySyncResult> | null = null;
-  // Coletas simultâneas (rotina das 04:00 e botão) compartilham a mesma execução.
+  // Coletas simultâneas (rotina agendada e botão) compartilham a mesma execução.
   const runGoogleDailySync = (mode: "daily" | "manual") => {
     googleDailySyncRun ||= collectGoogleDaily(mode).finally(() => { googleDailySyncRun = null; });
     return googleDailySyncRun;
@@ -3180,16 +3196,17 @@ function localApi(
         };
       };
       const mediaInternalSyncToken = randomBytes(24).toString("hex");
-      // Coleta diária. Roda no backend, sem depender de nenhum usuário logado, e é o
-      // único caminho automático que consulta o Google/Meta. Abrir a tela apenas lê o
-      // histórico salvo; o botão Sincronizar (media.sync) é o outro caminho.
+      // Coleta agendada (08:00, 13:00 e 16:00 — SYNC_HOURS em mediaFreshness.ts). Roda
+      // no backend, sem depender de nenhum usuário logado, e é o único caminho
+      // automático que consulta o Google/Meta. Abrir a tela apenas lê o histórico
+      // salvo; o botão Sincronizar (media.sync) é o outro caminho.
       // Cada plataforma tem o próprio estado: a falha de uma não consome as tentativas
-      // da outra.
+      // da outra. As tentativas são contadas por horário de coleta.
       const scheduledMaxAttempts = 4;
       const scheduledRetryDelayMs = 30 * 60 * 1000;
       const scheduledState = {
-        meta: { doneDay: "", attemptDay: "", attempts: 0, nextAttemptAt: 0, running: false },
-        google: { doneDay: "", attemptDay: "", attempts: 0, nextAttemptAt: 0, running: false },
+        meta: { doneSlot: "", attemptSlot: "", attempts: 0, nextAttemptAt: 0, running: false },
+        google: { doneSlot: "", attemptSlot: "", attempts: 0, nextAttemptAt: 0, running: false },
       };
       // A Meta segue guardando o período inteiro: coleta os períodos de uso comum.
       const collectMetaPeriods = async (localDay: string) => {
@@ -3224,19 +3241,19 @@ function localApi(
             throw new Error(payload.syncWarning || payload.message || `HTTP ${response.status}`);
         }
       };
-      const runScheduledProvider = async (provider: "meta" | "google", localDay: string) => {
+      const runScheduledProvider = async (provider: "meta" | "google", slot: string, localDay: string) => {
         const state = scheduledState[provider], label = provider === "meta" ? "Meta" : "Google";
-        if (state.running || state.doneDay === localDay || Date.now() < state.nextAttemptAt) return;
+        if (state.running || state.doneSlot === slot || Date.now() < state.nextAttemptAt) return;
         const configured = provider === "meta"
           ? !!runtimeMetaAccessToken
           : !!runtimeGoogleRefreshToken && !!runtimeGoogleDeveloperToken;
-        if (!configured) { state.doneDay = localDay; return; }
+        if (!configured) { state.doneSlot = slot; return; }
         if (provider === "google") {
           // Cota diária esgotada: espera até o horário informado pelo Google, sem gastar tentativas.
           const blockedFor = googleQuotaBlockedSeconds();
           if (blockedFor > 0) { state.nextAttemptAt = Date.now() + (blockedFor + 60) * 1000; return; }
         }
-        if (state.attemptDay !== localDay) { state.attemptDay = localDay; state.attempts = 0; }
+        if (state.attemptSlot !== slot) { state.attemptSlot = slot; state.attempts = 0; }
         state.running = true;
         state.attempts += 1;
         let ok = false;
@@ -3247,31 +3264,30 @@ function localApi(
           if (cause instanceof GoogleQuotaError) {
             state.attempts -= 1;
             state.nextAttemptAt = Date.now() + (cause.retryAfterSeconds + 60) * 1000;
-            console.warn(`[${label} Ads] Coleta diária adiada: ${cause.message}`);
+            console.warn(`[${label} Ads] Coleta das ${slot} adiada: ${cause.message}`);
             state.running = false;
             return;
           }
-          console.warn(`[${label} Ads] Coleta diária falhou (tentativa ${state.attempts}/${scheduledMaxAttempts}):`, cause instanceof Error ? cause.message : cause);
+          console.warn(`[${label} Ads] Coleta das ${slot} falhou (tentativa ${state.attempts}/${scheduledMaxAttempts}):`, cause instanceof Error ? cause.message : cause);
         }
         state.running = false;
         if (ok) {
-          state.doneDay = localDay;
-          console.info(`[${label} Ads] Coleta diária de ${localDay} concluída.`);
+          state.doneSlot = slot;
+          console.info(`[${label} Ads] Coleta das ${slot} concluída.`);
         } else if (state.attempts >= scheduledMaxAttempts) {
-          // Esgotadas as tentativas do dia, a tela segue com o último histórico salvo
-          // e o botão Sincronizar continua disponível.
-          state.doneDay = localDay;
-          console.error(`[${label} Ads] Coleta diária de ${localDay} não foi concluída após ${scheduledMaxAttempts} tentativas.`);
+          // Esgotadas as tentativas deste horário, a tela segue com o último histórico
+          // salvo e o botão Sincronizar continua disponível.
+          state.doneSlot = slot;
+          console.error(`[${label} Ads] Coleta das ${slot} não foi concluída após ${scheduledMaxAttempts} tentativas.`);
         } else {
           state.nextAttemptAt = Date.now() + scheduledRetryDelayMs;
         }
       };
       const runScheduledMediaSync = async () => {
-        const now = new Date(),
-          localHour = Number(new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", hour: "2-digit", hourCycle: "h23" }).format(now));
-        if (localHour < 4) return;
-        const localDay = saoPauloDay(now);
-        await Promise.all([runScheduledProvider("meta", localDay), runScheduledProvider("google", localDay)]);
+        // Antes das 08:00 não há coleta do dia; a das 16:00 de ontem segue valendo.
+        const slot = currentSyncSlot(new Date());
+        if (!slot) return;
+        await Promise.all([runScheduledProvider("meta", slot.id, slot.day), runScheduledProvider("google", slot.id, slot.day)]);
       };
       const scheduledMediaTimer = setInterval(
         () => void runScheduledMediaSync(),
@@ -9116,6 +9132,38 @@ function localApi(
             return response.end();
           }
         }
+        if (url === "/media/credit-requests" && request.method === "GET") {
+          if (!hasPermission(currentUser, "media.view"))
+            return json(response, 403, { message: "Você não possui acesso às campanhas." });
+          return json(response, 200, { requests: creditRequests });
+        }
+        // Marca (ou desmarca) que o crédito da conta foi solicitado / recebido.
+        if (url === "/media/credit-requests" && request.method === "POST") {
+          if (!hasPermission(currentUser, "media.view"))
+            return json(response, 403, { message: "Você não possui acesso às campanhas." });
+          const input = await body(request),
+            platform = String(input.platform || ""),
+            accountId = String(input.accountId || "").trim().slice(0, 64),
+            step = input.step === "RECEIVED" ? "RECEIVED" : "REQUESTED",
+            checked = input.checked !== false;
+          if (!["META_ADS", "GOOGLE_ADS"].includes(platform) || !accountId)
+            return json(response, 400, { message: "Conta inválida." });
+          const key = `${platform}:${accountId}`, now = new Date().toISOString();
+          let mark: CreditRequestMark = { ...(creditRequests[key] || {}) };
+          if (step === "REQUESTED") {
+            // Uma nova solicitação começa um novo ciclo; desmarcar limpa tudo.
+            mark = checked ? { requestedAt: now, requestedBy: currentUser.name } : {};
+          } else if (checked) {
+            mark = { ...mark, requestedAt: mark.requestedAt || now, requestedBy: mark.requestedBy || currentUser.name, receivedAt: now, receivedBy: currentUser.name };
+          } else {
+            delete mark.receivedAt;
+            delete mark.receivedBy;
+          }
+          if (mark.requestedAt) creditRequests[key] = mark;
+          else delete creditRequests[key];
+          persistCreditRequests();
+          return json(response, 200, { key, request: creditRequests[key] || null });
+        }
         // Revisões do portfólio e das campanhas das contas dele, inclusive das que já saíram da conta.
         if (url.startsWith("/media/portfolio/reviews") && request.method === "GET") {
           if (!hasPermission(currentUser, "media.view"))
@@ -9286,8 +9334,8 @@ function localApi(
           try {
           const storedGooglePeriod = readStoredMediaPeriod("GOOGLE_ADS", since, until);
           // Abrir a tela nunca consulta o Google Ads: devolve sempre o histórico
-          // salvo, mesmo que já aguarde a próxima coleta das 04:00. O Google só é
-          // consultado (1) pela coleta diária, que pula períodos já atualizados hoje,
+          // salvo, mesmo que já aguarde a próxima coleta agendada. O Google só é
+          // consultado (1) pela coleta agendada, que pula períodos já atualizados hoje,
           // (2) pelo botão Sincronizar, respeitando o intervalo mínimo entre
           // atualizações, e (3) quando o período nunca foi salvo. Este último caso
           // coleta somente métricas e reaproveita os detalhes já salvos.

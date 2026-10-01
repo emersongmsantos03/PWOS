@@ -2,7 +2,7 @@
 //
 // Cada dia fica salvo separadamente (por conta e campanha). Qualquer período pedido
 // pela tela é montado somando os dias já guardados, sem consultar o Google. A coleta
-// das 04:00 só precisa buscar os dias recentes, que ainda podem mudar, e completar
+// agendada (08:00, 13:00 e 16:00) só precisa buscar os dias recentes, que ainda podem mudar, e completar
 // eventuais dias que faltem.
 import { addDays } from "./mediaFreshness";
 
@@ -72,7 +72,7 @@ export const dayRange = (since: string, until: string) => {
 };
 
 // Um período só é servido a partir do histórico se todos os dias já encerrados dele
-// foram coletados. O dia de hoje pode ainda não ter sido coletado (antes das 04:00),
+// foram coletados. O dia de hoje pode ainda não ter sido coletado (antes das 08:00),
 // e nesse caso simplesmente aparece sem números.
 export const coversPeriod = (store: GoogleDailyStore, since: string, until: string, today: string) => {
   if (!store.backfillFrom || since < store.backfillFrom || since > until) return false;
