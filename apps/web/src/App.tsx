@@ -69,6 +69,7 @@ import { Connections } from "./Connections";
 import { AccessManagement } from "./AccessManagement";
 import { ClientsManagement } from "./ClientsManagement";
 import { TicketsManagement } from "./TicketsManagement";
+import { TicketForm } from "./TicketForm";
 import { DashboardBoards } from "./DashboardBoards";
 import { CrmManagement } from "./CrmManagement";
 import { TasksManagement } from "./TasksManagement";
@@ -105,7 +106,7 @@ const nav = [
   { to: "/financeiro", icon: CircleDollarSign, label: "Financeiro" },
   { to: "/midia", icon: Megaphone, label: "Mídia paga" },
   { to: "/relatorios", icon: FileText, label: "Relatórios" },
-  { to: "/chamados", icon: MessagesSquare, label: "Chamados internos" },
+  { to: "/chamados", icon: MessagesSquare, label: "Chamados" },
   { to: "/equipe", icon: Users, label: "Equipe & acesso" },
   {
     to: "/configuracoes/integracoes",
@@ -242,6 +243,7 @@ function Shell({
   });
   const [mediaMenuOpen, setMediaMenuOpen] = useState(() => location.pathname.startsWith("/midia"));
   const [meetingsMenuOpen, setMeetingsMenuOpen] = useState(() => location.pathname.startsWith("/reunioes"));
+  const [ticketsMenuOpen, setTicketsMenuOpen] = useState(() => location.pathname.startsWith("/chamados"));
   const [accountMenu, setAccountMenu] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notifications, setNotifications] = useState<MediaNotification[]>([]),
@@ -383,6 +385,17 @@ function Shell({
                 <NavLink to="/reunioes/em-andamento" onClick={() => setMenu(false)}>Em andamento</NavLink>
                 <NavLink to="/reunioes/concluidas" onClick={() => setMenu(false)}>Concluídas</NavLink>
                 <NavLink to="/reunioes/relatorios" onClick={() => setMenu(false)}>Relatórios</NavLink>
+              </div>
+            </div>
+          ) : item.to === "/chamados" ? (
+            <div className={`sidebar-media-group tickets-group ${ticketsMenuOpen ? "open" : ""}`} key={item.to}>
+              <button type="button" className={`sidebar-media-parent ${location.pathname.startsWith("/chamados") ? "active" : ""}`} onClick={() => setTicketsMenuOpen((value) => !value)} aria-expanded={ticketsMenuOpen}>
+                <item.icon />{item.label}<ChevronDown className="sidebar-media-chevron" />
+              </button>
+              <div className="sidebar-media-submenu">
+                {can("tickets.create") && <NavLink to="/chamados/novo" onClick={() => setMenu(false)}>Abrir chamado</NavLink>}
+                <NavLink to="/chamados" end onClick={() => setMenu(false)}>Em andamento</NavLink>
+                <NavLink to="/chamados/concluidos" onClick={() => setMenu(false)}>Concluídos</NavLink>
               </div>
             </div>
           ) : item.to === "/midia" ? (
@@ -745,7 +758,11 @@ function Shell({
           <Route path="/midia/historico" element={can("media.view")?<MediaDashboard key="media-history" section="HISTORY" />:<Navigate to={firstAccessiblePath} replace />} />
           <Route path="/midia/:id" element={can("media.view")?<MediaDashboard />:<Navigate to={firstAccessiblePath} replace />} />
           <Route path="/relatorios" element={can("reports.view")?<OperationalReports />:<Navigate to={firstAccessiblePath} replace />} />
-          <Route path="/chamados" element={can("tickets.view")?<TicketsManagement user={user} />:<Navigate to={firstAccessiblePath} replace />} />
+          <Route path="/chamados" element={can("tickets.view")?<TicketsManagement key="tickets-open" view="open" user={user} />:<Navigate to={firstAccessiblePath} replace />} />
+          <Route path="/chamados/terceiros" element={<Navigate to="/chamados?filtro=terceiros" replace />} />
+          <Route path="/chamados/concluidos" element={can("tickets.view")?<TicketsManagement key="tickets-done" view="done" user={user} />:<Navigate to={firstAccessiblePath} replace />} />
+          <Route path="/chamados/novo" element={can("tickets.view")?<TicketForm key="ticket-new" user={user} />:<Navigate to={firstAccessiblePath} replace />} />
+          <Route path="/chamados/editar/:id" element={can("tickets.view")?<TicketForm key="ticket-edit" user={user} />:<Navigate to={firstAccessiblePath} replace />} />
           <Route
             path="/equipe"
             element={

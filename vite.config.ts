@@ -19,6 +19,7 @@ import {
   type GoogleDayRow,
 } from "./googleDailyStore";
 import { googleOAuthReturnPage } from "./oauthCallback";
+import { applyFlowAction, canReturnStep, findFlow, flowStatus, reopenFlow, scheduleSteps, ticketFlows, type TicketStep } from "./apps/web/src/ticketFlows";
 import {
   createHash,
   createHmac,
@@ -331,6 +332,9 @@ type TicketComment = {
   createdAt: string;
   // Registro automático de mudanças (status, responsável, prazo…), exibido no histórico.
   kind?: "SYSTEM";
+  // Devolução para ajustes: destacada no histórico com o texto do pedido.
+  action?: "RETURN";
+  note?: string;
 };
 type Ticket = {
   id: string;
@@ -350,7 +354,19 @@ type Ticket = {
   comments: TicketComment[];
   createdAt: string;
   updatedAt: string;
+  // Chamados com fluxo: o responsável (assigneeId) é sempre o da etapa ativa e o status deriva das etapas.
+  clientId?: string;
+  clientName?: string;
+  unit?: string;
+  origin?: { type: TicketOriginType; meetingId?: string; label: string };
+  flowId?: string;
+  flowName?: string;
+  steps?: TicketStep[];
+  notes?: string;
+  attachments?: TicketAttachment[];
 };
+type TicketOriginType = "INTERNAL" | "MEETING" | "WHATSAPP" | "EMAIL" | "PHONE";
+type TicketAttachment = { id: string; name: string; contentType: string; sizeBytes: number; storagePath: string; uploadedById: string; uploadedByName: string; createdAt: string };
 type CrmStage = {
   id: string;
   name: string;
@@ -4541,11 +4557,54 @@ function localApi(
           ticket.requesterId === currentUser.id ||
           ticket.assigneeId === currentUser.id ||
           ticket.participantIds.includes(currentUser.id);
+        const staffUser = (id: unknown) => {
+          const user = users.get(String(id || ""));
+          return user && user.profile !== "CLIENT" ? user : undefined;
+        };
+        const ticketDate = (value: string) => value ? new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short", timeZone: "America/Sao_Paulo" }).format(new Date(value)) : "sem prazo";
+        const ticketOriginLabels: Record<TicketOriginType, string> = { INTERNAL: "Solicitação interna", MEETING: "Reunião", WHATSAPP: "WhatsApp", EMAIL: "E-mail", PHONE: "Telefone" };
+        // Origem "Reunião" guarda o vínculo com a reunião para abrir o histórico a partir do chamado.
+        const ticketOrigin = (input: any): Ticket["origin"] | null => {
+          const type = String(input?.type || "INTERNAL") as TicketOriginType;
+          if (!ticketOriginLabels[type]) return null;
+          if (type !== "MEETING") return { type, label: ticketOriginLabels[type] };
+          const meeting = meetings.get(String(input?.meetingId || ""));
+          if (!meeting) return null;
+          const when = new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", timeZone: "America/Sao_Paulo" }).format(new Date(meeting.startAt)).replace(",", " -");
+          return { type, meetingId: meeting.id, label: `Reunião (${when})${meeting.subject ? ` · ${meeting.subject}` : ""}` };
+        };
+        const ticketMeta = (ticket: Ticket, input: any) => {
+          if (Object.prototype.hasOwnProperty.call(input, "clientId")) {
+            const client = clients.get(String(input.clientId || ""));
+            ticket.clientId = client?.id;
+            ticket.clientName = client?.name;
+          }
+          if (input.unit !== undefined) ticket.unit = String(input.unit || "").trim().slice(0, 80);
+          if (input.notes !== undefined) ticket.notes = String(input.notes || "").trim().slice(0, 500);
+        };
+        // O responsável e o status do chamado acompanham a etapa ativa.
+        const syncTicketFlow = (ticket: Ticket) => {
+          if (!ticket.steps?.length) return;
+          const active = ticket.steps.find((item) => item.status === "ACTIVE");
+          if (active) {
+            ticket.assigneeId = active.assigneeId;
+            ticket.assigneeName = active.assigneeName;
+          }
+          ticket.participantIds = [...new Set([...ticket.participantIds, ...ticket.steps.map((item) => item.assigneeId)])];
+          if (ticket.status !== "CLOSED") ticket.status = flowStatus(ticket.steps);
+        };
+        const systemTicketComment = (ticket: Ticket, message: string) =>
+          ticket.comments.push({ id: randomUUID(), authorId: currentUser.id, authorName: currentUser.name, message, mentions: [], createdAt: ticket.updatedAt, kind: "SYSTEM" });
+        const removeTicketAttachmentFile = (attachment: TicketAttachment) => {
+          if (attachment.storagePath.startsWith(`${localTaskAttachmentsPath}/`) && existsSync(attachment.storagePath))
+            unlinkSync(attachment.storagePath);
+        };
         if (url === "/tickets" && request.method === "GET") {
           if (!hasPermission(currentUser, "tickets.view"))
             return json(response, 403, {
               message: "Você não possui acesso aos chamados.",
             });
+          const meetingWindowStart = Date.now() - 120 * 86400000, meetingWindowEnd = Date.now() + 60 * 86400000;
           return json(response, 200, {
             tickets: [...tickets.values()]
               .filter(canSeeTicket)
@@ -4573,8 +4632,18 @@ function localApi(
                       name: user.name,
                       email: user.email,
                       avatarDataUrl: user.avatarDataUrl,
+                      departmentName: user.departmentName,
                     }))
                 : [],
+            flows: ticketFlows,
+            clients: [...clients.values()]
+              .filter((client) => client.status !== "INACTIVE")
+              .map((client) => ({ id: client.id, name: client.name }))
+              .sort((a, b) => a.name.localeCompare(b.name, "pt-BR")),
+            meetings: [...meetings.values()]
+              .filter((meeting) => meeting.status !== "CANCELLED" && new Date(meeting.startAt).getTime() >= meetingWindowStart && new Date(meeting.startAt).getTime() <= meetingWindowEnd)
+              .map((meeting) => ({ id: meeting.id, clientId: meeting.clientId, subject: meeting.subject, startAt: meeting.startAt, unit: meeting.unit }))
+              .sort((a, b) => b.startAt.localeCompare(a.startAt)),
           });
         }
         if (url === "/tickets" && request.method === "POST") {
@@ -4583,22 +4652,32 @@ function localApi(
               message: "Você não possui permissão para abrir chamados.",
             });
           const input = await body(request);
-          const title = String(input.title || "").trim();
+          const title = String(input.title || "").trim().slice(0, 150);
+          const flow = findFlow(String(input.flowId || "simple"));
+          const department = departments.get(String(input.departmentId || "") || flow?.departmentId || "");
+          const origin = ticketOrigin(input.origin);
+          if (title.length < 4)
+            return json(response, 400, { message: "Dê um nome ao chamado (mínimo de 4 letras)." });
+          if (!flow) return json(response, 400, { message: "Selecione um tipo de solicitação válido." });
+          if (!department) return json(response, 400, { message: "Selecione o setor responsável." });
+          if (!origin) return json(response, 400, { message: "Selecione uma origem válida." });
+          if (!String(input.description || "").trim())
+            return json(response, 400, { message: "Descreva o que precisa ser feito." });
+          const meetingClientId = origin.meetingId ? meetings.get(origin.meetingId)?.clientId : "";
+          if (flow.steps.some((item) => item.role === "CLIENT") && !clients.has(String(input.clientId || meetingClientId || "")))
+            return json(response, 400, { message: "Este tipo tem aprovação do cliente: selecione o cliente." });
+          // Sem permissão para atribuir, as etapas seguem os responsáveis padrão (solicitante ou responsável do setor).
           const canAssign = hasPermission(currentUser, "tickets.assign"),
-            requestedAssignee = users.get(String(input.assigneeId || "")),
-            assignee = canAssign ? requestedAssignee : currentUser;
-          if (
-            title.length < 4 ||
-            !departments.has(String(input.departmentId || ""))
-          )
-            return json(response, 400, {
-              message: "Informe título e setor válidos.",
-            });
-          if (!assignee || assignee.profile === "CLIENT")
-            return json(response, 400, {
-              message: "Selecione um responsável válido.",
-            });
-          const now = new Date().toISOString(), year = new Date().getFullYear();
+            requestedAssignees: unknown[] = Array.isArray(input.stepAssignees) ? input.stepAssignees : [],
+            departmentManager = staffUser(department.managerUserId),
+            now = new Date(),
+            nowIso = now.toISOString();
+          const steps = scheduleSteps(flow.steps.map((item, index): TicketStep => {
+            const fallback = item.owner === "REQUESTER" ? currentUser : departmentManager || currentUser;
+            const assignee = (canAssign && staffUser(requestedAssignees[index])) || fallback;
+            return { id: randomUUID(), name: item.name, role: item.role, days: item.days, assigneeId: assignee.id, assigneeName: assignee.name, status: index === 0 ? "ACTIVE" : "PENDING", dueAt: "", startedAt: index === 0 ? nowIso : undefined };
+          }), now);
+          const year = now.getFullYear();
           // Próximo número do ano a partir do maior código existente: contar os chamados
           // repetiria códigos depois de uma exclusão.
           const sequence = String(Math.max(0, ...[...tickets.values()].map((item) => {
@@ -4609,24 +4688,27 @@ function localApi(
             id: randomUUID(),
             code: `CH-${year}-${sequence}`,
             title,
-            description: String(input.description || "").trim(),
-            departmentId: String(input.departmentId),
+            description: String(input.description || "").trim().slice(0, 2000),
+            departmentId: department.id,
             requesterId: currentUser.id,
             requesterName: currentUser.name,
-            assigneeId: assignee.id,
-            assigneeName: assignee.name,
-            priority: ["LOW", "MEDIUM", "HIGH", "URGENT"].includes(
-              input.priority,
-            )
-              ? input.priority
-              : "MEDIUM",
+            assigneeId: steps[0].assigneeId,
+            assigneeName: steps[0].assigneeName,
+            priority: ["LOW", "MEDIUM", "HIGH", "URGENT"].includes(input.priority) ? input.priority : "MEDIUM",
             status: "OPEN",
-            dueAt: withTimeZone(String(input.dueAt || "")),
-            participantIds: [currentUser.id, assignee.id],
+            dueAt: input.dueAt ? withTimeZone(String(input.dueAt)) : steps[steps.length - 1].dueAt,
+            participantIds: [currentUser.id],
             comments: [],
-            createdAt: now,
-            updatedAt: now,
+            createdAt: nowIso,
+            updatedAt: nowIso,
+            origin,
+            flowId: flow.id,
+            flowName: flow.name,
+            steps,
+            attachments: [],
           };
+          ticketMeta(ticket, { ...input, clientId: input.clientId || meetingClientId || "" });
+          syncTicketFlow(ticket);
           tickets.set(ticket.id, ticket);
           persistTickets();
           return json(response, 201, { ticket });
@@ -4644,7 +4726,9 @@ function localApi(
           const message = String(input.message || "").trim();
           if (!message)
             return json(response, 400, { message: "Escreva uma atualização." });
+          // Só pessoas da equipe podem ser mencionadas; quem é mencionado entra no chamado (passa a vê-lo e é avisado no sino).
           const mentioned = [...users.values()].filter((user) =>
+            user.profile !== "CLIENT" && user.id !== currentUser.id &&
             message.toLowerCase().includes(`@${user.name.toLowerCase()}`),
           );
           const comment: TicketComment = {
@@ -4663,6 +4747,140 @@ function localApi(
           tickets.set(ticket.id, ticket);
           persistTickets();
           return json(response, 201, { comment, ticket });
+        }
+        // Andamento do fluxo: concluir/aprovar, devolver para ajustes, cancelar e reabrir.
+        const ticketFlowMatch = url.match(/^\/tickets\/([^/]+)\/flow$/);
+        if (ticketFlowMatch && request.method === "POST") {
+          const ticket = tickets.get(ticketFlowMatch[1]);
+          if (!ticket || !canSeeTicket(ticket))
+            return json(response, 404, { message: "Chamado não encontrado." });
+          const input = await body(request);
+          const action = String(input.action || ""), note = String(input.note || "").trim().slice(0, 1000);
+          const canManage = hasPermission(currentUser, "tickets.edit");
+          const now = new Date();
+          ticket.updatedAt = now.toISOString();
+          if (action === "CANCEL" || action === "REOPEN") {
+            if (!canManage && ticket.requesterId !== currentUser.id)
+              return json(response, 403, { message: "Somente quem abriu o chamado ou a gestão pode fazer isso." });
+            if (action === "CANCEL") {
+              if (["RESOLVED", "CLOSED"].includes(ticket.status)) return json(response, 409, { message: "Este chamado já está encerrado." });
+              ticket.status = "CLOSED";
+              systemTicketComment(ticket, `cancelou o chamado${note ? ` — “${note}”` : ""}`);
+            } else {
+              if (!["RESOLVED", "CLOSED"].includes(ticket.status)) return json(response, 409, { message: "Este chamado já está aberto." });
+              if (ticket.steps?.length) {
+                ticket.steps = reopenFlow(ticket.steps, now);
+                ticket.status = "OPEN";
+                syncTicketFlow(ticket);
+              } else ticket.status = "OPEN";
+              systemTicketComment(ticket, `reabriu o chamado${note ? ` — “${note}”` : ""}`);
+            }
+          } else if (action === "COMPLETE" || action === "RETURN") {
+            if (!ticket.steps?.length || ticket.status === "CLOSED")
+              return json(response, 409, { message: "Este chamado não tem etapa em andamento." });
+            const active = ticket.steps.find((item) => item.status === "ACTIVE");
+            if (!active) return json(response, 409, { message: "Este chamado não tem etapa em andamento." });
+            if (active.assigneeId !== currentUser.id && !canManage)
+              return json(response, 403, { message: `Somente ${active.assigneeName} pode concluir esta etapa.` });
+            if (action === "RETURN" && !canReturnStep(ticket.steps))
+              return json(response, 409, { message: "Esta etapa não pode ser devolvida." });
+            if (action === "RETURN" && !note)
+              return json(response, 400, { message: "Explique o que precisa ser ajustado." });
+            const result = applyFlowAction(ticket.steps, action, currentUser.name, now, note);
+            ticket.steps = result.steps;
+            syncTicketFlow(ticket);
+            const verb = active.role === "CLIENT" ? "registrou a aprovação do cliente em" : active.role === "APPROVER" ? "aprovou" : "concluiu";
+            systemTicketComment(ticket, action === "RETURN"
+              ? `pediu ajustes em “${active.name}” e devolveu para ${result.to?.assigneeName} (${result.to?.name}) — “${note}”`
+              : result.to
+                ? `${verb} “${active.name}” e enviou para ${result.to.assigneeName} (${result.to.name})`
+                : `${verb} “${active.name}” e finalizou o chamado`);
+            if (action === "RETURN") Object.assign(ticket.comments[ticket.comments.length - 1], { action: "RETURN", note });
+            if (action === "COMPLETE" && note)
+              ticket.comments.push({ id: randomUUID(), authorId: currentUser.id, authorName: currentUser.name, message: note, mentions: [], createdAt: ticket.updatedAt });
+          } else return json(response, 400, { message: "Ação inválida." });
+          tickets.set(ticket.id, ticket);
+          persistTickets();
+          return json(response, 200, { ticket });
+        }
+        // Anexos ficam na mesma pasta dos anexos de tarefas, que já é espelhada no Firebase Storage.
+        const ticketAttachmentMatch = url.match(/^\/tickets\/([^/]+)\/attachments$/);
+        if (ticketAttachmentMatch && request.method === "POST") {
+          const ticket = tickets.get(ticketAttachmentMatch[1]);
+          if (!ticket || !canSeeTicket(ticket))
+            return json(response, 404, { message: "Chamado não encontrado." });
+          if (!["tickets.create", "tickets.edit", "tickets.comment"].some((permission) => hasPermission(currentUser, permission)))
+            return json(response, 403, { message: "Você não possui permissão para anexar arquivos." });
+          const name = decodeURIComponent(String(request.headers["x-file-name"] || "").trim()),
+            contentType = String(request.headers["content-type"] || "application/octet-stream").split(";")[0],
+            declaredSize = Number(request.headers["content-length"] || 0),
+            maxSize = 500_000_000;
+          if (!name || name.length > 180)
+            return json(response, 400, { message: "Nome de arquivo inválido." });
+          if (declaredSize <= 0 || declaredSize > maxSize)
+            return json(response, 400, { message: "Cada arquivo deve ter no máximo 500 MB." });
+          if (/\.(exe|bat|cmd|sh|msi|dmg|app|js|html?)$/i.test(name))
+            return json(response, 400, { message: "Este tipo de arquivo não é permitido." });
+          ticket.attachments ||= [];
+          if (ticket.attachments.length >= 20)
+            return json(response, 409, { message: "Limite de 20 anexos por chamado atingido." });
+          mkdirSync(localTaskAttachmentsPath, { recursive: true });
+          const id = randomUUID(),
+            storagePath = `${localTaskAttachmentsPath}/${id}`,
+            writer = createWriteStream(storagePath, { mode: 0o600 });
+          let sizeBytes = 0;
+          try {
+            for await (const chunk of request) {
+              sizeBytes += chunk.length;
+              if (sizeBytes > maxSize) throw new Error("FILE_TOO_LARGE");
+              if (!writer.write(chunk)) await once(writer, "drain");
+            }
+            writer.end();
+            await once(writer, "finish");
+          } catch {
+            writer.destroy();
+            if (existsSync(storagePath)) unlinkSync(storagePath);
+            return json(response, 400, { message: "Arquivo inválido ou muito grande." });
+          }
+          const attachment: TicketAttachment = { id, name, contentType, sizeBytes, storagePath, uploadedById: currentUser.id, uploadedByName: currentUser.name, createdAt: new Date().toISOString() };
+          ticket.attachments.push(attachment);
+          // Arquivos enviados junto com a abertura não poluem o histórico.
+          if (Date.now() - new Date(ticket.createdAt).getTime() > 120000) {
+            ticket.updatedAt = attachment.createdAt;
+            systemTicketComment(ticket, `anexou “${name}”`);
+          }
+          tickets.set(ticket.id, ticket);
+          persistTickets();
+          return json(response, 201, { attachment, ticket });
+        }
+        const ticketAttachmentItemMatch = url.match(/^\/tickets\/([^/]+)\/attachments\/([^/]+)(\/content)?$/);
+        if (ticketAttachmentItemMatch && ["GET", "DELETE"].includes(request.method || "")) {
+          const ticket = tickets.get(ticketAttachmentItemMatch[1]);
+          if (!ticket || !canSeeTicket(ticket))
+            return json(response, 404, { message: "Chamado não encontrado." });
+          const attachment = (ticket.attachments || []).find((item) => item.id === ticketAttachmentItemMatch[2]);
+          if (!attachment) return json(response, 404, { message: "Anexo não encontrado." });
+          if (request.method === "GET" && ticketAttachmentItemMatch[3]) {
+            if (!existsSync(attachment.storagePath))
+              return json(response, 404, { message: "Arquivo não encontrado." });
+            response.statusCode = 200;
+            response.setHeader("Content-Type", attachment.contentType);
+            response.setHeader("Content-Length", statSync(attachment.storagePath).size);
+            response.setHeader("Cache-Control", "private, max-age=3600");
+            response.setHeader("Content-Disposition", `inline; filename*=UTF-8''${encodeURIComponent(attachment.name)}`);
+            return createReadStream(attachment.storagePath).pipe(response);
+          }
+          if (request.method === "DELETE" && !ticketAttachmentItemMatch[3]) {
+            if (attachment.uploadedById !== currentUser.id && !hasPermission(currentUser, "tickets.edit"))
+              return json(response, 403, { message: "Somente quem enviou o arquivo pode removê-lo." });
+            removeTicketAttachmentFile(attachment);
+            ticket.attachments = (ticket.attachments || []).filter((item) => item.id !== attachment.id);
+            ticket.updatedAt = new Date().toISOString();
+            systemTicketComment(ticket, `removeu o anexo “${attachment.name}”`);
+            tickets.set(ticket.id, ticket);
+            persistTickets();
+            return json(response, 200, { ticket });
+          }
         }
         const ticketMatch = url.match(/^\/tickets\/([^/]+)$/);
         if (ticketMatch && request.method === "GET") {
@@ -4684,59 +4902,75 @@ function localApi(
               message: "Você não possui permissão para editar chamados.",
             });
           const input = await body(request);
+          const canAssign = hasPermission(currentUser, "tickets.assign");
           const assigneeSpecified = Object.prototype.hasOwnProperty.call(
               input,
               "assigneeId",
             ),
             assignee =
               assigneeSpecified && users.get(String(input.assigneeId));
-          if (
-            assigneeSpecified &&
-            !hasPermission(currentUser, "tickets.assign")
-          )
+          if ((assigneeSpecified || input.stepAssignees) && !canAssign)
             return json(response, 403, {
               message: "Você não possui permissão para atribuir chamados.",
             });
-          if (assigneeSpecified && (!assignee || assignee.profile === "CLIENT"))
+          if (assigneeSpecified && !ticket.steps?.length && (!assignee || assignee.profile === "CLIENT"))
             return json(response, 400, {
               message: "Selecione um responsável válido.",
             });
-          const before = { status: ticket.status, assigneeName: ticket.assigneeName, priority: ticket.priority, dueAt: ticket.dueAt, departmentId: ticket.departmentId };
-          if (input.title) ticket.title = String(input.title).trim();
+          const origin = input.origin !== undefined ? ticketOrigin(input.origin) : ticket.origin;
+          if (input.origin !== undefined && !origin)
+            return json(response, 400, { message: "Selecione uma origem válida." });
+          const before = { status: ticket.status, assigneeName: ticket.assigneeName, priority: ticket.priority, dueAt: ticket.dueAt, departmentId: ticket.departmentId, clientName: ticket.clientName };
+          if (input.title) ticket.title = String(input.title).trim().slice(0, 150);
           if (input.description !== undefined)
-            ticket.description = String(input.description).trim();
+            ticket.description = String(input.description).trim().slice(0, 2000);
           if (input.departmentId && departments.has(String(input.departmentId)))
             ticket.departmentId = String(input.departmentId);
-          if (assignee) {
-            ticket.assigneeId = assignee.id;
-            ticket.assigneeName = assignee.name;
-            ticket.participantIds = [
-              ...new Set([...ticket.participantIds, assignee.id]),
-            ];
+          ticket.origin = origin || undefined;
+          ticketMeta(ticket, input);
+          const reassigned: string[] = [];
+          if (ticket.steps?.length) {
+            // Em chamados com fluxo, a troca de responsável é feita por etapa (as concluídas ficam como estão).
+            const requested: unknown[] = Array.isArray(input.stepAssignees) ? input.stepAssignees : [];
+            ticket.steps = ticket.steps.map((item, index) => {
+              const next = item.status !== "DONE" && staffUser(requested[index]);
+              if (!next || next.id === item.assigneeId) return item;
+              reassigned.push(`definiu ${next.name} em “${item.name}”`);
+              return { ...item, assigneeId: next.id, assigneeName: next.name };
+            });
+            syncTicketFlow(ticket);
+          } else {
+            if (assignee) {
+              ticket.assigneeId = assignee.id;
+              ticket.assigneeName = assignee.name;
+              ticket.participantIds = [
+                ...new Set([...ticket.participantIds, assignee.id]),
+              ];
+            }
+            if (
+              ["OPEN", "IN_PROGRESS", "WAITING", "RESOLVED", "CLOSED"].includes(
+                input.status,
+              )
+            )
+              ticket.status = input.status;
           }
           if (["LOW", "MEDIUM", "HIGH", "URGENT"].includes(input.priority))
             ticket.priority = input.priority;
-          if (
-            ["OPEN", "IN_PROGRESS", "WAITING", "RESOLVED", "CLOSED"].includes(
-              input.status,
-            )
-          )
-            ticket.status = input.status;
           if (input.dueAt !== undefined) ticket.dueAt = withTimeZone(String(input.dueAt));
           ticket.updatedAt = new Date().toISOString();
           // Histórico: cada mudança relevante vira um registro na conversa do chamado.
           const statusLabels: Record<string, string> = { OPEN: "Aberto", IN_PROGRESS: "Em andamento", WAITING: "Aguardando", RESOLVED: "Resolvido", CLOSED: "Fechado" };
           const priorityLabels: Record<string, string> = { LOW: "Baixa", MEDIUM: "Média", HIGH: "Alta", URGENT: "Urgente" };
-          const dueLabel = (value: string) => value ? new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short", timeZone: "America/Sao_Paulo" }).format(new Date(value)) : "sem prazo";
           const changes = [
             before.status !== ticket.status && `alterou o status para ${statusLabels[ticket.status]}`,
-            before.assigneeName !== ticket.assigneeName && `transferiu para ${ticket.assigneeName}`,
+            !ticket.steps?.length && before.assigneeName !== ticket.assigneeName && `transferiu para ${ticket.assigneeName}`,
+            ...reassigned,
             before.priority !== ticket.priority && `alterou a prioridade para ${priorityLabels[ticket.priority]}`,
             before.departmentId !== ticket.departmentId && `moveu para o setor ${departments.get(ticket.departmentId)?.name || "—"}`,
-            (before.dueAt || "") !== (ticket.dueAt || "") && `alterou o prazo para ${dueLabel(ticket.dueAt)}`,
+            (before.clientName || "") !== (ticket.clientName || "") && `vinculou ao cliente ${ticket.clientName || "—"}`,
+            (before.dueAt || "") !== (ticket.dueAt || "") && `alterou o prazo para ${ticketDate(ticket.dueAt)}`,
           ].filter(Boolean) as string[];
-          if (changes.length)
-            ticket.comments.push({ id: randomUUID(), authorId: currentUser.id, authorName: currentUser.name, message: changes.join(" · "), mentions: [], createdAt: ticket.updatedAt, kind: "SYSTEM" });
+          if (changes.length) systemTicketComment(ticket, changes.join(" · "));
           tickets.set(ticket.id, ticket);
           persistTickets();
           return json(response, 200, { ticket });
@@ -4749,6 +4983,7 @@ function localApi(
             return json(response, 403, {
               message: "Você não possui permissão para excluir chamados.",
             });
+          (ticket.attachments || []).forEach(removeTicketAttachmentFile);
           tickets.delete(ticket.id);
           persistTickets();
           return json(response, 200, { ok: true });
@@ -8962,9 +9197,19 @@ function localApi(
               };
               const add = (id: string, alert: Pick<OperationalAlert, "type" | "severity" | "title" | "message" | "createdAt">) =>
                 alerts.push({ ...base, ...alert, id, read: notificationReads.has(`${currentUser.id}:${id}`) });
-              if (openTicket && ticket.assigneeId === currentUser.id && ticket.requesterId !== currentUser.id)
+              // Com fluxo, cada etapa que chega gera um aviso próprio para o responsável dela.
+              const activeStep = openTicket ? ticket.steps?.find((item) => item.status === "ACTIVE") : undefined;
+              const lastMover = [...ticket.comments].reverse().find((comment) => comment.kind === "SYSTEM")?.authorId ?? ticket.requesterId;
+              const stepArrived = !!activeStep && activeStep.assigneeId === currentUser.id && lastMover !== currentUser.id;
+              if (activeStep && stepArrived)
+                add(`ticket-step:${ticket.id}:${activeStep.id}:${activeStep.startedAt}`, activeStep.adjustment
+                  ? { type: "TICKET_ASSIGNED", severity: "WARNING", title: `${activeStep.adjustment.byName} pediu ajustes`, message: `${activeStep.name}: “${activeStep.adjustment.note.slice(0, 160)}”`, createdAt: activeStep.startedAt || ticket.updatedAt }
+                  : { type: "TICKET_ASSIGNED", severity: ["HIGH", "URGENT"].includes(ticket.priority) ? "WARNING" : "INFO", title: activeStep.role === "CLIENT" ? "Aprovação do cliente para acompanhar" : activeStep.role === "APPROVER" ? "Aprovação aguardando você" : "Etapa chegou para você", message: `${activeStep.name}${ticket.clientName ? ` · ${ticket.clientName}` : ""}`, createdAt: activeStep.startedAt || ticket.updatedAt });
+              if (activeStep && activeStep.assigneeId === currentUser.id && activeStep.dueAt && new Date(activeStep.dueAt).getTime() < Date.now())
+                add(`ticket-step-late:${activeStep.id}:${activeStep.dueAt}`, { type: "TICKET_LATE", severity: "CRITICAL", title: "Etapa atrasada", message: `O prazo de “${activeStep.name}” já passou.`, createdAt: activeStep.dueAt });
+              if (!ticket.steps?.length && openTicket && ticket.assigneeId === currentUser.id && ticket.requesterId !== currentUser.id)
                 add(`ticket-assigned:${ticket.id}:${ticket.assigneeId}`, { type: "TICKET_ASSIGNED", severity: ["HIGH", "URGENT"].includes(ticket.priority) ? "WARNING" : "INFO", title: "Novo chamado para você", message: `${ticket.requesterName} abriu este chamado.`, createdAt: ticket.createdAt });
-              if (openTicket && ticket.assigneeId === currentUser.id && ticket.dueAt && new Date(ticket.dueAt).getTime() < Date.now())
+              if (!ticket.steps?.length && openTicket && ticket.assigneeId === currentUser.id && ticket.dueAt && new Date(ticket.dueAt).getTime() < Date.now())
                 add(`ticket-late:${ticket.id}:${ticket.dueAt}`, { type: "TICKET_LATE", severity: "CRITICAL", title: "Chamado atrasado", message: "O prazo deste chamado já passou.", createdAt: ticket.dueAt });
               if (new Date(ticket.updatedAt).getTime() < recent) continue;
               for (const comment of ticket.comments) {
@@ -8973,7 +9218,7 @@ function localApi(
               }
               // Só a última atualização de outra pessoa, para não repetir a conversa inteira no sino.
               const latest = [...ticket.comments].reverse().find((comment) => comment.authorId !== currentUser.id);
-              if (involved && latest && !latest.mentions.includes(currentUser.id))
+              if (involved && latest && !latest.mentions.includes(currentUser.id) && !(stepArrived && latest.kind === "SYSTEM" && latest.createdAt === activeStep?.startedAt))
                 add(`ticket-update:${latest.id}`, { type: "TICKET_UPDATE", severity: "INFO", title: latest.kind === "SYSTEM" ? "Chamado atualizado" : `${latest.authorName} respondeu`, message: latest.kind === "SYSTEM" ? `${latest.authorName} ${latest.message}` : latest.message.slice(0, 180), createdAt: latest.createdAt });
             }
           }

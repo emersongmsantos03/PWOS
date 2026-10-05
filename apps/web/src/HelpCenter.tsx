@@ -174,14 +174,14 @@ const articles: Article[] = [
   },
   {
     category: "Chamados",
-    title: "Abrir e acompanhar um chamado interno",
-    text: "Registre solicitações por setor, prioridade, prazo e responsável.",
+    title: "Abrir e acompanhar um chamado",
+    text: "Cada tipo de solicitação cria um fluxo de etapas com responsáveis, aprovações e prazos.",
     permission: "tickets.view",
     steps: [
-      "Abra Chamados internos e clique em Novo chamado, quando autorizado.",
-      "Informe título, setor, prioridade, prazo e descrição.",
-      "Sem permissão para atribuir, o chamado será direcionado inicialmente a você.",
-      "Acompanhe o status e as atualizações pelo detalhe do chamado.",
+      "Em Chamados → Abrir chamado, escolha o cliente, a origem e o tipo de solicitação (Landing Page, Peça criativa, Chamado simples…).",
+      "O tipo monta as etapas do fluxo; quem tem permissão de atribuir pode trocar o responsável de cada etapa.",
+      "O chamado aparece em Chamados › Em andamento (filtro \"Comigo agora\") de quem está com a etapa atual. Ao concluir, ele segue para a próxima etapa e avisa o próximo responsável.",
+      "Etapas de aprovação podem devolver o chamado para ajustes; tudo fica registrado no histórico do chamado.",
     ],
   },
   {
@@ -192,7 +192,7 @@ const articles: Article[] = [
     steps: [
       "Visualizar limita a consulta aos chamados em que você participa; Visualizar todos amplia o escopo.",
       "Criar, Editar, Excluir e Comentar controlam separadamente cada ação.",
-      "Atribuir permite escolher ou trocar o responsável pelo chamado.",
+      "Atribuir permite escolher ou trocar o responsável de cada etapa do chamado.",
       "Gerenciar setores permite cadastrar, editar e organizar os setores de atendimento.",
     ],
   },
