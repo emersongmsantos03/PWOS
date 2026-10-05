@@ -259,6 +259,8 @@ type Client = {
   primaryContactEmail: string;
   primaryContactPhone: string;
   owner: string;
+  // Usuário responsável interno; `owner` guarda o nome para exibição e cadastros antigos.
+  ownerId?: string;
   notes: string;
   createdAt: string;
   updatedAt: string;
@@ -851,14 +853,38 @@ const safeEqual = (a: string, b: string) => {
   const right = Buffer.from(b);
   return left.length === right.length && timingSafeEqual(left, right);
 };
+// Diretoria (quem está no setor e o líder dele) tem controle total das reuniões e dos
+// chamados de toda a equipe (ver, agendar, editar, excluir) e acompanha a agenda e a
+// mídia paga, com os filtros por responsável dessas telas.
+// Um bloqueio individual (DENY) no usuário continua valendo.
+const directorsDepartmentId = "department-directors";
+const directorsMonitoringPermissions = [
+  "meetings.view", "meetings.view_team", "meetings.create", "meetings.edit", "meetings.delete",
+  "tickets.view", "tickets.view_all", "tickets.create", "tickets.edit", "tickets.delete", "tickets.comment", "tickets.assign", "tickets.manage_departments",
+  "calendar.view", "calendar.view_team", "media.view",
+];
+const isDirectorsMember = (user: User) =>
+  user.profile !== "CLIENT" &&
+  (user.departmentId === directorsDepartmentId || departments.get(directorsDepartmentId)?.managerUserId === user.id);
 const hasPermission = (user: User | undefined, permission: string) => {
   if (!user) return false;
   if (user.profile === "MASTER") return true;
+  // Ver (e editar) as reuniões de toda a equipe é exclusivo do Master e da Diretoria;
+  // os demais só acessam as reuniões em que são responsáveis, criaram ou foram convidados.
+  if (permission === "meetings.view_team") return isDirectorsMember(user);
   const override = user.permissionOverrides?.[permission];
   if (override) return override === "ALLOW";
+  if (directorsMonitoringPermissions.includes(permission) && isDirectorsMember(user)) return true;
   return (
     !!user.roleId && !!roles.get(user.roleId)?.permissions.includes(permission)
   );
+};
+// Responsável interno do cliente: um usuário da equipe (ownerId) ou, sem ele, o nome digitado.
+const clientOwner = (input: { ownerId?: unknown; owner?: unknown }) => {
+  const user = users.get(String(input.ownerId || ""));
+  return user && user.profile !== "CLIENT"
+    ? { ownerId: user.id, owner: user.name }
+    : { ownerId: undefined, owner: String(input.owner || "").trim() };
 };
 const canManageMediaConnection = (user: User | undefined, action: "authorize" | "revoke") =>
   !!user && user.profile !== "CLIENT" && hasPermission(user, `integrations.${action}`);
@@ -1739,6 +1765,21 @@ function localApi(
       writeFileSync(localCreditRequestsPath, JSON.stringify(creditRequests, null, 2), { mode: 0o600 });
     } catch (error) {
       console.error("Não foi possível persistir os pedidos de crédito.", error);
+    }
+  };
+  // Contas tiradas da lista de pedido de crédito (ex.: cliente pausado que pode voltar).
+  // Não expira: a conta só volta para a lista quando alguém a desoculta.
+  const localCreditHiddenPath = "data/credit-hidden.local.json";
+  type CreditHiddenMark = { hiddenAt: string; hiddenBy: string; client: string; accountName: string };
+  const creditHidden: Record<string, CreditHiddenMark> = existsSync(localCreditHiddenPath)
+    ? JSON.parse(readFileSync(localCreditHiddenPath, "utf8"))
+    : {};
+  const persistCreditHidden = () => {
+    try {
+      mkdirSync("data", { recursive: true });
+      writeFileSync(localCreditHiddenPath, JSON.stringify(creditHidden, null, 2), { mode: 0o600 });
+    } catch (error) {
+      console.error("Não foi possível persistir as contas ocultas do pedido de crédito.", error);
     }
   };
   let portfolioReviewsPersistTimer: ReturnType<typeof setTimeout> | undefined;
@@ -4641,7 +4682,7 @@ function localApi(
               .map((client) => ({ id: client.id, name: client.name }))
               .sort((a, b) => a.name.localeCompare(b.name, "pt-BR")),
             meetings: [...meetings.values()]
-              .filter((meeting) => meeting.status !== "CANCELLED" && new Date(meeting.startAt).getTime() >= meetingWindowStart && new Date(meeting.startAt).getTime() <= meetingWindowEnd)
+              .filter((meeting) => (hasPermission(currentUser, "meetings.view_team") || meeting.responsibleId === currentUser.id || meeting.createdById === currentUser.id || meeting.participantIds.includes(currentUser.id)) && meeting.status !== "CANCELLED" && new Date(meeting.startAt).getTime() >= meetingWindowStart && new Date(meeting.startAt).getTime() <= meetingWindowEnd)
               .map((meeting) => ({ id: meeting.id, clientId: meeting.clientId, subject: meeting.subject, startAt: meeting.startAt, unit: meeting.unit }))
               .sort((a, b) => b.startAt.localeCompare(a.startAt)),
           });
@@ -6460,7 +6501,45 @@ function localApi(
             clients: [...clients.values()].sort((a, b) =>
               a.name.localeCompare(b.name, "pt-BR"),
             ),
+            team: [...users.values()]
+              .filter((user) => user.profile !== "CLIENT")
+              .map((user) => ({ id: user.id, name: user.name, departmentName: user.departmentName || "" }))
+              .sort((a, b) => a.name.localeCompare(b.name, "pt-BR")),
           });
+        }
+        // Dados públicos do CNPJ na Receita Federal (via BrasilAPI) para preencher o cadastro.
+        const cnpjLookupMatch = url.match(/^\/clients\/cnpj\/(\d{14})$/);
+        if (cnpjLookupMatch && request.method === "GET") {
+          if (!hasPermission(currentUser, "clients.create") && !hasPermission(currentUser, "clients.edit"))
+            return json(response, 403, { message: "Você não possui permissão para cadastrar clientes." });
+          if (!validCNPJ(cnpjLookupMatch[1])) return json(response, 400, { message: "CNPJ inválido." });
+          try {
+            const result = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${cnpjLookupMatch[1]}`, { signal: AbortSignal.timeout(12000), headers: { accept: "application/json" } });
+            if (result.status === 404) return json(response, 404, { message: "CNPJ não encontrado na Receita Federal." });
+            if (!result.ok) return json(response, 502, { message: "A consulta à Receita está indisponível agora. Preencha manualmente ou tente de novo." });
+            const data = await result.json() as Record<string, unknown>;
+            const textOf = (value: unknown) => String(value ?? "").trim();
+            const titleCase = (value: string) => value.toLowerCase().replace(/(^|[\s/(-])(\p{L})/gu, (_, sep: string, letter: string) => sep + letter.toUpperCase());
+            const phone = textOf(data.ddd_telefone_1).replace(/\D/g, "");
+            const address = [
+              [textOf(data.descricao_tipo_de_logradouro), textOf(data.logradouro)].filter(Boolean).join(" "),
+              textOf(data.numero), textOf(data.complemento), textOf(data.bairro),
+              [textOf(data.municipio), textOf(data.uf)].filter(Boolean).join("/"),
+              textOf(data.cep).replace(/^(\d{5})(\d{3})$/, "$1-$2"),
+            ].filter(Boolean).join(", ");
+            return json(response, 200, {
+              legalName: textOf(data.razao_social),
+              tradeName: titleCase(textOf(data.nome_fantasia)),
+              segment: titleCase(textOf(data.cnae_fiscal_descricao)),
+              email: textOf(data.email).toLowerCase(),
+              phone: phone.length >= 10 ? phone : "",
+              status: textOf(data.descricao_situacao_cadastral),
+              openedAt: textOf(data.data_inicio_atividade),
+              address: titleCase(address),
+            });
+          } catch {
+            return json(response, 502, { message: "A consulta à Receita está indisponível agora. Preencha manualmente ou tente de novo." });
+          }
         }
         if (url === "/clients" && request.method === "POST") {
           if (!hasPermission(currentUser, "clients.create"))
@@ -6511,7 +6590,7 @@ function localApi(
               .trim()
               .toLowerCase(),
             primaryContactPhone,
-            owner: String(input.owner || "").trim(),
+            ...clientOwner(input),
             notes: String(input.notes || "").trim(),
             createdAt: now,
             updatedAt: now,
@@ -6532,7 +6611,7 @@ function localApi(
               phone: client.primaryContactPhone,
               segment: client.segment,
               clientId: client.id,
-              responsibleId: "",
+              responsibleId: client.ownerId || "",
               responsibleName: client.owner,
               createdAt: now,
               updatedAt: now,
@@ -6570,7 +6649,7 @@ function localApi(
               id: contact.id, name: contact.name, email: contact.email,
               phone: contact.phone, whatsapp: contact.whatsapp, role: contact.role,
               companyId: company.id, clientId: client.id, opportunityIds: [],
-              responsibleId: "", responsibleName: client.owner, createdAt: now,
+              responsibleId: client.ownerId || "", responsibleName: client.owner, createdAt: now,
               updatedAt: now, activities: [{ id: randomUUID(), type: "CREATED",
                 description: "Contato principal vinculado ao cliente", actorId: currentUser.id,
                 actorName: currentUser.name, createdAt: now }],
@@ -6783,7 +6862,7 @@ function localApi(
               .trim()
               .toLowerCase(),
             primaryContactPhone,
-            owner: String(input.owner || "").trim(),
+            ...clientOwner(input),
             notes: String(input.notes || "").trim(),
             updatedAt: new Date().toISOString(),
           });
@@ -6799,6 +6878,7 @@ function localApi(
               website: client.website,
               phone: client.primaryContactPhone,
               segment: client.segment,
+              ...(client.ownerId ? { responsibleId: client.ownerId, responsibleName: client.owner } : {}),
               updatedAt: client.updatedAt,
             });
             crmCompanies.set(linkedCompany.id, linkedCompany);
@@ -6946,7 +7026,7 @@ function localApi(
             companyId: company?.id || "",
             clientId: client.id,
             opportunityIds: [],
-            responsibleId: "",
+            responsibleId: client.ownerId || "",
             responsibleName: client.owner,
             createdAt: contact.createdAt,
             updatedAt: contact.createdAt,
@@ -9380,7 +9460,7 @@ function localApi(
         if (url === "/media/credit-requests" && request.method === "GET") {
           if (!hasPermission(currentUser, "media.view"))
             return json(response, 403, { message: "Você não possui acesso às campanhas." });
-          return json(response, 200, { requests: creditRequests });
+          return json(response, 200, { requests: creditRequests, hidden: creditHidden });
         }
         // Marca (ou desmarca) que o crédito da conta foi solicitado / recebido.
         if (url === "/media/credit-requests" && request.method === "POST") {
@@ -9408,6 +9488,26 @@ function localApi(
           else delete creditRequests[key];
           persistCreditRequests();
           return json(response, 200, { key, request: creditRequests[key] || null });
+        }
+        // Oculta (ou volta a mostrar) uma conta na lista de pedido de crédito.
+        if (url === "/media/credit-hidden" && request.method === "POST") {
+          if (!hasPermission(currentUser, "media.view"))
+            return json(response, 403, { message: "Você não possui acesso às campanhas." });
+          const input = await body(request),
+            platform = String(input.platform || ""),
+            accountId = String(input.accountId || "").trim().slice(0, 64);
+          if (!["META_ADS", "GOOGLE_ADS"].includes(platform) || !accountId)
+            return json(response, 400, { message: "Conta inválida." });
+          const key = `${platform}:${accountId}`;
+          if (input.hidden === false) delete creditHidden[key];
+          else creditHidden[key] = {
+            hiddenAt: new Date().toISOString(),
+            hiddenBy: currentUser.name,
+            client: String(input.client || "").trim().slice(0, 120),
+            accountName: String(input.accountName || "").trim().slice(0, 120),
+          };
+          persistCreditHidden();
+          return json(response, 200, { key, hidden: creditHidden[key] || null });
         }
         // Revisões do portfólio e das campanhas das contas dele, inclusive das que já saíram da conta.
         if (url.startsWith("/media/portfolio/reviews") && request.method === "GET") {

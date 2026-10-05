@@ -6,6 +6,8 @@ import {
   Building2,
   Check,
   ChevronDown,
+  Loader2,
+  RefreshCw,
   CircleDollarSign,
   Edit3,
   ExternalLink,
@@ -45,10 +47,13 @@ type Client = {
   primaryContactEmail: string;
   primaryContactPhone: string;
   owner: string;
+  ownerId?: string;
   notes: string;
   createdAt: string;
   updatedAt: string;
 };
+type TeamMember = { id: string; name: string; departmentName: string };
+type CnpjData = { legalName: string; tradeName: string; segment: string; email: string; phone: string; status: string; openedAt: string; address: string };
 type Contact = {
   id: string;
   name: string;
@@ -162,6 +167,7 @@ export function ClientsManagement({ permissions = [], profile = "" }: { permissi
   const canDelete = hasPermission("clients.delete");
   const canCreateAccess = hasPermission("clients.create_access");
   const [clients, setClients] = useState<Client[]>([]);
+  const [team, setTeam] = useState<TeamMember[]>([]);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState<"ALL" | ClientStatus>("ALL");
   const [editing, setEditing] = useState<Client | null>(null);
@@ -176,6 +182,7 @@ export function ClientsManagement({ permissions = [], profile = "" }: { permissi
       if (response.ok) {
         const loadedClients = data.clients || [];
         setClients(loadedClients);
+        setTeam(data.team || []);
         const requestedClient = new URLSearchParams(window.location.search).get("client");
         if (requestedClient) setViewing(loadedClients.find((item: Client) => item.id === requestedClient) || null);
       }
@@ -384,6 +391,7 @@ export function ClientsManagement({ permissions = [], profile = "" }: { permissi
       {((creating && canCreate) || (editing && canEdit)) && (
         <ClientForm
           client={editing}
+          team={team}
           error={error}
           onClose={() => {
             setCreating(false);
@@ -426,15 +434,48 @@ export function ClientsManagement({ permissions = [], profile = "" }: { permissi
 
 function ClientForm({
   client,
+  team,
   error,
   onClose,
   onSave,
 }: {
   client: Client | null;
+  team: TeamMember[];
   error: string;
   onClose: () => void;
   onSave: (event: FormEvent<HTMLFormElement>) => void;
 }) {
+  const formRef = useRef<HTMLFormElement>(null), lastLookup = useRef("");
+  // Cadastros antigos guardavam só o nome: reaproveita o usuário com o mesmo nome, se houver.
+  const [ownerId, setOwnerId] = useState(() => client?.ownerId || team.find((member) => member.name === client?.owner)?.id || "");
+  const [lookup, setLookup] = useState<{ state: "idle" | "loading" | "done" | "error"; message?: string; data?: CnpjData }>({ state: "idle" });
+  const legacyOwner = !ownerId && client?.owner ? client.owner : "";
+  // Busca o CNPJ na Receita e preenche só os campos ainda vazios, sem apagar o que foi digitado.
+  const lookupCnpj = async (masked: string, force = false) => {
+    const digits = masked.replace(/\D/g, "");
+    if (digits.length !== 14 || !isValidDocument(masked) || (!force && lastLookup.current === digits)) return;
+    lastLookup.current = digits;
+    setLookup({ state: "loading" });
+    try {
+      const response = await fetch(`/api/clients/cnpj/${digits}`);
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) return setLookup({ state: "error", message: payload.message || "Não foi possível consultar o CNPJ." });
+      const data = payload as CnpjData, form = formRef.current;
+      const fill = (name: string, value: string) => {
+        const field = form?.elements.namedItem(name) as HTMLInputElement | HTMLTextAreaElement | null;
+        if (field && value && !field.value.trim()) field.value = value;
+      };
+      fill("name", data.tradeName || data.legalName);
+      fill("legalName", data.legalName);
+      fill("segment", data.segment);
+      fill("primaryContactEmail", data.email);
+      fill("primaryContactPhone", maskPhone(data.phone));
+      if (data.address) fill("notes", `Endereço (Receita Federal): ${data.address}`);
+      setLookup({ state: "done", data });
+    } catch {
+      setLookup({ state: "error", message: "Não foi possível consultar o CNPJ agora. Preencha manualmente." });
+    }
+  };
   return (
     <div className="modal-backdrop">
       <section className="client-form-modal" role="dialog" aria-modal="true">
@@ -454,7 +495,7 @@ function ClientForm({
             <X />
           </button>
         </header>
-        <form onSubmit={onSave}>
+        <form ref={formRef} onSubmit={onSave}>
           <div className="client-form-section">
             <div className="client-form-section-title">
               <b>Dados da empresa</b>
@@ -494,9 +535,13 @@ function ClientForm({
                         ? "Informe um CPF ou CNPJ válido."
                         : "",
                     );
+                    void lookupCnpj(input.value);
                   }}
                 />
-                <small>O dígito verificador é validado automaticamente.</small>
+                {lookup.state === "loading" ? <small className="client-cnpj-status"><Loader2 className="spin" />Buscando dados na Receita Federal…</small>
+                  : lookup.state === "done" && lookup.data ? <small className={`client-cnpj-status ${lookup.data.status && lookup.data.status !== "ATIVA" ? "warn" : "ok"}`}><Check />Receita Federal: situação {lookup.data.status || "não informada"}{lookup.data.openedAt ? ` · aberta em ${lookup.data.openedAt.split("-").reverse().join("/")}` : ""}. Campos vazios preenchidos.</small>
+                  : lookup.state === "error" ? <small className="client-cnpj-status warn"><AlertTriangle />{lookup.message} <button type="button" onClick={() => { const field = formRef.current?.elements.namedItem("document") as HTMLInputElement | null; if (field) void lookupCnpj(field.value, true); }}><RefreshCw />Tentar de novo</button></small>
+                  : <small>Com um CNPJ válido, os dados da Receita Federal são preenchidos automaticamente.</small>}
               </label>
               <label>
                 Segmento
@@ -568,10 +613,14 @@ function ClientForm({
               </label>
               <label>
                 Responsável interno
-                <input
-                  name="owner"
-                  defaultValue={client?.owner}
-                  placeholder="Ex.: Emerson Santos"
+                <input type="hidden" name="ownerId" value={ownerId} />
+                <input type="hidden" name="owner" value={legacyOwner} />
+                <SearchableSelect
+                  value={ownerId}
+                  onChange={setOwnerId}
+                  placeholder={legacyOwner || "Selecione quem atende o cliente"}
+                  searchPlaceholder="Buscar pessoa da equipe…"
+                  options={[{ value: "", label: legacyOwner ? `${legacyOwner} (sem usuário vinculado)` : "Sem responsável" }, ...team.map((member) => ({ value: member.id, label: member.name, description: member.departmentName || undefined }))]}
                 />
               </label>
               <label className="full-field">
