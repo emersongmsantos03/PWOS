@@ -9469,13 +9469,17 @@ function localApi(
           const input = await body(request),
             platform = String(input.platform || ""),
             accountId = String(input.accountId || "").trim().slice(0, 64),
-            step = input.step === "RECEIVED" ? "RECEIVED" : "REQUESTED",
+            step = input.step === "RECEIVED" || input.step === "CLOSE" ? input.step : "REQUESTED",
             checked = input.checked !== false;
           if (!["META_ADS", "GOOGLE_ADS"].includes(platform) || !accountId)
             return json(response, 400, { message: "Conta inválida." });
           const key = `${platform}:${accountId}`, now = new Date().toISOString();
           let mark: CreditRequestMark = { ...(creditRequests[key] || {}) };
-          if (step === "REQUESTED") {
+          if (step === "CLOSE") {
+            // O saldo voltou a cobrir o alerta: encerra o ciclo que o painel viu, nunca
+            // uma solicitação feita depois dele.
+            if (mark.requestedAt && mark.requestedAt === String(input.requestedAt || "")) mark = {};
+          } else if (step === "REQUESTED") {
             // Uma nova solicitação começa um novo ciclo; desmarcar limpa tudo.
             mark = checked ? { requestedAt: now, requestedBy: currentUser.name } : {};
           } else if (checked) {

@@ -731,8 +731,16 @@ function ClientCampaignGroup({
     [verifyingId, setVerifyingId] = useState("");
   const [draftClientId, setDraftClientId] = useState(clientId);
   const [draftResponsibleId, setDraftResponsibleId] = useState(responsibleId);
+  // Um portfólio da Meta pode reunir contas de clientes diferentes: o vínculo vale só
+  // para as contas marcadas, e a conta desmarcada de um cliente já vinculado fica sem vínculo.
+  const groupAccounts = [...new Map(group.campaigns.map((campaign) => {
+    const source = campaign.platform || "META_ADS", key = `${source}:${campaign.accountId}`;
+    return [key, { key, platform: source, id: campaign.accountId, name: group.accounts.find((account) => account.id === campaign.accountId)?.name || campaign.accountId }] as const;
+  })).values()];
+  const [draftAccountKeys, setDraftAccountKeys] = useState<string[]>([]);
   const editAssignment = () => {
     setDraftClientId(clientId); setDraftResponsibleId(responsibleId);
+    setDraftAccountKeys(group.client || groupAccounts.length === 1 ? groupAccounts.map((account) => account.key) : []);
     setLinkError(""); setSaved(false); setLinkOpen(true);
   };
   const [clientAnalysisOpen, setClientAnalysisOpen] = useState(false);
@@ -932,6 +940,34 @@ function ClientCampaignGroup({
                 )}
               </label>
             </div>
+            {groupAccounts.length > 1 && (
+              <fieldset className="media-link-accounts">
+                <legend>Contas de anúncio</legend>
+                <p>
+                  {group.client
+                    ? "Desmarque as contas que não são deste cliente. Elas ficam sem vínculo para você ligar ao cliente certo."
+                    : "Este portfólio reúne contas de clientes diferentes. Marque só as contas deste cliente."}
+                </p>
+                {groupAccounts.map((account) => (
+                  <label key={account.key}>
+                    <input
+                      type="checkbox"
+                      checked={draftAccountKeys.includes(account.key)}
+                      onChange={(event) => {
+                        const checked = event.target.checked;
+                        setDraftAccountKeys((current) => checked ? [...current, account.key] : current.filter((key) => key !== account.key));
+                        setSaved(false);
+                        setLinkError("");
+                      }}
+                    />
+                    <span>
+                      <b>{account.name}</b>
+                      <small>{account.platform === "GOOGLE_ADS" ? "Google Ads" : "Meta Ads"} · {account.id.replace(/^act_/, "")}</small>
+                    </span>
+                  </label>
+                ))}
+              </fieldset>
+            )}
             {linkError && (
               <div className="media-assignment-error">
                 <AlertTriangle />
@@ -960,13 +996,16 @@ function ClientCampaignGroup({
                         : draftClientId
                           ? "CLIENT"
                           : "UNLINKED";
-                    await Promise.all(groupPlatforms.map((source) => onAssign(
-                      source,
-                      [...new Set(group.campaigns.filter((campaign) => (campaign.platform || "META_ADS") === source).map((campaign) => campaign.accountId))],
-                      draftClientId === META_PORTFOLIO ? "" : draftClientId,
-                      draftResponsibleId,
-                      identitySource,
-                    )));
+                    const linked = groupAccounts.filter((account) => draftAccountKeys.includes(account.key)),
+                      released = group.client && draftClientId ? groupAccounts.filter((account) => !draftAccountKeys.includes(account.key)) : [];
+                    if (!linked.length) throw new Error("Marque ao menos uma conta de anúncio.");
+                    await Promise.all(groupPlatforms.map(async (source) => {
+                      const ids = (accounts: typeof groupAccounts) => accounts.filter((account) => account.platform === source).map((account) => account.id);
+                      if (ids(linked).length)
+                        await onAssign(source, ids(linked), draftClientId === META_PORTFOLIO ? "" : draftClientId, draftResponsibleId, identitySource);
+                      if (ids(released).length)
+                        await onAssign(source, ids(released), "", "", "UNLINKED");
+                    }));
                     setClientId(draftClientId);
                     setResponsibleId(draftResponsibleId);
                     setSaved(true);

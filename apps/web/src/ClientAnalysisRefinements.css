@@ -33,6 +33,14 @@
 .simple-client-table .media-link-fields label b{font-size:12px}
 .simple-client-table .media-link-select select{min-height:44px;font-size:13px;background:var(--surface)}
 .simple-client-table .media-link-editor>footer>button{min-height:40px;font-size:12px;padding:0 16px}
+.simple-client-table .media-link-accounts{display:grid;gap:8px;margin:18px 0 0;padding:14px 16px;border:1px solid var(--border);border-radius:8px;background:var(--surface);min-width:0}
+.simple-client-table .media-link-accounts legend{padding:0 6px;font-size:12px;font-weight:700;color:var(--heading)}
+.simple-client-table .media-link-accounts p{margin:0 0 4px;font-size:12px;color:var(--subtle)}
+.simple-client-table .media-link-accounts label{display:flex;align-items:center;gap:10px;cursor:pointer;min-width:0}
+.simple-client-table .media-link-accounts input{width:16px;height:16px;flex:none;accent-color:var(--accent)}
+.simple-client-table .media-link-accounts span{display:grid;min-width:0}
+.simple-client-table .media-link-accounts b{font-size:13px;color:var(--heading);overflow-wrap:anywhere}
+.simple-client-table .media-link-accounts small{font-size:11px;color:var(--subtle)}
 .client-analysis-dialog button:focus-visible,.simple-client-table .media-link-editor button:focus-visible,.assignment-edit-trigger:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 @media(max-width:640px){.client-analysis-dialog.campaign-ad-modal{width:calc(100vw - 20px);max-height:94vh}.client-analysis-dialog.campaign-ad-modal>header,.client-analysis-dialog .portfolio-client-analysis{padding:18px}.client-analysis-overview{align-items:stretch;flex-direction:column;gap:14px}.client-analysis-score{min-width:0}.client-analysis-dialog .portfolio-total-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.client-analysis-dialog .portfolio-analysis-campaign{grid-template-columns:1fr auto;gap:10px}.portfolio-analysis-campaign>b{grid-column:1/-1}.client-campaign-score{text-align:left}.simple-client-table .media-link-fields{grid-template-columns:1fr}}
 .client-analysis-score.good strong{color:#238356}.client-analysis-score.warning strong{color:#a77012}.client-analysis-score.bad strong{color:#bd4c4c}
