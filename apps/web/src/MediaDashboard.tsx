@@ -1396,6 +1396,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
       error: string;
     } | null>(null),
     [canManageAssignments, setCanManageAssignments] = useState(false),
+    [canSyncMedia, setCanSyncMedia] = useState(false),
     [comparisonCampaigns, setComparisonCampaigns] = useState<Campaign[]>([]);
   const [since, setSince] = useState(() => reportClientFromUrl ? initialReportPeriod().since : safeSavedMediaPeriod(userId).since),
     [until, setUntil] = useState(() => reportClientFromUrl ? initialReportPeriod().until : safeSavedMediaPeriod(userId).until);
@@ -1528,6 +1529,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
         const assignmentPayload = await assignmentsResponse.json();
         setAssignments(assignmentPayload.assignments || []);
         setCanManageAssignments(!!assignmentPayload.canManage);
+        setCanSyncMedia(!!assignmentPayload.canSync);
       }
       if (requestId !== loadRequestRef.current) return;
       if (!successful.length)
@@ -1989,7 +1991,20 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
             {isFullscreen ? <Minimize2 /> : <Maximize2 />}
             {isFullscreen ? "Sair da tela cheia" : "Tela cheia"}
           </button>
-          <span className="traffic-auto-sync" title="Sincronização automática diária às 08:00, 13:00 e 16:00"><RefreshCw/><b>Sincroniza às 8h, 13h e 16h</b></span>
+          {/* Além da coleta agendada, quem tem media.sync pode consultar a plataforma na hora
+              (a API respeita um intervalo mínimo de 5 minutos entre sincronizações manuais). */}
+          {canSyncMedia && platform !== "ALL"
+            ? <button
+                type="button"
+                className="secondary traffic-sync"
+                onClick={() => void load(true, true)}
+                disabled={loading || manualSyncing}
+                title="Consultar a plataforma agora, sem esperar a coleta das 8h, 13h e 16h"
+              >
+                <RefreshCw className={manualSyncing ? "spin" : ""} />
+                {manualSyncing ? "Sincronizando…" : `Sincronizar ${platform === "META_ADS" ? "Meta" : "Google"}`}
+              </button>
+            : <span className="traffic-auto-sync" title="Sincronização automática diária às 08:00, 13:00 e 16:00"><RefreshCw/><b>Sincroniza às 8h, 13h e 16h</b></span>}
         </div>}
       </header>
       {(section === "CLIENTS" || section === "CAMPAIGNS") && <div className="media-ai-top-instance"><MediaAiBoundary><MediaAiInsights campaigns={allCampaigns} since={since} until={until} context="Gestão de mídia · visão geral" /></MediaAiBoundary></div>}
