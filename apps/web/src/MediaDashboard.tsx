@@ -48,6 +48,8 @@ import {
   WalletCards,
   X,
   EyeOff,
+  Pencil,
+  Trash2,
 } from "lucide-react";
 import { NavLink, useSearchParams } from "react-router-dom";
 import { SearchableSelect } from "./SearchableSelect";
@@ -2334,22 +2336,24 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
 type CampaignReviewEntry = NonNullable<Campaign["verificationHistory"]>[number];
 type ReviewedCampaign = { platform: string; accountId: string; campaignId: string; name: string | null; reviews: CampaignReviewEntry[] };
 type ReviewData = { score?: number; spend?: number; leads?: number; cpl?: number | null; snapshot?: CampaignReviewSnapshot };
-type StoredPortfolioReview = { id: string; createdAt: string; userName: string; comment: string; periodDays?: number; campaigns: Array<ReviewData & { platform: string; accountId: string; campaignId: string }> };
-type ReviewItem = { id: string; createdAt: string; userName: string; comment?: string; periodDays?: number; portfolio: boolean; rows: Array<ReviewData & { key: string; name: string; listed: boolean; currency: string }> };
+type StoredPortfolioReview = { id: string; createdAt: string; userId?: string; userName: string; comment: string; editedAt?: string; editedBy?: string; periodDays?: number; campaigns: Array<ReviewData & { platform: string; accountId: string; campaignId: string }> };
+type ReviewItem = { id: string; createdAt: string; userId?: string; userName: string; comment?: string; editedAt?: string; editedBy?: string; periodDays?: number; portfolio: boolean; rows: Array<ReviewData & { key: string; name: string; listed: boolean; currency: string }> };
 
 // A revisão é feita no portfólio: um comentário gravado na chave do portfólio, com os dados de
 // cada campanha filtrada naquele momento. Revisões antigas feitas por campanha entram no mesmo
 // histórico, lidas pelo ID da campanha.
 function PortfolioReviews({ group, name, periodDays, onReviewed }: { group: ClientGroup; name: string; periodDays: number; onReviewed: () => void }) {
-  const [stored, setStored] = useState<{ reviews: StoredPortfolioReview[]; campaigns: ReviewedCampaign[] }>({ reviews: [], campaigns: [] }), [loading, setLoading] = useState(true), [error, setError] = useState(""),
-    [comment, setComment] = useState(""), [saving, setSaving] = useState(false), [notice, setNotice] = useState(""), [reload, setReload] = useState(0);
+  const userId = useContext(MediaUserContext);
+  const [stored, setStored] = useState<{ reviews: StoredPortfolioReview[]; campaigns: ReviewedCampaign[]; canModerate?: boolean }>({ reviews: [], campaigns: [] }), [loading, setLoading] = useState(true), [error, setError] = useState(""),
+    [comment, setComment] = useState(""), [saving, setSaving] = useState(false), [notice, setNotice] = useState(""), [reload, setReload] = useState(0),
+    [editing, setEditing] = useState<{ id: string; comment: string } | null>(null), [changing, setChanging] = useState("");
   const campaignKey = (item: Campaign) => `${item.platform || group.platform}:${item.accountId}:${item.id}`,
     accounts = [...new Set(group.campaigns.map((item) => `${item.platform || group.platform}:${item.accountId}`))].sort().join(",");
   useEffect(() => {
     let cancelled = false;
     setLoading(true); setError("");
     fetch(`/api/media/portfolio/reviews?key=${encodeURIComponent(group.key)}&accounts=${encodeURIComponent(accounts)}`)
-      .then(async (response) => { const payload = await response.json(); if (!response.ok) throw new Error(payload.message); if (!cancelled) setStored({ reviews: payload.reviews || [], campaigns: payload.campaigns || [] }); })
+      .then(async (response) => { const payload = await response.json(); if (!response.ok) throw new Error(payload.message); if (!cancelled) setStored({ reviews: payload.reviews || [], campaigns: payload.campaigns || [], canModerate: !!payload.canModerate }); })
       .catch((cause) => { if (!cancelled) setError(cause instanceof Error && cause.message ? cause.message : "Não foi possível carregar o histórico de revisões."); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
@@ -2359,7 +2363,7 @@ function PortfolioReviews({ group, name, periodDays, onReviewed }: { group: Clie
       const key = `${campaign.platform}:${campaign.accountId}:${campaign.campaignId}`, current = listed.get(key);
       return { key, name: current?.name || data.snapshot?.name || fallbackName || `Campanha ${campaign.campaignId}`, listed: !!current, currency: current?.currency || group.account.currency, score: data.score, spend: data.spend, leads: data.leads, cpl: data.cpl, snapshot: data.snapshot };
     },
-    items = new Map<string, ReviewItem>(stored.reviews.map((review) => [review.id, { id: review.id, createdAt: review.createdAt, userName: review.userName, comment: review.comment, periodDays: review.periodDays, portfolio: true, rows: review.campaigns.map((campaign) => row(campaign, campaign)) }]));
+    items = new Map<string, ReviewItem>(stored.reviews.map((review) => [review.id, { id: review.id, createdAt: review.createdAt, userId: review.userId, userName: review.userName, comment: review.comment, editedAt: review.editedAt, editedBy: review.editedBy, periodDays: review.periodDays, portfolio: true, rows: review.campaigns.map((campaign) => row(campaign, campaign)) }]));
   const portfolioIds = new Set(stored.reviews.map((review) => review.id));
   stored.campaigns.forEach((campaign) => campaign.reviews.forEach((entry) => {
     const id = entry.portfolioReviewId || `${campaign.platform}:${campaign.accountId}:${campaign.campaignId}:${entry.createdAt}`;
@@ -2390,6 +2394,20 @@ function PortfolioReviews({ group, name, periodDays, onReviewed }: { group: Clie
     } catch { setNotice("Falha de conexão ao salvar a revisão. Tente novamente."); }
     finally { setSaving(false); }
   };
+  // Só as revisões do próprio portfólio podem ser corrigidas: por quem escreveu ou por quem gerencia a mídia.
+  const canChange = (item: ReviewItem) => portfolioIds.has(item.id) && (item.userId === userId || !!stored.canModerate);
+  const change = async (item: ReviewItem, method: "PATCH" | "DELETE") => {
+    if (changing) return;
+    if (method === "DELETE" && !window.confirm("Apagar esta revisão? O comentário sai do portfólio e do histórico das campanhas.")) return;
+    setChanging(item.id); setNotice("");
+    try {
+      const response = await fetch(`/api/media/portfolio/reviews/${encodeURIComponent(item.id)}`, { method, headers: { "Content-Type": "application/json" }, ...(method === "PATCH" ? { body: JSON.stringify({ comment: editing?.comment.trim() || "" }) } : {}) }),
+        result = await response.json().catch(() => ({}));
+      if (!response.ok) { setNotice(result.message || "Não foi possível alterar a revisão."); return; }
+      setEditing(null); setNotice(method === "PATCH" ? "Revisão atualizada." : "Revisão apagada."); setReload((value) => value + 1); onReviewed();
+    } catch { setNotice("Falha de conexão ao alterar a revisão. Tente novamente."); }
+    finally { setChanging(""); }
+  };
   return <section className="portfolio-reviews">
     <h3>Revisão do portfólio</h3>
     <div className="portfolio-review-composer">
@@ -2401,8 +2419,13 @@ function PortfolioReviews({ group, name, periodDays, onReviewed }: { group: Clie
     <h3>Histórico de revisões{timeline.length ? ` (${timeline.length})` : ""}</h3>
     {loading && !timeline.length ? <p className="portfolio-review-empty">Carregando histórico…</p> : error ? <p className="portfolio-review-empty" role="alert">{error}</p> : !timeline.length ? <p className="portfolio-review-empty">Nenhuma revisão comentada neste portfólio ainda.</p> : timeline.map((item) => {
       return <article className="portfolio-review-entry" key={item.id}>
-        <header><b>{item.portfolio ? "Revisão do portfólio" : item.rows[0].name}</b>{!item.portfolio && !item.rows[0].listed && <em>Fora da lista atual</em>}<small>{item.userName} · {new Date(item.createdAt).toLocaleString("pt-BR")}{item.periodDays ? ` · Período de ${item.periodDays} dias` : ""}</small></header>
-        <blockquote className={item.comment ? "" : "empty"}>{item.comment || "Revisão registrada antes da obrigatoriedade de comentário."}</blockquote>
+        <header><b>{item.portfolio ? "Revisão do portfólio" : item.rows[0].name}</b>{!item.portfolio && !item.rows[0].listed && <em>Fora da lista atual</em>}<small>{item.userName} · {new Date(item.createdAt).toLocaleString("pt-BR")}{item.periodDays ? ` · Período de ${item.periodDays} dias` : ""}{item.editedAt ? ` · editada${item.editedBy ? ` por ${item.editedBy}` : ""} em ${new Date(item.editedAt).toLocaleString("pt-BR")}` : ""}</small>
+          {canChange(item) && editing?.id !== item.id && <span className="portfolio-review-actions"><button type="button" disabled={!!changing} onClick={() => setEditing({ id: item.id, comment: item.comment || "" })}><Pencil/> Editar</button><button type="button" className="danger" disabled={!!changing} onClick={() => void change(item, "DELETE")}>{changing === item.id ? <RefreshCw className="spin"/> : <Trash2/>} Apagar</button></span>}</header>
+        {editing?.id === item.id ? <div className="portfolio-review-composer portfolio-review-edit">
+          <textarea aria-label="Editar comentário da revisão" rows={3} maxLength={2000} autoFocus value={editing.comment} onChange={(event) => setEditing({ id: item.id, comment: event.target.value })} onKeyDown={(event) => { if (event.key === "Escape") setEditing(null); if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && editing.comment.trim().length >= campaignReviewCommentMinLength) void change(item, "PATCH"); }} />
+          <div><small className={editing.comment.trim().length >= campaignReviewCommentMinLength ? "ready" : ""}>{editing.comment.trim().length >= campaignReviewCommentMinLength ? `${editing.comment.trim().length}/2000` : `Mínimo de ${campaignReviewCommentMinLength} caracteres (${editing.comment.trim().length}/${campaignReviewCommentMinLength})`}</small>
+            <span><button type="button" className="secondary" disabled={!!changing} onClick={() => setEditing(null)}>Cancelar</button><button type="button" disabled={editing.comment.trim().length < campaignReviewCommentMinLength || !!changing} onClick={() => void change(item, "PATCH")}>{changing === item.id ? <RefreshCw className="spin"/> : <CheckCircle2 />} {changing === item.id ? "Salvando…" : "Salvar alteração"}</button></span></div>
+        </div> : <blockquote className={item.comment ? "" : "empty"}>{item.comment || "Revisão registrada antes da obrigatoriedade de comentário."}</blockquote>}
         <details><summary>{item.portfolio ? `Ver números desta revisão (${item.rows.length} ${item.rows.length === 1 ? "campanha" : "campanhas"})` : "Ver números desta revisão"}</summary><div className="portfolio-review-data"><table><thead><tr><th>Campanha</th><th>Score</th><th>Investimento</th><th>Conversões</th><th>CPL</th><th>Impressões</th><th>Cliques</th><th>CTR</th></tr></thead><tbody>{item.rows.map((entry) => <tr key={entry.key}>
           <td>{entry.name}{!entry.listed && <em>Fora da lista atual</em>}</td>
           <td>{entry.score != null && entry.score >= 0 ? entry.score : "—"}</td>

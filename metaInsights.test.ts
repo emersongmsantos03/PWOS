@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractMetaLeads } from "./metaInsights";
+import { extractMetaLeads, metaCampaignGoal } from "./metaInsights";
 
 describe("extractMetaLeads", () => {
   it("uses a direct lead action when Meta returns it", () => {
@@ -37,5 +37,27 @@ describe("extractMetaLeads", () => {
       leads: 0,
       actionType: null,
     });
+  });
+});
+
+describe("resultado pela meta de otimização", () => {
+  const actions = [
+    { action_type: "lead", value: "2" },
+    { action_type: "onsite_conversion.messaging_conversation_started_7d", value: "18" },
+  ];
+
+  it("campanha de mensagens conta as conversas, mesmo com leads soltos", () => {
+    expect(extractMetaLeads(actions, "CONVERSATIONS")).toEqual({ leads: 18, actionType: "onsite_conversion.messaging_conversation_started_7d" });
+    expect(extractMetaLeads(actions, "LEAD_GENERATION").leads).toBe(2);
+    expect(extractMetaLeads(actions).leads).toBe(2);
+  });
+
+  it("escolhe a meta mais comum entre os conjuntos ativos", () => {
+    expect(metaCampaignGoal([
+      { optimization_goal: "LEAD_GENERATION", effective_status: "PAUSED" },
+      { optimization_goal: "CONVERSATIONS", effective_status: "ACTIVE" },
+    ])).toBe("CONVERSATIONS");
+    expect(metaCampaignGoal([{ optimization_goal: "LINK_CLICKS", effective_status: "PAUSED" }])).toBe("LINK_CLICKS");
+    expect(metaCampaignGoal([{ optimization_goal: "REACH", effective_status: "DELETED" }])).toBeNull();
   });
 });

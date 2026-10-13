@@ -82,3 +82,12 @@
 .portfolio-review-entry>details{margin-top:2px}
 .portfolio-review-entry>details>summary{font-size:11px;color:var(--subtle);cursor:pointer}
 .portfolio-review-entry>details[open]>summary{color:var(--accent)}
+/* Editar e apagar a revisão do portfólio. */
+.portfolio-review-actions{display:inline-flex;gap:6px;margin-left:auto}
+.portfolio-review-actions button{display:inline-flex;align-items:center;gap:5px;min-height:28px;padding:4px 10px;border:1px solid var(--border);border-radius:7px;background:var(--surface);color:var(--subtle);font-size:12px;font-weight:600;cursor:pointer}
+.portfolio-review-actions button:hover:not(:disabled){color:var(--heading);border-color:var(--divider)}
+.portfolio-review-actions button.danger:hover:not(:disabled){color:#c2410c;border-color:#f3b89a}
+.portfolio-review-actions button svg{width:13px;height:13px}.portfolio-review-actions button:disabled{opacity:.55;cursor:not-allowed}
+.portfolio-review-edit{margin:10px 0;padding:12px}
+.portfolio-review-edit>div>span{display:inline-flex;gap:8px;margin-left:auto}
+.portfolio-review-composer button.secondary{border-color:var(--border);background:var(--surface);color:var(--heading)}

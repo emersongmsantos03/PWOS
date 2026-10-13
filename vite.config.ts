@@ -22,6 +22,7 @@ import { googleOAuthReturnPage } from "./oauthCallback";
 import { applyFlowAction, canReturnStep, flowStatus, mergeFlows, reopenFlow, sanitizeFlow, scheduleSteps, ticketFlows, type TicketFlow, type TicketStep } from "./apps/web/src/ticketFlows";
 import { applyWorkAction, workElapsed, type TicketChecklistItem, type TicketWorkAction } from "./apps/web/src/ticketWork";
 import { linkedTaskStatus, ticketTaskDepartments, ticketTaskType, workActionsForTaskStatus } from "./apps/web/src/ticketTasks";
+import { accountBalance, detectCreditPayment, type CreditMark } from "./apps/web/src/creditBalance";
 import {
   createHash,
   createHmac,
@@ -53,7 +54,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { defineConfig, loadEnv, type Plugin, type PreviewServer, type ViteDevServer } from "vite";
 import nodemailer from "nodemailer";
 import OpenAI from "openai";
-import { extractMetaLeads, type MetaAction } from "./metaInsights";
+import { extractMetaLeads, metaCampaignGoal, type MetaAction } from "./metaInsights";
 import { metaPrepaidBalance } from "./metaPrepaidBalance";
 import { mergeById, mergeVerifications } from "./reviewStoreMerge";
 import { validCalendarColor, validEventColorId } from "./apps/web/src/calendarColors";
@@ -1832,6 +1833,8 @@ function localApi(
     userId: string;
     userName: string;
     comment: string;
+    editedAt?: string;
+    editedBy?: string;
     portfolioName?: string;
     periodDays?: number;
     campaigns: Array<{ platform: string; accountId: string; campaignId: string; score?: number; spend?: number; leads?: number; cpl?: number | null; snapshot?: CampaignReviewSnapshot }>;
@@ -1843,10 +1846,43 @@ function localApi(
   // que o crédito foi solicitado ao cliente e quando ele foi recebido.
   const localCreditRequestsPath = "data/credit-requests.local.json";
   // `previous`: o último ciclo encerrado, mostrado como "Último pedido" quando a conta volta a precisar de crédito.
-  type CreditRequestMark = { requestedAt?: string; requestedBy?: string; receivedAt?: string; receivedBy?: string; previous?: { requestedAt: string; receivedAt?: string } };
+  type CreditRequestMark = CreditMark;
   const creditRequests: Record<string, CreditRequestMark> = existsSync(localCreditRequestsPath)
     ? JSON.parse(readFileSync(localCreditRequestsPath, "utf8"))
     : {};
+  // Saldo atual de cada conta ("PLATAFORMA:contaId"), com a mesma regra do painel: Google pelo
+  // histórico diário (atualizado nas coletas das 8h, 13h e 16h) e Meta pelo último cache.
+  let creditBalanceMemo: { key: string; balances: Map<string, number | null> } | null = null;
+  const currentAccountBalances = () => {
+    const metaStamp = existsSync(localMetaDashboardCachePath) ? statSync(localMetaDashboardCachePath).mtimeMs : 0;
+    const key = `${metaStamp}:${googleDaily.lastSyncedAt || ""}`;
+    if (creditBalanceMemo?.key === key) return creditBalanceMemo.balances;
+    const balances = new Map<string, number | null>();
+    Object.values(googleDaily.accounts || {}).forEach((account) =>
+      balances.set(`GOOGLE_ADS:google_${account.id}`, accountBalance({ platform: "GOOGLE_ADS", remainingBudget: account.remainingBudget })));
+    if (metaStamp) try {
+      const cached = JSON.parse(readFileSync(localMetaDashboardCachePath, "utf8"));
+      ((cached.payload || cached).accounts || []).forEach((account: { id: string; spendCap?: number; amountSpent?: number; prepaidBalance?: number | null }) =>
+        balances.set(`META_ADS:${account.id}`, accountBalance({ platform: "META_ADS", spendCap: account.spendCap, amountSpent: account.amountSpent, prepaidBalance: account.prepaidBalance })));
+    } catch { /* cache em gravação: fica para a próxima verificação */ }
+    creditBalanceMemo = { key, balances };
+    return balances;
+  };
+  // Pedidos em aberto cujo saldo subiu viram "Recebido" sozinhos (o cliente pagou).
+  const detectCreditPayments = () => {
+    const balances = currentAccountBalances(), now = new Date();
+    let changed = 0;
+    for (const [key, mark] of Object.entries(creditRequests)) {
+      if (!balances.has(key)) continue;
+      const next = detectCreditPayment(mark, balances.get(key) ?? null, now);
+      if (!next) continue;
+      if (next.receivedSource === "AUTO") console.info(`[Crédito] ${key}: saldo subiu, pedido marcado como recebido.`);
+      creditRequests[key] = next;
+      changed += 1;
+    }
+    if (changed) persistCreditRequests();
+    return changed;
+  };
   const persistCreditRequests = () => {
     try {
       mkdirSync("data", { recursive: true });
@@ -3504,6 +3540,8 @@ function localApi(
         if (ok) {
           state.doneSlot = slot;
           console.info(`[${label} Ads] Coleta das ${slot} concluída.`);
+          // Saldos novos: confere se algum crédito pedido já caiu, sem esperar alguém abrir o painel.
+          try { detectCreditPayments(); } catch (cause) { console.warn("[Crédito] Verificação de pagamentos falhou:", cause); }
         } else if (state.attempts >= scheduledMaxAttempts) {
           // Esgotadas as tentativas deste horário, a tela segue com o último histórico
           // salvo e o botão Sincronizar continua disponível.
@@ -9935,6 +9973,7 @@ function localApi(
         if (url === "/media/credit-requests" && request.method === "GET") {
           if (!hasPermission(currentUser, "media.view"))
             return json(response, 403, { message: "Você não possui acesso às campanhas." });
+          detectCreditPayments();
           return json(response, 200, { requests: creditRequests, hidden: creditHidden });
         }
         // Marca (ou desmarca) que o crédito da conta foi solicitado / recebido.
@@ -9958,12 +9997,17 @@ function localApi(
           } else if (step === "REQUESTED") {
             // Uma nova solicitação começa um novo ciclo (o anterior vira "último pedido");
             // desmarcar volta para Pendente, mantendo o último ciclo encerrado.
-            mark = checked ? { requestedAt: now, requestedBy: currentUser.name, ...(closedCycle ? { previous: closedCycle } : {}) } : { ...(mark.previous ? { previous: mark.previous } : {}) };
+            const balance = currentAccountBalances().get(key);
+            mark = checked
+              ? { requestedAt: now, requestedBy: currentUser.name, ...(balance != null ? { lowestBalance: Math.round(balance * 100) / 100 } : {}), ...(closedCycle ? { previous: closedCycle } : {}) }
+              : { ...(mark.previous ? { previous: mark.previous } : {}) };
           } else if (checked) {
             mark = { ...mark, requestedAt: mark.requestedAt || now, requestedBy: mark.requestedBy || currentUser.name, receivedAt: now, receivedBy: currentUser.name };
+            delete mark.receivedSource;
           } else {
             delete mark.receivedAt;
             delete mark.receivedBy;
+            delete mark.receivedSource;
           }
           if (mark.requestedAt || mark.previous) creditRequests[key] = mark;
           else delete creditRequests[key];
@@ -10005,7 +10049,46 @@ function localApi(
             const [platform, accountId] = prefix.split(":"), campaignId = key.slice(prefix.length);
             return [{ platform, accountId, campaignId, name: [...reviews].reverse().find((entry) => entry.snapshot?.name)?.snapshot?.name || null, reviews }];
           });
-          return json(response, 200, { reviews: portfolioReviews[params.get("key") || ""] || [], campaigns });
+          return json(response, 200, { reviews: portfolioReviews[params.get("key") || ""] || [], campaigns, canModerate: hasPermission(currentUser, "media.edit") });
+        }
+        // Editar ou apagar uma revisão do portfólio (quem escreveu ou quem gerencia a mídia). A cópia
+        // replicada no histórico de cada campanha acompanha; ao apagar, a campanha volta a ficar
+        // revisada pela revisão anterior que ainda existir.
+        const portfolioReviewMatch = url.split("?")[0].match(/^\/media\/portfolio\/reviews\/([^/]+)$/);
+        if (portfolioReviewMatch && (request.method === "PATCH" || request.method === "DELETE")) {
+          if (!hasPermission(currentUser, "media.view"))
+            return json(response, 403, { message: "Você não possui acesso às campanhas." });
+          const reviewId = decodeURIComponent(portfolioReviewMatch[1]),
+            portfolioKey = Object.keys(portfolioReviews).find((key) => portfolioReviews[key].some((item) => item.id === reviewId)),
+            review = portfolioKey ? portfolioReviews[portfolioKey].find((item) => item.id === reviewId) : undefined;
+          if (!portfolioKey || !review) return json(response, 404, { message: "Revisão não encontrada." });
+          if (review.userId !== currentUser.id && !hasPermission(currentUser, "media.edit"))
+            return json(response, 403, { message: "Só quem escreveu a revisão pode alterá-la." });
+          syncCampaignVerificationsFromDisk();
+          const campaignKeys = review.campaigns.map((item) => campaignVerificationKey(item.platform, item.accountId, item.campaignId));
+          if (request.method === "PATCH") {
+            const input = await body(request),
+              comment = typeof input.comment === "string" ? input.comment.trim().slice(0, 2000) : "";
+            if (comment.length < campaignReviewCommentMinLength)
+              return json(response, 400, { message: `Descreva a revisão em um comentário com pelo menos ${campaignReviewCommentMinLength} caracteres.` });
+            Object.assign(review, { comment, editedAt: new Date().toISOString(), editedBy: currentUser.name });
+            campaignKeys.forEach((key) => (campaignVerifications[key]?.history || []).forEach((entry) => {
+              if (entry.portfolioReviewId === reviewId) entry.comment = comment;
+            }));
+          } else {
+            portfolioReviews[portfolioKey] = portfolioReviews[portfolioKey].filter((item) => item.id !== reviewId);
+            campaignKeys.forEach((key) => {
+              const current = campaignVerifications[key];
+              if (!current) return;
+              const history = (current.history || []).filter((entry) => entry.portfolioReviewId !== reviewId),
+                last = [...history].reverse().find((entry) => entry.action === "REVIEW");
+              campaignVerifications[key] = { ...current, history, verified: !!last, verifiedAt: last?.createdAt || "", verifiedBy: last?.userId || "" };
+            });
+          }
+          persistPortfolioReviews();
+          persistCampaignVerifications();
+          scheduleDatabaseMirror();
+          return json(response, 200, request.method === "PATCH" ? { review } : { deleted: reviewId });
         }
         if (url === "/media/portfolio/reviews" && request.method === "POST") {
           if (!hasPermission(currentUser, "media.view"))
@@ -10791,6 +10874,7 @@ function localApi(
             const accountAds = new Map<string, Map<string, Record<string, any>[]>>();
             const accountAdSets = new Map<string, Map<string, Array<{ id: string; name: string; status: string; configuredStatus: string }>>>();
             const accountAdSetBudgets = new Map<string, Map<string, { daily: number; lifetime: number; remaining: number | null }>>();
+            const accountResultGoals = new Map<string, Map<string, string | null>>();
             const accountGeographies = new Map<string, Map<string, Array<{ name: string; level: "REGION" | "CITY" | "NEIGHBORHOOD"; leads: number; clicks: number; spend: number }>>>();
             const campaignLandingPages = new Map<string, string>();
             await forEachConcurrent(accountRefs, 4, async (item) => {
@@ -10842,7 +10926,8 @@ function localApi(
                 lifetime_budget?: string;
                 budget_remaining?: string;
                 promoted_object?: { page_id?: string; instagram_actor_id?: string };
-              }>(`${item.id}/adsets?fields=id,name,campaign_id,status,effective_status,daily_budget,lifetime_budget,budget_remaining,promoted_object&limit=500`);
+                optimization_goal?: string;
+              }>(`${item.id}/adsets?fields=id,name,campaign_id,status,effective_status,daily_budget,lifetime_budget,budget_remaining,promoted_object,optimization_goal&limit=500`);
               const adSetById = new Map(adSetRows.filter((row) => row.id).map((row) => [row.id!, row]));
               const adSetsByCampaign = new Map<string, Array<{ id: string; name: string; status: string; configuredStatus: string }>>();
               adSetRows.forEach((row) => {
@@ -10872,6 +10957,11 @@ function localApi(
                 });
               });
               accountAdSetBudgets.set(item.id, budgetByCampaign);
+              // Qual ação conta como resultado de cada campanha (conversas, leads...), como no Gerenciador.
+              const adSetsOfCampaign = new Map<string, typeof adSetRows>();
+              adSetRows.forEach((row) => { if (row.campaign_id) adSetsOfCampaign.set(row.campaign_id, [...(adSetsOfCampaign.get(row.campaign_id) || []), row]); });
+              const resultGoals = new Map([...adSetsOfCampaign].map(([campaignId, rows]) => [campaignId, metaCampaignGoal(rows)]));
+              accountResultGoals.set(item.id, resultGoals);
               const adRows = await listAll<{
                 id?: string;
                 name?: string;
@@ -10927,7 +11017,7 @@ function localApi(
                 if (!ad.id || !ad.campaign_id) return;
                 const creative = ad.creative || {}, spec = creative.object_story_spec || {},
                   link = spec.link_data, video = spec.video_data,
-                  metrics = insightByAd.get(ad.id), leadResult = extractMetaLeads(metrics?.actions),
+                  metrics = insightByAd.get(ad.id), leadResult = extractMetaLeads(metrics?.actions, (ad.adset?.id && adSetById.get(ad.adset.id)?.optimization_goal) || resultGoals.get(ad.campaign_id)),
                   previewUrl = creative.effective_object_story_id
                     ? `https://www.facebook.com/${creative.effective_object_story_id.replace("_", "/posts/")}`
                     : null,
@@ -11118,7 +11208,7 @@ function localApi(
                 entries.push({
                   name: region.region,
                   level: "REGION",
-                  leads: extractMetaLeads(region.actions).leads,
+                  leads: extractMetaLeads(region.actions, resultGoals.get(region.campaign_id)).leads,
                   clicks: Number(region.clicks || 0),
                   spend: Number(region.spend || 0),
                 });
@@ -11152,7 +11242,7 @@ function localApi(
               (accountCampaigns.get(account.id) || []).map((campaign) => {
                 const insight =
                   accountInsights.get(account.id)?.get(campaign.id) || {};
-                const leadResult = extractMetaLeads(insight.actions);
+                const leadResult = extractMetaLeads(insight.actions, accountResultGoals.get(account.id)?.get(campaign.id));
                 const leads = leadResult.leads;
                 const conversations = actionValue(insight.actions, [
                   "onsite_conversion.messaging_conversation_started_7d",
@@ -11189,9 +11279,13 @@ function localApi(
                   adSets: accountAdSets.get(account.id)?.get(campaign.id) || [],
                   dailyBudget: hasCampaignBudget ? campaignDailyBudget : (adSetBudget?.daily || 0),
                   lifetimeBudget: hasCampaignBudget ? campaignLifetimeBudget : (adSetBudget?.lifetime || 0),
-                  remainingBudget: campaign.budget_remaining != null
-                    ? Number(campaign.budget_remaining) / 100
-                    : (hasCampaignBudget ? null : adSetBudget?.remaining ?? null),
+                  // Com orçamento diário, budget_remaining é só o que falta gastar hoje, não saldo:
+                  // o saldo é o da conta (accounts[].remainingBudget). Fica só o restante do vitalício.
+                  remainingBudget: (hasCampaignBudget ? campaignLifetimeBudget : adSetBudget?.lifetime || 0) <= 0
+                    ? null
+                    : campaign.budget_remaining != null
+                      ? Number(campaign.budget_remaining) / 100
+                      : (hasCampaignBudget ? null : adSetBudget?.remaining ?? null),
                   spend,
                   reach: Number(insight.reach || 0),
                   impressions: Number(insight.impressions || 0),
@@ -11232,12 +11326,15 @@ function localApi(
                   spendCap: Number(account.spend_cap || 0) / 100,
                   // Crédito pré-pago (Pix/boleto), lido do texto da forma de pagamento.
                   prepaidBalance: account.prepaidBalance ?? null,
-                  // A Graph API não expõe crédito/saldo disponível no nível da
-                  // conta: `balance` é o valor já faturável (o que se deve à
-                  // Meta), o oposto do saldo restante. Sem um saldo confiável,
-                  // não informamos saldo de conta e usamos apenas o saldo
-                  // restante por campanha (`budget_remaining`, quando a Meta o
-                  // informa).
+                  // Saldo da conta, o mesmo do painel de crédito: o menor entre o pré-pago e o
+                  // que falta até o limite de gastos. (`balance` da Graph API é o valor já
+                  // faturável, o oposto do saldo, por isso não é usado.)
+                  remainingBudget: accountBalance({
+                    platform: "META_ADS",
+                    spendCap: Number(account.spend_cap || 0) / 100,
+                    amountSpent: Number(account.amount_spent || 0) / 100,
+                    prepaidBalance: account.prepaidBalance ?? null,
+                  }),
                 })),
                 campaigns: campaignsWithHistory,
               };
