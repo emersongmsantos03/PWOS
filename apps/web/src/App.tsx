@@ -78,6 +78,7 @@ import { TicketsManagement } from "./TicketsManagement";
 import { TicketForm } from "./TicketForm";
 import { TicketTypes } from "./TicketTypes";
 import { TicketPage } from "./TicketPage";
+import { GlobalSearch } from "./GlobalSearch";
 import { MyTicketsPage, approvalBadge } from "./MarketingBoard";
 import { isMarketingUser } from "./marketingTickets";
 import { DashboardBoards } from "./DashboardBoards";
@@ -516,14 +517,7 @@ function Shell({
           >
             {sidebarCollapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
           </button>
-          <div className="search">
-            <Search />
-            <input
-              aria-label="Buscar"
-              placeholder="Buscar cliente, campanha ou relatório..."
-            />
-            <kbd>⌘ K</kbd>
-          </div>
+          <GlobalSearch nav={visibleNav} can={can} />
           <div className="top-actions">
             <span className="sync">
               <span /> {["localhost", "127.0.0.1"].includes(window.location.hostname) ? "Ambiente local" : "Produção"}

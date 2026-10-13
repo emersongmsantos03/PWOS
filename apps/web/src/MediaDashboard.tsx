@@ -1,5 +1,6 @@
 import "./CampaignIntelligenceBoard.css";
 import { landingPageGroups } from "./landingPages";
+import { matchesSearch } from "./searchText";
 import "./ClientAnalysisRefinements.css";
 import { MediaUserContext, mediaPreferenceKey, readMediaPreference } from "./mediaPreferences";
 import { requestMediaPeriod } from "./mediaPeriodRequest";
@@ -48,7 +49,7 @@ import {
   X,
   EyeOff,
 } from "lucide-react";
-import { NavLink } from "react-router-dom";
+import { NavLink, useSearchParams } from "react-router-dom";
 import { SearchableSelect } from "./SearchableSelect";
 import "./MediaDashboard.css";
 import "./MediaPlatforms.css";
@@ -1396,7 +1397,9 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
     [comparisonCampaigns, setComparisonCampaigns] = useState<Campaign[]>([]);
   const [since, setSince] = useState(() => reportClientFromUrl ? initialReportPeriod().since : safeSavedMediaPeriod(userId).since),
     [until, setUntil] = useState(() => reportClientFromUrl ? initialReportPeriod().until : safeSavedMediaPeriod(userId).until);
-  const [query, setQuery] = useState(""),
+  // A busca também vem do topo do sistema (parâmetro `busca` da URL).
+  const [searchParams, setSearchParams] = useSearchParams(), urlQuery = searchParams.get("busca") || "";
+  const [query, setLocalQuery] = useState(urlQuery),
     [status, setStatus] = useState(section === "TODAY" ? "ALL" : section === "COMPILED" ? DELIVERED_IN_PERIOD : "ACTIVE"),
     [delivery, setDelivery] = useState("ALL"),
     [showBoosted, setShowBoosted] = useState(false),
@@ -1733,6 +1736,11 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
     }
   }, [platform, since, until, contextClient, contextResponsible]);
   useEffect(() => { setTodayPage(1); }, [platform, since, until, contextClient, contextResponsible]);
+  useEffect(() => { setLocalQuery(urlQuery); }, [urlQuery]);
+  const setQuery = (value: string) => {
+    setLocalQuery(value);
+    setSearchParams((current) => { const next = new URLSearchParams(current); if (value) next.set("busca", value); else next.delete("busca"); return next; }, { replace: true });
+  };
   useEffect(() => { setAccountsPage(1); }, [platform, since, until, contextClient, contextResponsible, query, status, delivery]);
   const filtered = useMemo(
     () =>
@@ -1751,12 +1759,11 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
               : !hasDelivery(item))) &&
           (showBoosted || !isBoostedPost(item)) &&
           !(hidesHidden && isHiddenCampaign(item)) &&
-          `${item.client} ${item.name} ${portfolioId} ${item.accountId.replace(/^act_/, "")}`
-            .toLowerCase()
-            .includes(query.toLowerCase())
+          // Nome da conta, da campanha, do cliente vinculado e ids — sem diferenciar acentos.
+          matchesSearch(query, item.client, item.name, clients.find((client) => client.id === assignment?.clientId)?.name, portfolioId, item.accountId.replace(/^(act_|google_)/, ""))
         );
       }),
-    [data, status, delivery, showBoosted, query, assignments, contextClient, contextResponsible, creditHidden, hidesHidden],
+    [data, status, delivery, showBoosted, query, assignments, clients, contextClient, contextResponsible, creditHidden, hidesHidden],
   );
   const groups = useMemo<ClientGroup[]>(() => {
     const accountsById = new Map(
@@ -1916,10 +1923,6 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
     setManagementView("CAMPAIGNS");
   };
   const todayTotalPages = Math.max(1, Math.ceil(todayRows.length / 20)), todaySafePage = Math.min(todayPage, todayTotalPages), todayVisible = todayRows.slice((todaySafePage - 1) * 20, todaySafePage * 20);
-  const alertCampaigns = allCampaigns.filter(alertable), criticalCampaigns = alertCampaigns.filter((item) => { const score = campaignScore(item); return hasDelivery(item) && (item.status === "WITH_ISSUES" || score < 70); }),
-    spendWithoutResults = alertCampaigns.filter((item) => hasDelivery(item) && item.spend > Math.max(item.dailyBudget * 2, 200) && item.leads + item.conversations === 0),
-    lowBalanceCampaigns = alertCampaigns.filter((item) => item.status === "ACTIVE" && item.dailyBudget > 0 && item.remainingBudget != null && item.remainingBudget <= item.dailyBudget * 2),
-    unassignedPortfolios = groups.filter((group) => !group.responsible).length;
   const accountsTotalPages = Math.max(1, Math.ceil(groups.length / 20)), accountsSafePage = Math.min(accountsPage, accountsTotalPages), visibleGroups = groups.slice((accountsSafePage - 1) * 20, accountsSafePage * 20);
   return (
     <div className={`page traffic-page ${loading && !data ? "media-awaiting-period" : ""}`} ref={pageRef}>
@@ -2177,15 +2180,6 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
           )
         ) : (
           <>
-            <section className="media-operation-pulse" aria-label="Resumo das prioridades operacionais">
-              <header><div><small>LEITURA OPERACIONAL</small><h2>O que merece atenção</h2></div><NavLink to="/midia/hoje">Abrir fila priorizada <ChevronDown /></NavLink></header>
-              <div>
-                <NavLink className={criticalCampaigns.length ? "critical" : "healthy"} to="/midia/hoje"><AlertTriangle/><span><b>{criticalCampaigns.length}</b><small>campanhas críticas</small><em>{criticalCampaigns.length ? "Revisar score e problemas" : "Nenhum alerta crítico"}</em></span></NavLink>
-                <NavLink className={spendWithoutResults.length ? "critical" : "healthy"} to="/midia/hoje"><WalletCards/><span><b>{spendWithoutResults.length}</b><small>investindo sem resultado</small><em>{money(spendWithoutResults.reduce((sum,item) => sum + item.spend,0))} no período</em></span></NavLink>
-                <NavLink className={lowBalanceCampaigns.length ? "warning" : "healthy"} to="/midia/hoje"><Activity/><span><b>{lowBalanceCampaigns.length}</b><small>com saldo para até 2 dias</small><em>{lowBalanceCampaigns.length ? "Planejar recarga ou ajuste" : "Saldos sem risco imediato"}</em></span></NavLink>
-                <NavLink className={unassignedPortfolios ? "warning" : "healthy"} to="/midia/hoje"><UserRound/><span><b>{unassignedPortfolios}</b><small>portfólios sem responsável</small><em>{unassignedPortfolios ? "Definir dono da operação" : "Operação atribuída"}</em></span></NavLink>
-              </div>
-            </section>
             <section className="traffic-toolbar">
               <div>
                 <h2>Clientes e portfólios</h2>

@@ -680,3 +680,21 @@ html[data-theme="dark"] .work-ticket-chip,html[data-theme="dark"] .ticket-link-n
 .creative-error button{display:grid;place-items:center;width:26px;height:26px;border:0;border-radius:6px;background:none;color:inherit;cursor:pointer}
 .creative-error button svg{width:14px}
 html[data-theme="dark"] .creative-error{color:#ff9b9b}
+
+/* Busca do topo: resultados de clientes, chamados, demandas e páginas */
+.global-search{position:relative}
+.global-search:focus-within{border-color:#2f80d6;box-shadow:0 0 0 3px #2f80d61a}
+.global-search-results{position:absolute;top:calc(100% + 6px);left:0;right:0;z-index:60;display:flex;flex-direction:column;gap:2px;max-height:min(70vh,520px);overflow-y:auto;padding:6px;border:1px solid var(--border);border-radius:12px;background:var(--surface);box-shadow:0 18px 44px #0b1a2b2e}
+.global-search-results section{display:flex;flex-direction:column;padding:4px 0}
+.global-search-results small{padding:4px 10px;color:var(--subtle);font-size:10px;font-weight:700;letter-spacing:.4px;text-transform:uppercase}
+.global-search-results button{display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border:0;border-radius:8px;background:none;color:var(--heading);text-align:left;cursor:pointer}
+.global-search-results button svg{width:16px;flex:none;color:var(--subtle)}
+.global-search-results button span{display:flex;flex-direction:column;min-width:0}
+.global-search-results button b{font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.global-search-results button em{color:var(--subtle);font-size:10px;font-style:normal;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.global-search-results button.active{background:color-mix(in srgb,#2f80d6 10%,var(--surface))}
+.global-search-results button.active svg{color:#2f80d6}
+.global-search-empty{margin:0;padding:12px 10px;color:var(--subtle);font-size:12px}
+.global-search-results footer{display:flex;align-items:center;gap:6px;padding:8px 10px 4px;border-top:1px solid var(--divider);color:var(--subtle);font-size:10px}
+.global-search-results footer svg{width:12px}
+@media(max-width:760px){.global-search-results{position:fixed;top:64px;left:12px;right:12px}}
