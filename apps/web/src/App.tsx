@@ -1,5 +1,5 @@
 import { MediaUserContext } from "./mediaPreferences";
-import { Component, lazy, Suspense, useEffect, useMemo, useState, type ErrorInfo, type ReactNode } from "react";
+import { Component, Fragment, lazy, Suspense, useEffect, useMemo, useState, type ErrorInfo, type ReactNode } from "react";
 import {
   useNavigate,
   useParams,
@@ -54,6 +54,12 @@ import {
   MessagesSquare,
   KanbanSquare,
   ListTodo,
+  FolderOpen,
+  Handshake,
+  ClipboardList,
+  PlayCircle,
+  Hourglass,
+  CheckCircle2,
 } from "lucide-react";
 import {
   Area,
@@ -70,6 +76,10 @@ import { AccessManagement } from "./AccessManagement";
 import { ClientsManagement } from "./ClientsManagement";
 import { TicketsManagement } from "./TicketsManagement";
 import { TicketForm } from "./TicketForm";
+import { TicketTypes } from "./TicketTypes";
+import { TicketPage } from "./TicketPage";
+import { MyTicketsPage, approvalBadge } from "./MarketingBoard";
+import { isMarketingUser } from "./marketingTickets";
 import { DashboardBoards } from "./DashboardBoards";
 import { CrmManagement } from "./CrmManagement";
 import { TasksManagement } from "./TasksManagement";
@@ -102,9 +112,9 @@ const nav = [
   { to: "/propostas", icon: FileSignature, label: "Propostas" },
   { to: "/tarefas", icon: ListTodo, label: "Creative Ops" },
   { to: "/agenda", icon: CalendarDays, label: "Agenda" },
-  { to: "/reunioes", icon: CalendarCheck, label: "Reuniões" },
+  { to: "/reunioes", icon: CalendarCheck, label: "Customer Success" },
   { to: "/financeiro", icon: CircleDollarSign, label: "Financeiro" },
-  { to: "/midia", icon: Megaphone, label: "Mídia paga" },
+  { to: "/midia", icon: Megaphone, label: "Inteligência de campanha" },
   { to: "/relatorios", icon: FileText, label: "Relatórios" },
   { to: "/chamados", icon: MessagesSquare, label: "Chamados" },
   { to: "/equipe", icon: Users, label: "Equipe & acesso" },
@@ -115,6 +125,50 @@ const nav = [
   },
   { to: "/configuracoes", icon: Settings, label: "Configurações" },
   { to: "/ajuda", icon: HelpCircle, label: "Central de ajuda" },
+];
+
+// Menu lateral: links soltos e grupos com submenu. Cada item aparece conforme a permissão
+// da sua rota (`visibleNav`); um grupo só aparece se tiver ao menos um item visível.
+type SideLink = { to: string; label: string; end?: boolean; permission?: string };
+type SideEntry =
+  | { kind: "link"; to: string }
+  | { kind: "group"; key: string; label: string; icon: typeof LayoutDashboard; paths: string[]; children: SideLink[] };
+const sideMenu: SideEntry[] = [
+  { kind: "link", to: "/" },
+  { kind: "link", to: "/agenda" },
+  { kind: "link", to: "/tarefas" },
+  { kind: "group", key: "cadastros", label: "Cadastros", icon: FolderOpen, paths: ["/clientes", "/equipe", "/configuracoes/integracoes"], children: [
+    { to: "/clientes", label: "Clientes" },
+    { to: "/equipe", label: "Equipe & Acesso" },
+    { to: "/configuracoes/integracoes", label: "Central de Conexões" },
+  ] },
+  { kind: "group", key: "comercial", label: "Comercial", icon: Handshake, paths: ["/crm", "/propostas"], children: [
+    { to: "/crm", label: "CRM" },
+    { to: "/propostas", label: "Propostas" },
+  ] },
+  { kind: "group", key: "chamados", label: "Chamados", icon: MessagesSquare, paths: ["/chamados"], children: [
+    { to: "/chamados/novo", label: "Abrir chamado", permission: "tickets.create" },
+    { to: "/chamados", label: "Em andamento", end: true },
+    { to: "/chamados/concluidos", label: "Concluídos" },
+    { to: "/chamados/tipos", label: "Tipos de chamado", permission: "tickets.manage_flows" },
+  ] },
+  { kind: "group", key: "cs", label: "CS (Customer Success)", icon: CalendarCheck, paths: ["/reunioes"], children: [
+    { to: "/reunioes/relatorios", label: "Visão geral" },
+    { to: "/reunioes/agendar", label: "Agendar" },
+    { to: "/reunioes/agendadas", label: "Agendadas" },
+    { to: "/reunioes/em-andamento", label: "Em andamento" },
+    { to: "/reunioes/concluidas", label: "Concluídas" },
+  ] },
+  { kind: "link", to: "/financeiro" },
+  { kind: "group", key: "midia", label: "Inteligência de Campanha", icon: Megaphone, paths: ["/midia"], children: [
+    { to: "/midia/compilado", label: "Comparação" },
+    { to: "/midia/gestao", label: "Gestão de Mídia" },
+    { to: "/midia/relatorios", label: "Relatórios" },
+    { to: "/midia/historico", label: "Históricos" },
+  ] },
+  { kind: "link", to: "/relatorios" },
+  { kind: "link", to: "/configuracoes" },
+  { kind: "link", to: "/ajuda" },
 ];
 
 function Status({ value }: { value: Health | string }) {
@@ -241,10 +295,23 @@ function Shell({
       return false;
     }
   });
-  const [mediaMenuOpen, setMediaMenuOpen] = useState(() => location.pathname.startsWith("/midia"));
-  const [meetingsMenuOpen, setMeetingsMenuOpen] = useState(() => location.pathname.startsWith("/reunioes"));
-  const [ticketsMenuOpen, setTicketsMenuOpen] = useState(() => location.pathname.startsWith("/chamados"));
+  // Grupos abertos do menu: começa aberto o grupo da tela atual.
+  const inGroup = (paths: string[]) => paths.some((path) => location.pathname === path || location.pathname.startsWith(`${path}/`));
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(sideMenu.flatMap((entry) => entry.kind === "group" && inGroup(entry.paths) ? [[entry.key, true]] : [])));
   const [accountMenu, setAccountMenu] = useState(false);
+  // Marketing e Criação: atalhos dos próprios chamados no menu, com a contagem de aprovações.
+  const marketing = isMarketingUser(user) && (user.profile === "MASTER" || !!user.permissions?.includes("tickets.view"));
+  const [approvalCount, setApprovalCount] = useState(0);
+  useEffect(() => {
+    if (!marketing) return;
+    let disposed = false;
+    const refresh = () => fetch("/api/tickets").then((response) => response.ok ? response.json() : null)
+      .then((payload) => { if (!disposed && payload?.tickets) setApprovalCount(approvalBadge(payload.tickets, user.id)); }).catch(() => {});
+    void refresh();
+    const timer = window.setInterval(refresh, 120000);
+    return () => { disposed = true; window.clearInterval(timer); };
+  }, [marketing, user.id, location.pathname.startsWith("/chamados") ? location.pathname : ""]);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notifications, setNotifications] = useState<MediaNotification[]>([]),
     [unreadCount, setUnreadCount] = useState(0);
@@ -374,53 +441,43 @@ function Shell({
           <X />
         </button>
         <nav aria-label="Navegação principal">
-          {visibleNav.map((item) => item.to === "/reunioes" ? (
-            <div className={`sidebar-media-group meetings-group ${meetingsMenuOpen ? "open" : ""}`} key={item.to}>
-              <button type="button" className={`sidebar-media-parent ${location.pathname.startsWith("/reunioes") ? "active" : ""}`} onClick={() => setMeetingsMenuOpen((value) => !value)} aria-expanded={meetingsMenuOpen}>
-                <item.icon />{item.label}<ChevronDown className="sidebar-media-chevron" />
-              </button>
-              <div className="sidebar-media-submenu">
-                <NavLink to="/reunioes/agendar" onClick={() => setMenu(false)}>Agendar</NavLink>
-                <NavLink to="/reunioes/agendadas" onClick={() => setMenu(false)}>Agendadas</NavLink>
-                <NavLink to="/reunioes/em-andamento" onClick={() => setMenu(false)}>Em andamento</NavLink>
-                <NavLink to="/reunioes/concluidas" onClick={() => setMenu(false)}>Concluídas</NavLink>
-                <NavLink to="/reunioes/relatorios" onClick={() => setMenu(false)}>Relatórios</NavLink>
+          {sideMenu.map((entry) => {
+            if (entry.kind === "link") {
+              const item = visibleNav.find((value) => value.to === entry.to);
+              const link = item && (
+                <NavLink key={item.to} to={item.to} end={item.to === "/" || item.to === "/configuracoes"} onClick={() => setMenu(false)}>
+                  <item.icon />
+                  {item.label}
+                </NavLink>
+              );
+              if (entry.to !== "/" || !marketing) return link;
+              return <Fragment key="marketing-links">{link}
+                {[
+                  { to: "/chamados/meus", icon: ClipboardList, label: "Meus Chamados" },
+                  { to: "/chamados/meus/andamento", icon: PlayCircle, label: "Em andamento" },
+                  { to: "/chamados/meus/aprovacao", icon: Hourglass, label: "Aguardando aprovação", badge: approvalCount },
+                  { to: "/chamados/meus/concluidos", icon: CheckCircle2, label: "Concluídos" },
+                ].map((shortcut) => <NavLink key={shortcut.to} to={shortcut.to} end onClick={() => setMenu(false)}>
+                  <shortcut.icon />{shortcut.label}{shortcut.badge ? <span className="sidebar-badge" aria-label={`${shortcut.badge} pendentes`}>{shortcut.badge}</span> : null}
+                </NavLink>)}
+                <hr className="sidebar-divider" />
+              </Fragment>;
+            }
+            const visibleRoot = (to: string) => visibleNav.some((value) => to === value.to || to.startsWith(`${value.to}/`));
+            const children = entry.children.filter((child) => visibleRoot(child.to) && (!child.permission || can(child.permission)));
+            if (!children.length) return null;
+            const open = !!openGroups[entry.key];
+            return (
+              <div className={`sidebar-media-group ${open ? "open" : ""}`} key={entry.key}>
+                <button type="button" className={`sidebar-media-parent ${inGroup(entry.paths) ? "active" : ""}`} onClick={() => setOpenGroups((current) => ({ ...current, [entry.key]: !current[entry.key] }))} aria-expanded={open}>
+                  <entry.icon />{entry.label}<ChevronDown className="sidebar-media-chevron" />
+                </button>
+                <div className="sidebar-media-submenu">
+                  {children.map((child) => <NavLink key={child.to} to={child.to} end={child.end} onClick={() => setMenu(false)}>{child.label}</NavLink>)}
+                </div>
               </div>
-            </div>
-          ) : item.to === "/chamados" ? (
-            <div className={`sidebar-media-group tickets-group ${ticketsMenuOpen ? "open" : ""}`} key={item.to}>
-              <button type="button" className={`sidebar-media-parent ${location.pathname.startsWith("/chamados") ? "active" : ""}`} onClick={() => setTicketsMenuOpen((value) => !value)} aria-expanded={ticketsMenuOpen}>
-                <item.icon />{item.label}<ChevronDown className="sidebar-media-chevron" />
-              </button>
-              <div className="sidebar-media-submenu">
-                {can("tickets.create") && <NavLink to="/chamados/novo" onClick={() => setMenu(false)}>Abrir chamado</NavLink>}
-                <NavLink to="/chamados" end onClick={() => setMenu(false)}>Em andamento</NavLink>
-                <NavLink to="/chamados/concluidos" onClick={() => setMenu(false)}>Concluídos</NavLink>
-              </div>
-            </div>
-          ) : item.to === "/midia" ? (
-            <div className={`sidebar-media-group ${mediaMenuOpen ? "open" : ""}`} key={item.to}>
-              <button type="button" className={`sidebar-media-parent ${location.pathname.startsWith("/midia") ? "active" : ""}`} onClick={() => setMediaMenuOpen((value) => !value)} aria-expanded={mediaMenuOpen}>
-                <item.icon />{item.label}<ChevronDown className="sidebar-media-chevron" />
-              </button>
-              <div className="sidebar-media-submenu">
-                <NavLink to="/midia/compilado" onClick={() => setMenu(false)}>Comparação</NavLink>
-                <NavLink to="/midia/gestao" onClick={() => setMenu(false)}>Gestão de mídia</NavLink>
-                <NavLink to="/midia/relatorios" onClick={() => setMenu(false)}>Relatórios</NavLink>
-                <NavLink to="/midia/historico" onClick={() => setMenu(false)}>Histórico</NavLink>
-              </div>
-            </div>
-          ) : (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.to === "/" || item.to === "/configuracoes"}
-              onClick={() => setMenu(false)}
-            >
-              <item.icon />
-              {item.label}
-            </NavLink>
-          ))}
+            );
+          })}
         </nav>
         <div className="sidebar-bottom">
           <div className="user-card">
@@ -761,6 +818,12 @@ function Shell({
           <Route path="/chamados" element={can("tickets.view")?<TicketsManagement key="tickets-open" view="open" user={user} />:<Navigate to={firstAccessiblePath} replace />} />
           <Route path="/chamados/terceiros" element={<Navigate to="/chamados?filtro=terceiros" replace />} />
           <Route path="/chamados/concluidos" element={can("tickets.view")?<TicketsManagement key="tickets-done" view="done" user={user} />:<Navigate to={firstAccessiblePath} replace />} />
+          <Route path="/chamados/ver/:id" element={can("tickets.view")?<TicketPage key="ticket-page" user={user} />:<Navigate to={firstAccessiblePath} replace />} />
+          <Route path="/chamados/meus" element={can("tickets.view")?<MyTicketsPage key="my-tickets-all" view="all" user={user} />:<Navigate to={firstAccessiblePath} replace />} />
+          <Route path="/chamados/meus/andamento" element={can("tickets.view")?<MyTicketsPage key="my-tickets-progress" view="progress" user={user} />:<Navigate to={firstAccessiblePath} replace />} />
+          <Route path="/chamados/meus/aprovacao" element={can("tickets.view")?<MyTicketsPage key="my-tickets-approval" view="approval" user={user} />:<Navigate to={firstAccessiblePath} replace />} />
+          <Route path="/chamados/meus/concluidos" element={can("tickets.view")?<MyTicketsPage key="my-tickets-done" view="done" user={user} />:<Navigate to={firstAccessiblePath} replace />} />
+          <Route path="/chamados/tipos" element={can("tickets.manage_flows")?<TicketTypes />:<Navigate to="/chamados" replace />} />
           <Route path="/chamados/novo" element={can("tickets.view")?<TicketForm key="ticket-new" user={user} />:<Navigate to={firstAccessiblePath} replace />} />
           <Route path="/chamados/editar/:id" element={can("tickets.view")?<TicketForm key="ticket-edit" user={user} />:<Navigate to={firstAccessiblePath} replace />} />
           <Route

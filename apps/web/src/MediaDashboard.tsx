@@ -1,3 +1,5 @@
+import "./CampaignIntelligenceBoard.css";
+import { landingPageGroups } from "./landingPages";
 import "./ClientAnalysisRefinements.css";
 import { MediaUserContext, mediaPreferenceKey, readMediaPreference } from "./mediaPreferences";
 import { requestMediaPeriod } from "./mediaPeriodRequest";
@@ -44,6 +46,7 @@ import {
   Users,
   WalletCards,
   X,
+  EyeOff,
 } from "lucide-react";
 import { NavLink } from "react-router-dom";
 import { SearchableSelect } from "./SearchableSelect";
@@ -396,6 +399,18 @@ const campaignAnalysisDue = (campaign: Campaign) => {
   const latest = [...(campaign.verificationHistory || [])].reverse().find((entry) => entry.action === "ANALYSIS" || entry.action === "REVIEW");
   return !latest || Date.now() - new Date(latest.createdAt).getTime() >= 7 * 86400000;
 };
+// Analisada no ciclo atual (7 dias): o botão "Analisar" fica verde como "Analisado".
+const lastAnalysisAt = (campaign: Campaign) =>
+  [...(campaign.verificationHistory || [])].reverse().find((entry) => entry.action === "ANALYSIS" || entry.action === "REVIEW")?.createdAt || campaign.verifiedAt || "";
+const recentlyAnalyzed = (campaign: Campaign) => !campaignAnalysisDue(campaign) || !verificationDue(campaign);
+const analyzedTitle = (campaign: Campaign) => {
+  const at = lastAnalysisAt(campaign);
+  return at ? `Analisado em ${new Date(at).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}. Clique para abrir de novo.` : "Analisado neste ciclo de 7 dias.";
+};
+function AnalyzeButton({ campaign, onClick, icon = false }: { campaign: Campaign; onClick: () => void; icon?: boolean }) {
+  const done = recentlyAnalyzed(campaign);
+  return <button type="button" className={`campaign-analyze ${done ? "analyzed" : ""}`} title={done ? analyzedTitle(campaign) : "Analisar esta campanha"} onClick={onClick}>{done ? <CheckCircle2 /> : icon ? <BarChart3 /> : null} {done ? "Analisado" : "Analisar"}</button>;
+}
 function PerformanceValue({ value, tone, detail }: { value: string; tone: PerformanceTone; detail?: string }) {
   return <span className={`performance-value ${tone}`} title={detail || toneLabel[tone]}><i />{value}</span>;
 }
@@ -696,7 +711,9 @@ function ClientCampaignGroup({
   canManage,
   periodDays,
   onAnalyze,
+  onHide,
 }: {
+  onHide?: (group: ClientGroup) => void;
   group: ClientGroup;
   initialOpen: boolean;
   clients: Client[];
@@ -774,22 +791,22 @@ function ClientCampaignGroup({
               if (window.getSelection()?.toString()) return;
               setOpen(value => !value);
             }}>
-              <td><div className="simple-client-name"><button type="button" className="simple-expand" aria-expanded={open} aria-label={`${open ? "Recolher" : "Expandir"} campanhas de ${name}`} onClick={() => setOpen(value => !value)}><ChevronDown/></button><span><b title={name}>{name}</b><small>{group.campaigns.length} campanhas · {total.currency}</small></span>{canManage && <button type="button" className="simple-edit assignment-edit-trigger" title="Editar cliente e responsável" aria-label={`Editar vínculo de ${name}`} onClick={editAssignment}><Settings2/> <span>Editar</span></button>}</div></td>
+              <td><div className="simple-client-name"><button type="button" className="simple-expand" aria-expanded={open} aria-label={`${open ? "Recolher" : "Expandir"} campanhas de ${name}`} onClick={() => setOpen(value => !value)}><ChevronDown/></button><span><b title={name}>{name}</b><small>{group.campaigns.length} campanhas · {total.currency}</small></span>{(canManage || onHide) && <span className="simple-client-actions">{canManage && <button type="button" className="simple-client-icon" title="Editar cliente e responsável" aria-label={`Editar vínculo de ${name}`} onClick={editAssignment}><Settings2/></button>}{onHide && <button type="button" className="simple-client-icon hide" title="Ocultar este cliente das listas e contagens" aria-label={`Ocultar ${name}`} onClick={() => onHide(group)}><EyeOff/></button>}</span>}</div></td>
               <td><span className="simple-campaign-type">{[...new Set(group.campaigns.map(item => campaignTypeLabel(item)))].join(" · ") || "—"}</span></td>
               <td><span className="simple-campaign-objective" title="Meta informa o objetivo de criação da campanha; o Google não expõe esse dado pela API, então mostramos o tipo de campanha.">{[...new Set(group.campaigns.map(campaignObjectiveLabel))].join(" · ") || "—"}</span></td>
               <td><span className="portfolio-network-list">{groupPlatforms.map(network => <span key={network} className="portfolio-network-icon" role="img" aria-label={network === "GOOGLE_ADS" ? "Google Ads" : "Meta Ads"} title={network === "GOOGLE_ADS" ? "Google Ads" : "Meta Ads"}>{network === "GOOGLE_ADS" ? <GoogleAdsLogo/> : <MetaLogo/>}</span>)}</span></td>
               <td><span className={`simple-status ${group.active ? "active" : "inactive"}`}>{group.active === group.campaigns.length ? "Ativa" : group.active > 0 ? "Misto" : "Inativa"}</span></td>
-              <td>{[...new Set(group.campaigns.map(item => item.landingPageUrl).filter((url): url is string => !!url))].map(url => {
-                const statuses = group.campaigns.filter(item => item.landingPageUrl === url).map(item => item.landingPageStatus);
-                const status = statuses.includes("INACTIVE") ? "INACTIVE" : statuses.every(value => value === "ACTIVE") ? "ACTIVE" : "UNKNOWN";
-                return <LandingPageIcon key={url} url={url} status={status}/>;
-              })}{!group.campaigns.some(item => item.landingPageUrl) && <LandingPageIcon/>}</td>
+              <td>{(() => { const pages = landingPageGroups(group.campaigns); return pages.length ? pages.map(page => <LandingPageIcon key={page.url} url={page.url} status={page.status}/>) : <LandingPageIcon/>; })()}</td>
               <td><span className="simple-value simple-money">{amount(total.dailyBudget)}</span></td><td><span className="simple-value simple-volume">{number(total.impressions)}</span></td><td><span className="simple-value simple-clicks">{number(total.clicks)}</span></td>
               <td><span className="simple-value simple-rate">{total.ctr == null ? "—" : `${number(total.ctr,2)}%`}</span></td><td><span className="simple-value simple-rate">{amount(total.cpc)}</span></td><td><span className="simple-value simple-rate">{number(total.leads)}</span></td>
               <td><span className="simple-value simple-money">{amount(total.spend)}</span></td><td><span className="simple-value simple-volume">{amount(total.remainingBudget)}</span></td>
               <td><ScoreGauge score={portfolioScore} label="Cliente" compact portfolioCampaigns={group.campaigns}/></td>
               <td><span className="simple-responsible" title={selectedResponsible?.name || "Não atribuído"}><ResponsibleAvatar user={selectedResponsible}/><span>{selectedResponsible?.name || "Não atribuído"}</span></span></td>
-              <td><button type="button" className="campaign-analyze" onClick={() => setClientAnalysisOpen(true)}>Analisar</button></td>
+              <td>{(() => {
+                // Cliente analisado quando todas as campanhas com entrega foram analisadas no ciclo.
+                const scope = group.campaigns.filter(hasDelivery).length ? group.campaigns.filter(hasDelivery) : group.campaigns, analyzed = scope.filter(recentlyAnalyzed).length, all = !!scope.length && analyzed === scope.length;
+                return <button type="button" className={`campaign-analyze ${all ? "analyzed" : analyzed ? "partial" : ""}`} title={all ? "Todas as campanhas deste cliente foram analisadas neste ciclo de 7 dias." : analyzed ? `${analyzed} de ${scope.length} campanhas analisadas neste ciclo.` : "Analisar este cliente"} onClick={() => setClientAnalysisOpen(true)}>{all && <CheckCircle2 />}{all ? "Analisado" : analyzed ? `Analisar ${analyzed}/${scope.length}` : "Analisar"}</button>;
+              })()}</td>
             </tr>;
           })}
           {open && (<>{group.campaigns.map(item => <Fragment key={`${item.platform}:${item.id}`}>
@@ -1333,6 +1350,29 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
       : "PORTFOLIOS",
   );
   const [reportClientSelection, setReportClientSelection] = useState(reportClientFromUrl);
+  // Contas ocultas no pedido de crédito (cliente pausado) saem de todas as listas de alerta.
+  // Mesma lista do pedido de crédito: ocultar aqui ou lá tira o cliente das listas e contagens.
+  const [creditHidden, setCreditHidden] = useState<Record<string, { hiddenAt: string; hiddenBy: string; client: string; accountName: string }>>({}),
+    [hiddenOpen, setHiddenOpen] = useState(false), [hideError, setHideError] = useState("");
+  const setAccountHidden = async (platform: string, accountId: string, hidden: boolean, names: { client?: string; accountName?: string } = {}) => {
+    const response = await fetch("/api/media/credit-hidden", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ platform, accountId, hidden, ...names }) }).catch(() => null);
+    const payload = response?.ok ? await response.json().catch(() => null) : null;
+    if (!payload?.key) { setHideError("Não foi possível atualizar os clientes ocultos. Tente de novo."); return; }
+    setHideError("");
+    setCreditHidden((current) => { const next = { ...current }; if (payload.hidden) next[payload.key] = payload.hidden; else delete next[payload.key]; return next; });
+  };
+  const hideGroup = async (group: ClientGroup) => {
+    const name = group.client?.name || accountLabel(group.account);
+    if (!await systemConfirm({ title: `Ocultar ${name}?`, message: "O cliente sai da Gestão de mídia, das contagens das campanhas, dos alertas e do pedido de crédito até alguém mostrar de novo em “Ocultos”. Use para clientes pausados.", confirmLabel: "Ocultar" })) return;
+    for (const account of group.accounts) await setAccountHidden(account.platform || group.platform, account.id, true, { client: name, accountName: account.name });
+  };
+  const isHiddenCampaign = (item: Campaign) => !!creditHidden[`${item.platform || "META_ADS"}:${item.accountId}`];
+  // Relatórios e histórico seguem completos; a operação (hoje, gestão) esconde os ocultos.
+  const hidesHidden = !["REPORTS", "HISTORY", "COMPILED"].includes(section);
+  useEffect(() => {
+    fetch("/api/media/credit-requests").then((response) => response.ok ? response.json() : null).then((payload) => { if (payload?.hidden) setCreditHidden(payload.hidden); }).catch(() => {});
+  }, [userId]);
+  const alertable = (item: Campaign) => !creditHidden[`${item.platform || "META_ADS"}:${item.accountId}`];
   const [reportIncludeThirtyDays, setReportIncludeThirtyDays] = useState(false);
   const [reportWindows, setReportWindows] = useState<{ primary: { since: string; until: string }; thirty?: { since: string; until: string } } | null>(null);
   const [automaticReportPreview, setAutomaticReportPreview] = useState<{ id: number; clientId: string; target: Window } | null>(null);
@@ -1710,12 +1750,13 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
               ? hasDelivery(item)
               : !hasDelivery(item))) &&
           (showBoosted || !isBoostedPost(item)) &&
+          !(hidesHidden && isHiddenCampaign(item)) &&
           `${item.client} ${item.name} ${portfolioId} ${item.accountId.replace(/^act_/, "")}`
             .toLowerCase()
             .includes(query.toLowerCase())
         );
       }),
-    [data, status, delivery, showBoosted, query, assignments, contextClient, contextResponsible],
+    [data, status, delivery, showBoosted, query, assignments, contextClient, contextResponsible, creditHidden, hidesHidden],
   );
   const groups = useMemo<ClientGroup[]>(() => {
     const accountsById = new Map(
@@ -1833,7 +1874,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
       overall.reachAvailable && overall.reach
         ? overall.impressions / overall.reach
         : null;
-  const previousFiltered = comparisonCampaigns.filter((item) => { const assignment = assignments.find((value) => value.platform === (item.platform || "META_ADS") && value.accountId === item.accountId); return (contextClient === "ALL" || assignment?.clientId === contextClient) && (contextResponsible === "ALL" || assignment?.responsibleId === contextResponsible) && matchesStatusFilter(item, status); }),
+  const previousFiltered = comparisonCampaigns.filter((item) => !(hidesHidden && isHiddenCampaign(item))).filter((item) => { const assignment = assignments.find((value) => value.platform === (item.platform || "META_ADS") && value.accountId === item.accountId); return (contextClient === "ALL" || assignment?.clientId === contextClient) && (contextResponsible === "ALL" || assignment?.responsibleId === contextResponsible) && matchesStatusFilter(item, status); }),
     previousOverall = previousFiltered.reduce(add, emptyTotals()),
     comparisonText = (current: number, previous: number, inverse = false) => { if (!previous) return "Sem base anterior"; const delta = (current - previous) / previous * 100 * (inverse ? -1 : 1); return `${delta > 0 ? "↑" : delta < 0 ? "↓" : "—"} ${number(Math.abs(delta), 1)}% vs. anterior`; };
   const allCampaigns = groups.flatMap((group) =>
@@ -1865,8 +1906,8 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
     const score = campaignScore(item), balance = item.remainingBudget == null ? null : Math.max(0, item.remainingBudget), group = groups.find((value) => value.accounts.some((account) => account.id === item.accountId));
     const issue = !campaignAnalysisDue(item) ? "" : item.status === "WITH_ISSUES" ? "Problema informado pela plataforma" : item.status === "ACTIVE" && item.spend > Math.max(item.dailyBudget * 2, 200) && item.leads + item.conversations === 0 ? "Investimento sem conversões" : item.status === "ACTIVE" && item.dailyBudget > 0 && balance != null && balance <= item.dailyBudget * 2 ? "Saldo para até dois dias" : score >= 0 && score < 70 ? `Score crítico: ${score}/100` : "Análise semanal pendente";
     return { ...item, score, balance, group, issue };
-  }).filter((item) => item.issue).sort((a, b) => (a.status === "WITH_ISSUES" ? 0 : a.score < 70 ? 1 : 2) - (b.status === "WITH_ISSUES" ? 0 : b.score < 70 ? 1 : 2));
-  const previousToday = previousFiltered.map((item) => { const score = campaignScore(item), balance = item.remainingBudget == null ? null : Math.max(0, item.remainingBudget), due = campaignAnalysisDue(item); return { critical: due && (item.status === "WITH_ISSUES" || score < 70), lowBalance: due && item.status === "ACTIVE" && item.dailyBudget > 0 && balance != null && balance <= item.dailyBudget * 2, pending: due }; });
+  }).filter((item) => item.issue && alertable(item)).sort((a, b) => (a.status === "WITH_ISSUES" ? 0 : a.score < 70 ? 1 : 2) - (b.status === "WITH_ISSUES" ? 0 : b.score < 70 ? 1 : 2));
+  const previousToday = previousFiltered.filter(alertable).map((item) => { const score = campaignScore(item), balance = item.remainingBudget == null ? null : Math.max(0, item.remainingBudget), due = campaignAnalysisDue(item); return { critical: due && (item.status === "WITH_ISSUES" || score < 70), lowBalance: due && item.status === "ACTIVE" && item.dailyBudget > 0 && balance != null && balance <= item.dailyBudget * 2, pending: due }; });
   const recordTodayAnalysis = (item: Campaign) => fetch("/api/media/campaigns/verification", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ platform: item.platform, accountId: item.accountId, campaignId: item.id, action: "ANALYSIS", score: campaignScore(item), spend: item.spend, leads: item.leads, cpl: item.cpl }) });
   const openCampaignAnalysis = (campaign: Campaign) => {
     const params = new URLSearchParams(window.location.search);
@@ -1875,9 +1916,9 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
     setManagementView("CAMPAIGNS");
   };
   const todayTotalPages = Math.max(1, Math.ceil(todayRows.length / 20)), todaySafePage = Math.min(todayPage, todayTotalPages), todayVisible = todayRows.slice((todaySafePage - 1) * 20, todaySafePage * 20);
-  const criticalCampaigns = allCampaigns.filter((item) => { const score = campaignScore(item); return hasDelivery(item) && (item.status === "WITH_ISSUES" || score < 70); }),
-    spendWithoutResults = allCampaigns.filter((item) => hasDelivery(item) && item.spend > Math.max(item.dailyBudget * 2, 200) && item.leads + item.conversations === 0),
-    lowBalanceCampaigns = allCampaigns.filter((item) => item.status === "ACTIVE" && item.dailyBudget > 0 && item.remainingBudget != null && item.remainingBudget <= item.dailyBudget * 2),
+  const alertCampaigns = allCampaigns.filter(alertable), criticalCampaigns = alertCampaigns.filter((item) => { const score = campaignScore(item); return hasDelivery(item) && (item.status === "WITH_ISSUES" || score < 70); }),
+    spendWithoutResults = alertCampaigns.filter((item) => hasDelivery(item) && item.spend > Math.max(item.dailyBudget * 2, 200) && item.leads + item.conversations === 0),
+    lowBalanceCampaigns = alertCampaigns.filter((item) => item.status === "ACTIVE" && item.dailyBudget > 0 && item.remainingBudget != null && item.remainingBudget <= item.dailyBudget * 2),
     unassignedPortfolios = groups.filter((group) => !group.responsible).length;
   const accountsTotalPages = Math.max(1, Math.ceil(groups.length / 20)), accountsSafePage = Math.min(accountsPage, accountsTotalPages), visibleGroups = groups.slice((accountsSafePage - 1) * 20, accountsSafePage * 20);
   return (
@@ -2160,8 +2201,18 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
                   />
                 </label>
                 <CampaignFilterControls status={status} statuses={statuses} onStatusChange={setStatus} delivery={delivery} onDeliveryChange={setDelivery} showBoosted={showBoosted} onShowBoostedChange={setShowBoosted} />
+                <button type="button" className="media-hidden-toggle" onClick={() => setHiddenOpen(true)} title="Clientes ocultos das listas e contagens"><EyeOff />Ocultos{Object.keys(creditHidden).length ? ` (${Object.keys(creditHidden).length})` : ""}</button>
               </div>
             </section>
+            {hideError && <p className="media-hidden-error" role="alert">{hideError}</p>}
+            {hiddenOpen && createPortal(<div className="ci-hidden-backdrop" onMouseDown={(event) => event.target === event.currentTarget && setHiddenOpen(false)}><div className="ci-hidden-dialog" role="dialog" aria-label="Clientes ocultos">
+              <header><EyeOff /><div><b>Clientes ocultos</b><small>Não aparecem na gestão, nas contagens, nos alertas nem no pedido de crédito. Mostre de novo quando o cliente voltar.</small></div><button type="button" onClick={() => setHiddenOpen(false)} aria-label="Fechar"><X /></button></header>
+              {Object.keys(creditHidden).length ? <ul>{Object.entries(creditHidden).sort((a, b) => (a[1].client || "").localeCompare(b[1].client || "", "pt-BR")).map(([key, item]) => <li key={key}>
+                <span className="portfolio-network-icon">{key.startsWith("GOOGLE_ADS") ? <GoogleAdsLogo /> : <MetaLogo />}</span>
+                <div><b>{item.client || item.accountName || key}</b><small>{item.accountName && item.accountName !== item.client ? `${item.accountName} · ` : ""}ocultado por {item.hiddenBy || "—"} em {new Date(item.hiddenAt).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</small></div>
+                <button type="button" onClick={() => { const [platformKey, ...id] = key.split(":"); void setAccountHidden(platformKey, id.join(":"), false); }}>Mostrar</button>
+              </li>)}</ul> : <p className="ci-hidden-empty">Nenhum cliente oculto.</p>}
+            </div></div>, document.body)}
             {loading && !data ? (
               <div className="media-table-placeholder" aria-hidden="true">{Array.from({ length: 5 }, (_, row) => <div key={row}><i/>{Array.from({ length: 7 }, (_, column) => <span key={column}/>)}</div>)}</div>
             ) : groups.length === 0 ? (
@@ -2185,6 +2236,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
                     canManage={canManageAssignments}
                     periodDays={periodDays}
                     onAnalyze={openCampaignAnalysis}
+                    onHide={(value) => void hideGroup(value)}
                   />
                 ))}
               </section>
@@ -2323,8 +2375,7 @@ function PortfolioReviews({ group, name, periodDays, onReviewed }: { group: Clie
     items.set(id, item);
   }));
   const timeline = [...items.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
-    ready = comment.trim().length >= campaignReviewCommentMinLength,
-    sum = (values: Array<number | undefined>) => values.reduce<number>((total, value) => total + (value || 0), 0);
+    ready = comment.trim().length >= campaignReviewCommentMinLength;
   const submit = async () => {
     if (!ready || saving) return;
     setSaving(true); setNotice("");
@@ -2355,14 +2406,10 @@ function PortfolioReviews({ group, name, periodDays, onReviewed }: { group: Clie
     </div>
     <h3>Histórico de revisões{timeline.length ? ` (${timeline.length})` : ""}</h3>
     {loading && !timeline.length ? <p className="portfolio-review-empty">Carregando histórico…</p> : error ? <p className="portfolio-review-empty" role="alert">{error}</p> : !timeline.length ? <p className="portfolio-review-empty">Nenhuma revisão comentada neste portfólio ainda.</p> : timeline.map((item) => {
-      const currency = item.rows[0]?.currency || group.account.currency, spend = sum(item.rows.map((entry) => entry.spend)), leads = sum(item.rows.map((entry) => entry.leads)),
-        impressions = sum(item.rows.map((entry) => entry.snapshot?.impressions)), clicks = sum(item.rows.map((entry) => entry.snapshot?.clicks)),
-        scores = item.rows.flatMap((entry) => entry.score != null && entry.score >= 0 && (entry.snapshot?.status || "ACTIVE") === "ACTIVE" ? [entry.score] : []);
       return <article className="portfolio-review-entry" key={item.id}>
         <header><b>{item.portfolio ? "Revisão do portfólio" : item.rows[0].name}</b>{!item.portfolio && !item.rows[0].listed && <em>Fora da lista atual</em>}<small>{item.userName} · {new Date(item.createdAt).toLocaleString("pt-BR")}{item.periodDays ? ` · Período de ${item.periodDays} dias` : ""}</small></header>
         <blockquote className={item.comment ? "" : "empty"}>{item.comment || "Revisão registrada antes da obrigatoriedade de comentário."}</blockquote>
-        {item.portfolio && <dl><div><dt>Campanhas</dt><dd>{item.rows.length}</dd></div><div><dt>Investimento</dt><dd>{money(spend, currency)}</dd></div><div><dt>Conversões</dt><dd>{number(leads)}</dd></div><div><dt>CPL</dt><dd>{leads > 0 ? money(spend / leads, currency) : "—"}</dd></div><div><dt>Impressões</dt><dd>{number(impressions)}</dd></div><div><dt>Cliques</dt><dd>{number(clicks)}</dd></div><div><dt>CTR</dt><dd>{impressions > 0 ? `${number(clicks / impressions * 100, 2)}%` : "—"}</dd></div><div><dt>Score médio</dt><dd>{scores.length ? Math.round(sum(scores) / scores.length) : "—"}</dd></div></dl>}
-        <details><summary>{item.portfolio ? `Dados por campanha (${item.rows.length})` : "Dados da campanha nesta revisão"}</summary><div className="portfolio-review-data"><table><thead><tr><th>Campanha</th><th>Score</th><th>Investimento</th><th>Conversões</th><th>CPL</th><th>Impressões</th><th>Cliques</th><th>CTR</th></tr></thead><tbody>{item.rows.map((entry) => <tr key={entry.key}>
+        <details><summary>{item.portfolio ? `Ver números desta revisão (${item.rows.length} ${item.rows.length === 1 ? "campanha" : "campanhas"})` : "Ver números desta revisão"}</summary><div className="portfolio-review-data"><table><thead><tr><th>Campanha</th><th>Score</th><th>Investimento</th><th>Conversões</th><th>CPL</th><th>Impressões</th><th>Cliques</th><th>CTR</th></tr></thead><tbody>{item.rows.map((entry) => <tr key={entry.key}>
           <td>{entry.name}{!entry.listed && <em>Fora da lista atual</em>}</td>
           <td>{entry.score != null && entry.score >= 0 ? entry.score : "—"}</td>
           <td>{entry.spend != null ? money(entry.spend, entry.currency) : "—"}</td>
@@ -2581,7 +2628,7 @@ function ComparisonClientRows({ group, previousCampaigns, previousAvailable, sea
     if (!total) return null;
     const networks = [...new Set(items.map(item=>item.platform || "META_ADS"))];
     const active = items.filter(item=>item.status === "ACTIVE").length;
-    const urls = [...new Set(items.map(item=>item.landingPageUrl).filter((url): url is string => !!url))];
+    const pages = landingPageGroups(items);
     const metric = (key: "dailyBudget"|"impressions"|"clicks"|"ctr"|"cpc"|"leads"|"spend"|"remainingBudget", format: (value:number)=>string, tone:string, inverse=false) => <td><span className={`simple-value ${tone}`}><CompiledMetric current={total[key]} previous={previousAvailable && old ? old[key] : null} format={format} inverse={inverse} neutralTrend={key === "spend" || key === "dailyBudget" || key === "remainingBudget"}/></span></td>;
     return <tr className={campaign ? "simple-campaign-row" : "simple-client-row"} key={campaign ? `${campaign.platform}:${campaign.id}` : currency} onClick={event=>{if(!campaign && !(event.target as HTMLElement).closest('button,a,[role="button"]') && !window.getSelection()?.toString())setOpen(value=>!value)}}>
       <td>{campaign ? <span className="simple-child-name"><span>↳</span><b>{campaign.name}</b></span> : <div className="simple-client-name"><button type="button" className="simple-expand" aria-expanded={open} aria-label={`Campanhas de ${name}`} onClick={()=>setOpen(value=>!value)}><ChevronDown/></button><span><b>{name}</b><small>{items.length} campanhas · {currency}</small></span></div>}</td>
@@ -2589,11 +2636,11 @@ function ComparisonClientRows({ group, previousCampaigns, previousAvailable, sea
       <td><span className="simple-campaign-objective">{[...new Set(items.map(campaignObjectiveLabel))].join(" · ")}</span></td>
       <td><span className="portfolio-network-list">{networks.map(network=><span key={network} className="portfolio-network-icon" role="img" aria-label={network === "GOOGLE_ADS" ? "Google Ads" : "Meta Ads"}>{network === "GOOGLE_ADS" ? <GoogleAdsLogo/> : <MetaLogo/>}</span>)}</span></td>
       <td><span className={`simple-status ${active ? "active" : "inactive"}`}>{active===items.length ? "Ativa" : active ? "Misto" : "Inativa"}</span></td>
-      <td>{urls.length ? urls.map(url=><LandingPageIcon key={url} url={url} status={items.some(item=>item.landingPageUrl===url && item.landingPageStatus==="INACTIVE") ? "INACTIVE" : items.filter(item=>item.landingPageUrl===url).every(item=>item.landingPageStatus==="ACTIVE") ? "ACTIVE" : "UNKNOWN"}/>) : <LandingPageIcon/>}</td>
+      <td>{pages.length ? pages.map(page=><LandingPageIcon key={page.url} url={page.url} status={page.status}/>) : <LandingPageIcon/>}</td>
       {metric("dailyBudget",value=>money(value,currency),"simple-money")}{metric("impressions",number,"simple-volume")}{metric("clicks",number,"simple-clicks")}{metric("ctr",value=>`${number(value,2)}%`,"simple-rate")}{metric("cpc",value=>money(value,currency),"simple-rate",true)}{metric("leads",number,"simple-rate")}{metric("spend",value=>money(value,currency),"simple-money")}{metric("remainingBudget",value=>money(value,currency),"simple-volume")}
       <td><CompiledMetric current={averageScore(items, !campaign)} previous={old ? averageScore(oldItems, !campaign) : null} format={value=>`${number(value)} / 100`}/></td>
       <td><span className="simple-responsible"><ResponsibleAvatar user={group.responsible}/><span>{group.responsible?.name || "Não atribuído"}</span></span></td>
-      <td><button type="button" className="campaign-analyze" onClick={()=>campaign ? onAnalyze(campaign) : setOpen(value=>!value)}>{campaign ? "Analisar" : open ? "Recolher" : "Comparar"}</button></td>
+      <td>{campaign ? <AnalyzeButton campaign={campaign} onClick={()=>onAnalyze(campaign)} /> : <button type="button" className="campaign-analyze" onClick={()=>setOpen(value=>!value)}>{open ? "Recolher" : "Comparar"}</button>}</td>
     </tr>;
   };
   return <article className={`simple-client-table ${open ? "open" : ""}`}><div className="simple-table-scroll"><table><SimpleTableHead /><tbody>{[...new Set(current.map(item=>item.currency))].map(currency=>renderRow(current.filter(item=>item.currency===currency),previous.filter(item=>item.currency===currency),currency))}{open && campaignRows.map(item=>{const old=previousById.get(`${item.platform}:${item.accountId}:${item.id}`);return renderRow([item],old && old.currency===item.currency ? [old] : [],item.currency,item)})}</tbody></table></div></article>;
@@ -3160,7 +3207,7 @@ function CampaignReport({
                     <ScoreGauge score={item.score} label="Campanha" compact campaign={item} />
                   </td>
                   <td><span className={`campaign-review-state ${verificationDue(item) ? "pending" : "current"}`}>{verificationDue(item) ? <Clock3 /> : <CheckCircle2 />}<span><b>{verificationDue(item) ? "Pendente" : "Em dia"}</b><small>{verificationDue(item) ? item.verifiedAt ? "Revisar novamente" : "Nunca revisada" : `até ${new Date(new Date(item.verifiedAt!).getTime() + 7 * 86400000).toLocaleDateString("pt-BR")}`}</small></span></span></td>
-                  <td><div className="campaign-row-actions"><button type="button" className="campaign-analyze" onClick={() => analyzeCampaign(item, campaignKey)}><BarChart3 /> Analisar</button>{verificationDue(item) && <button type="button" className={`campaign-review ${item.score >= 0 && item.score < 70 ? "urgent" : ""}`} title="Abrir a campanha e realizar a revisão pendente" onClick={() => analyzeCampaign(item, campaignKey)}><CheckCircle2 /><span>Verificar</span></button>}</div></td>
+                  <td><div className="campaign-row-actions"><AnalyzeButton campaign={item} icon onClick={() => analyzeCampaign(item, campaignKey)} />{verificationDue(item) && <button type="button" className={`campaign-review ${item.score >= 0 && item.score < 70 ? "urgent" : ""}`} title="Abrir a campanha e realizar a revisão pendente" onClick={() => analyzeCampaign(item, campaignKey)}><CheckCircle2 /><span>Verificar</span></button>}</div></td>
                 </tr>
               );
             })}

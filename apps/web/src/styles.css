@@ -616,3 +616,67 @@ html[data-theme="dark"] .executive-board .board-kpi>b,html[data-theme="dark"] .e
 .calendar-item.crm{border-left-color:#0f9d8a!important;border-left-style:dotted!important;background:color-mix(in srgb,#0f9d8a 12%,var(--surface))!important;cursor:pointer}
 .calendar-item.crm:hover{filter:brightness(.97);box-shadow:0 2px 8px #102a4318}
 .crm-dot{background:#0f9d8a}
+
+/* Agenda: excluir evento ou tarefa no modal */
+.calendar-delete{display:inline-flex;align-items:center;gap:5px;margin-right:auto;color:var(--red)!important}
+.calendar-delete svg{width:14px}
+
+/* Master: correção do e-mail de login do usuário */
+.user-access-email{display:flex;flex-direction:column;gap:5px;margin-bottom:14px}
+.user-access-email label{display:flex;flex-direction:column;gap:6px;font-weight:700}
+.user-access-email small{color:var(--subtle)}
+.user-access-error{margin:10px 0 0}
+
+/* Agenda: cada pessoa na sua cor (inclusive eventos do Google, tarefas, chamados e CRM) */
+.calendar-workspace .calendar-item,.calendar-workspace .calendar-item.google,.calendar-workspace .calendar-item.ticket,.calendar-workspace .calendar-item.crm,.calendar-workspace .calendar-item.meeting,.calendar-workspace .calendar-item.unavailable{border-left-color:var(--owner-color)!important;background:color-mix(in srgb,var(--owner-color) 14%,var(--surface))!important}
+.calendar-workspace .calendar-item>span svg{color:var(--owner-color)!important}
+.calendar-color-swatch{cursor:pointer;transition:transform .12s}
+.calendar-color-swatch:hover{transform:scale(1.15)}
+.calendar-color-swatch:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.calendar-color-backdrop{position:fixed;inset:0;z-index:1500}
+.calendar-color-popover{position:fixed;width:220px;padding:12px;border:1px solid var(--border);border-radius:12px;background:var(--surface);box-shadow:0 14px 40px #10213330;display:flex;flex-direction:column;gap:9px}
+.calendar-color-popover b{color:var(--heading);font-size:11px}
+.calendar-color-popover>div{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
+.calendar-color-popover>div button,.calendar-event-colors div button{display:grid;place-items:center;width:24px;height:24px;padding:0;border:2px solid transparent;border-radius:50%;color:#fff;cursor:pointer}
+.calendar-color-popover>div button.active,.calendar-event-colors div button.active{border-color:var(--surface);box-shadow:0 0 0 2px var(--heading)}
+.calendar-color-popover svg,.calendar-event-colors svg{width:13px;height:13px}
+.calendar-color-reset{align-self:flex-start;padding:0;border:0;background:none;color:var(--accent);font-size:10px;font-weight:700;cursor:pointer}
+.calendar-color-popover small{color:var(--subtle);font-size:9px}
+.calendar-event-colors{display:flex;flex-direction:column;gap:6px}
+.calendar-event-colors>span{color:var(--heading);font-size:9px;font-weight:700}
+.calendar-event-colors>div{display:flex;flex-wrap:wrap;gap:7px}
+.calendar-event-colors .agenda-default{outline:1px dashed var(--subtle);outline-offset:2px}
+.calendar-event-colors small{color:var(--subtle);font-size:9px}
+
+/* Cor oficial de cada pessoa (Diretoria) na Performance da equipe */
+.executive-board .team-performance-row>span,html[data-theme="light"] .executive-board .team-performance-row>span{background:var(--member-color,#e8f0f7)!important;color:#fff!important;font-weight:700}
+.executive-board .team-performance-row>i span{background:var(--member-color,#29be6b)!important}
+.executive-board .team-performance-row em{color:var(--member-color,#5bd58d)!important}
+
+/* Equipe & acesso: cor oficial de cada pessoa (escolhida pela Diretoria) */
+.access-user-name{display:flex;align-items:center;gap:7px}
+.access-color-wrap{position:relative;display:inline-flex}
+.access-color-dot{width:13px;height:13px;padding:0;border:2px solid var(--surface);border-radius:50%;box-shadow:0 0 0 1px var(--border);cursor:pointer}
+.access-color-dot:disabled{cursor:default}
+.access-color-popover{position:absolute;top:20px;left:-6px;z-index:40;display:grid;grid-template-columns:repeat(6,22px);gap:6px;padding:9px;border:1px solid var(--border);border-radius:10px;background:var(--surface);box-shadow:0 12px 32px #10213330}
+.access-color-popover button{width:22px;height:22px;padding:0;border:2px solid transparent;border-radius:50%;cursor:pointer}
+.access-color-popover button.active{border-color:var(--surface);box-shadow:0 0 0 2px var(--heading)}
+.access-color-popover .access-color-reset{grid-column:1/-1;width:auto;height:auto;border:0;background:none;color:var(--accent);font-size:10px;font-weight:700}
+
+/* Creative Ops: demandas que vêm de etapas de chamado */
+.ticket-link-notice{display:flex;align-items:center;gap:12px;margin:16px 21px 0;padding:12px 14px;border:1px solid color-mix(in srgb,#1d6fe0 30%,var(--border));border-radius:10px;background:color-mix(in srgb,#1d6fe0 7%,var(--surface));color:var(--heading)}
+.ticket-link-notice>svg{width:20px;flex:none;color:#1d6fe0}
+.ticket-link-notice>div{display:flex;flex-direction:column;gap:2px;flex:1;min-width:0}
+.ticket-link-notice b{font-size:13px}
+.ticket-link-notice span{color:var(--text);font-size:11px;line-height:1.45}
+.ticket-link-notice button{display:inline-flex;align-items:center;gap:6px;flex:none;height:32px;padding:0 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:#1d5fc4;font:inherit;font-size:11px;font-weight:700;cursor:pointer}
+.ticket-link-notice button svg{width:13px}
+.work-ticket-chip{display:inline-flex;align-items:center;gap:4px;margin-left:6px;padding:1px 7px;border-radius:6px;background:color-mix(in srgb,#1d6fe0 12%,var(--surface));color:#1d5fc4;font-size:10px;font-style:normal;font-weight:700;white-space:nowrap}
+.work-ticket-chip svg{width:11px}
+html[data-theme="dark"] .work-ticket-chip,html[data-theme="dark"] .ticket-link-notice button{color:#8cb8ff}
+.creative-error{position:fixed;top:18px;left:50%;z-index:1200;transform:translateX(-50%);width:min(620px,calc(100vw - 32px));box-shadow:0 14px 34px #0b1a2b2e;display:flex;align-items:center;gap:10px;margin:0;padding:10px 14px;border:1px solid color-mix(in srgb,#dc2626 30%,var(--border));border-radius:10px;background:color-mix(in srgb,#dc2626 7%,var(--surface));color:#b42318;font-size:12px}
+.creative-error>svg{width:17px;flex:none}
+.creative-error span{flex:1}
+.creative-error button{display:grid;place-items:center;width:26px;height:26px;border:0;border-radius:6px;background:none;color:inherit;cursor:pointer}
+.creative-error button svg{width:14px}
+html[data-theme="dark"] .creative-error{color:#ff9b9b}

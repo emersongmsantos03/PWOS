@@ -47,3 +47,5 @@
 .ci-hidden-dialog li>button:hover{background:#dfeaff}
 .ci-hidden-dialog li>button svg{width:13px}
 .ci-hidden-dialog>p{margin:0;padding:22px 0;color:#7a8aa0;font-size:12px;text-align:center}
+.ci-credit-last{display:block;color:var(--subtle,#7789a2);font-size:8px;line-height:1.2;text-align:center;white-space:nowrap}@media(min-width:1381px){.ci-credit-last{font-size:9px}}
+.ci-credit-status.requested.stale{border-color:#f3b4a8;background-color:#fff1ee;color:#b4401f}

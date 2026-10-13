@@ -13,6 +13,7 @@ import {
   Globe2,
   Image as ImageIcon,
   Inbox,
+  Link2,
   Instagram,
   List,
   MessageSquare,
@@ -116,6 +117,10 @@ type Task = {
   }[];
   createdAt: string;
   updatedAt?: string;
+  // Demanda criada por uma etapa de chamado: o andamento segue o chamado.
+  ticketId?: string;
+  ticketStepId?: string;
+  ticketCode?: string;
 };
 type User = { id: string; name: string };
 type Client = { id: string; name: string };
@@ -410,13 +415,17 @@ export function TasksManagement({
     await load();
     setSelected(data.task);
   };
+  const [patchError, setPatchError] = useState("");
   const patch = async (task: Task, input: Record<string, unknown>) => {
     const response = await fetch(`/api/tasks/${task.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(input),
     });
-    if (response.ok) await load();
+    if (response.ok) { setPatchError(""); await load(); return; }
+    const payload = await response.json().catch(() => ({}));
+    setPatchError(payload.message || "Não foi possível atualizar a demanda.");
+    await load();
   };
   const clientName = (task: Task) =>
     clients.find((client) => client.id === task.clientId)?.name || "Interno";
@@ -445,6 +454,15 @@ export function TasksManagement({
           )}
         </div>
       </header>
+      {patchError && (
+        <div className="creative-error" role="alert">
+          <AlertCircle />
+          <span>{patchError}</span>
+          <button type="button" onClick={() => setPatchError("")} aria-label="Fechar aviso">
+            <X />
+          </button>
+        </div>
+      )}
       <nav className="creative-tabs">
         <button
           className={view === "MY" ? "active" : ""}
@@ -681,11 +699,14 @@ export function TasksManagement({
             onPatch={(input) => patch(selected, input)}
             onReload={load}
           />
-          <TaskReviewFlow
-            task={selected}
-            currentUserId={sessionId}
-            onReload={load}
-          />
+          {/* Demanda de chamado: a aprovação é a do próprio chamado (aprovação interna e do cliente). */}
+          {!selected.ticketId && (
+            <TaskReviewFlow
+              task={selected}
+              currentUserId={sessionId}
+              onReload={load}
+            />
+          )}
         </>
       )}
     </div>
@@ -749,6 +770,7 @@ function TaskDetailAccess({
             <X />
           </button>
         </header>
+        {task.ticketId && <TicketLinkNotice task={task} />}
         <div className="viewer-notice">
           <CheckCircle2 />
           <div>
@@ -1226,6 +1248,7 @@ function WorkGroup({
   onOpen: (task: Task) => void;
   onPatch: (task: Task, input: Record<string, unknown>) => void;
 }) {
+  const navigate = useNavigate();
   return (
     <section className={`work-group ${tone}`}>
       <header>
@@ -1261,13 +1284,15 @@ function WorkGroup({
                 className={`work-check ${doneStatuses.includes(task.status) ? "done" : ""} ${isTerminal ? "locked" : ""}`}
                 onClick={(event) => {
                   event.stopPropagation();
+                  // Demanda de chamado: a entrega é feita na página do chamado.
+                  if (task.ticketId) return void navigate(`/chamados/ver/${encodeURIComponent(task.ticketId)}`);
                   if (!isTerminal)
                     void onPatch(task, {
                       status: task.status === "DONE" ? "TODO" : "DONE",
                     });
                 }}
                 aria-label={
-                  isTerminal ? "Status definido pelo fluxo" : "Concluir"
+                  task.ticketId ? `Abrir o chamado ${task.ticketCode || ""} para entregar` : isTerminal ? "Status definido pelo fluxo" : "Concluir"
                 }
               >
                 {doneStatuses.includes(task.status) && <Check />}
@@ -1280,6 +1305,7 @@ function WorkGroup({
                 <small>
                   {clientName(task)}
                   <i /> {meta?.label || "Outro"}
+                  {task.ticketId && <em className="work-ticket-chip"><Link2 />Chamado {task.ticketCode}</em>}
                 </small>
               </div>
               <div className="work-people">
@@ -1474,6 +1500,26 @@ function QuickCreate({
   );
 }
 
+// Aviso da demanda que veio de um chamado: o andamento e a entrega são feitos no chamado.
+function TicketLinkNotice({ task }: { task: Task }) {
+  const navigate = useNavigate();
+  return (
+    <div className="ticket-link-notice">
+      <Link2 />
+      <div>
+        <b>Demanda do chamado {task.ticketCode}</b>
+        <span>
+          O status acompanha a etapa do chamado: mover para “Em andamento” inicia o cronômetro e
+          “Em revisão” finaliza a etapa. A entrega para a próxima etapa é feita no chamado.
+        </span>
+      </div>
+      <button type="button" onClick={() => navigate(`/chamados/ver/${encodeURIComponent(task.ticketId || "")}`)}>
+        Abrir chamado <ExternalLink />
+      </button>
+    </div>
+  );
+}
+
 function TaskDetail({
   task,
   clientName,
@@ -1547,6 +1593,7 @@ function TaskDetail({
             <X />
           </button>
         </header>
+        {task.ticketId && <TicketLinkNotice task={task} />}
         <div className="detail-properties">
           <label>
             Status

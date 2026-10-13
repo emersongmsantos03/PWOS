@@ -2,19 +2,22 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import { NavLink, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import {
   AlertTriangle, Building2, Check, CheckCircle2, ChevronRight, Clock3, Download, Edit3, FileText,
-  Hourglass, Home, KanbanSquare, List, MessageSquare, MessagesSquare, Paperclip, Plus, Quote, RotateCcw, Search, Send, Settings2, Trash2, Undo2, UserRound, X, XCircle,
+  Hourglass, Home, KanbanSquare, List, MessageSquare, MessagesSquare, Paperclip, Plus, Quote, RotateCcw, Search, Send, Settings2, Trash2, Undo2, UserRound, Workflow, X, XCircle,
 } from "lucide-react";
 import { systemConfirm } from "./SystemDialog";
 import { SearchableSelect } from "./SearchableSelect";
 import { avatarTone, initials } from "./meetingsModel";
 import { canReturnStep, pendingAdjustment, stepRoleLabels, type TicketFlow, type TicketStep } from "./ticketFlows";
+import type { TicketChecklistItem } from "./ticketWork";
+import { isMarketingUser } from "./marketingTickets";
 import "./Meetings.css";
 import "./Tickets.css";
 
 export type TicketUser = { id: string; name: string; email: string; avatarDataUrl?: string; departmentName?: string };
 export type Department = { id: string; name: string; description: string; active: boolean; managerUserId?: string; managerName?: string };
-type Comment = { id: string; authorId: string; authorName: string; message: string; mentions: string[]; createdAt: string; kind?: "SYSTEM"; action?: "RETURN"; note?: string };
-export type TicketAttachment = { id: string; name: string; contentType: string; sizeBytes: number; uploadedById: string; uploadedByName: string; createdAt: string };
+export type TicketComment = { id: string; authorId: string; authorName: string; message: string; mentions: string[]; createdAt: string; kind?: "SYSTEM"; action?: "RETURN"; note?: string; stepId?: string; delivery?: boolean };
+type Comment = TicketComment;
+export type TicketAttachment = { id: string; name: string; contentType: string; sizeBytes: number; uploadedById: string; uploadedByName: string; createdAt: string; stepId?: string };
 export type TicketOriginType = "INTERNAL" | "MEETING" | "WHATSAPP" | "EMAIL" | "PHONE";
 export type Ticket = {
   id: string; code: string; title: string; description: string; departmentId: string;
@@ -25,14 +28,15 @@ export type Ticket = {
   clientId?: string; clientName?: string; unit?: string;
   origin?: { type: TicketOriginType; meetingId?: string; label: string };
   flowId?: string; flowName?: string; steps?: TicketStep[]; notes?: string; attachments?: TicketAttachment[];
+  checklist?: TicketChecklistItem[]; projectValue?: number;
 };
 export type TicketsData = {
   tickets: Ticket[]; departments: Department[]; availableUsers: TicketUser[]; flows: TicketFlow[];
-  clients: { id: string; name: string }[];
+  clients: { id: string; name: string; contactName?: string; contactEmail?: string; contactPhone?: string }[];
   meetings: { id: string; clientId: string; subject: string; startAt: string; unit: string }[];
-  canViewAll: boolean; canCreate: boolean; canEdit: boolean; canDelete: boolean; canComment: boolean; canAssign: boolean; canManageDepartments: boolean;
+  canViewAll: boolean; canCreate: boolean; canEdit: boolean; canDelete: boolean; canComment: boolean; canAssign: boolean; canManageDepartments: boolean; canManageFlows?: boolean;
 };
-export type SessionUser = { id: string; name: string; avatarDataUrl?: string; departmentId?: string };
+export type SessionUser = { id: string; name: string; avatarDataUrl?: string; departmentId?: string; departmentName?: string };
 export type TicketsView = "open" | "done";
 
 export const statusMeta = {
@@ -65,8 +69,8 @@ export async function ticketApi<T>(path: string, init?: { method?: string; json?
   return payload as T;
 }
 
-export async function uploadTicketFile(ticketId: string, file: File) {
-  const response = await fetch(`/api/tickets/${ticketId}/attachments`, { method: "POST", headers: { "Content-Type": file.type || "application/octet-stream", "X-File-Name": encodeURIComponent(file.name) }, body: file });
+export async function uploadTicketFile(ticketId: string, file: File, stepId?: string) {
+  const response = await fetch(`/api/tickets/${ticketId}/attachments`, { method: "POST", headers: { "Content-Type": file.type || "application/octet-stream", "X-File-Name": encodeURIComponent(file.name), ...(stepId ? { "X-Ticket-Step": stepId } : {}) }, body: file });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(`${file.name}: ${payload.message || "falha no envio"}`);
   return payload.ticket as Ticket;
@@ -132,8 +136,11 @@ export function TicketsManagement({ user, view }: { user: SessionUser; view: Tic
   const [search, setSearch] = useState(""), [clientFilter, setClientFilter] = useState(""), [priorityFilter, setPriorityFilter] = useState(""),
     [scope, setScope] = useState<"ALL" | "WITH_ME" | "REQUESTED" | "OTHERS" | "LATE">(() => params.get("filtro") === "terceiros" ? "OTHERS" : "ALL"), [layout, setLayout] = useState<"LIST" | "KANBAN">("LIST"),
     [manageDepartments, setManageDepartments] = useState(false);
-  const selected = data?.tickets.find((ticket) => ticket.id === params.get("ticket")) || null;
-  const select = (ticket: Ticket | null) => setParams(ticket ? { ticket: ticket.id } : {}, { replace: !ticket });
+  // Marketing e Criação trabalha na página completa do chamado (cronômetro, entregas, checklist).
+  const fullPage = isMarketingUser(user);
+  useEffect(() => { const id = params.get("ticket"); if (fullPage && id) navigate(`/chamados/ver/${encodeURIComponent(id)}`, { replace: true }); }, [fullPage, params, navigate]);
+  const selected = fullPage ? null : data?.tickets.find((ticket) => ticket.id === params.get("ticket")) || null;
+  const select = (ticket: Ticket | null) => fullPage && ticket ? navigate(`/chamados/ver/${encodeURIComponent(ticket.id)}`) : setParams(ticket ? { ticket: ticket.id } : {}, { replace: !ticket });
   const inView = useCallback((ticket: Ticket) => view === "done" ? !isOpen(ticket) : isOpen(ticket), [view]);
   const visible = useMemo(() => (data?.tickets || []).filter((ticket) => inView(ticket)
     && (!clientFilter || ticket.clientId === clientFilter)
@@ -154,6 +161,7 @@ export function TicketsManagement({ user, view }: { user: SessionUser; view: Tic
 
   return <div className="mt-page tk-page">
     <TicketHeader icon={MessagesSquare} crumb={meta.crumb} title={meta.title} subtitle={meta.subtitle} actions={<>
+      {data.canManageFlows && <NavLink className="mt-button outline" to="/chamados/tipos"><Workflow />Tipos de chamado</NavLink>}
       {data.canManageDepartments && <button type="button" className="mt-button outline" onClick={() => setManageDepartments(true)}><Settings2 />Setores</button>}
       {data.canCreate && <NavLink className="mt-button tk-cta" to="/chamados/novo"><Plus />Abrir chamado</NavLink>}
     </>} />
@@ -271,6 +279,15 @@ function TicketDetails({ ticket, data, currentUser, onClose, onEdit, onChange, o
           </div>}
           {!canMove && <p className="tk-now-hint">Somente {step.assigneeName} pode concluir esta etapa.</p>}
         </section>}
+        {!steps.length && isOpen(ticket) && <section className="tk-now executor">
+          <div className="tk-now-head">
+            <PersonAvatar name={ticket.assigneeName || "Responsável"} src={users.find((user) => user.id === ticket.assigneeId)?.avatarDataUrl} />
+            <div><small>Chamado sem etapas</small><b>Atendimento</b><span>Com {ticket.assigneeId === currentUser.id ? "você" : ticket.assigneeName || "responsável não definido"} · prazo {dateTime(ticket.dueAt)}</span></div>
+          </div>
+          {ticket.assigneeId === currentUser.id || data.canEdit
+            ? <div className="tk-now-actions"><button type="button" className="mt-button tk-cta" disabled={busy} onClick={() => void flow("COMPLETE")}><Check />Concluir chamado</button><p>O chamado vai para Concluídos.</p></div>
+            : <p className="tk-now-hint">Somente {ticket.assigneeName || "o responsável"} pode concluir este chamado.</p>}
+        </section>}
         {error && <p className="mt-alert" role="alert">{error}</p>}
         <section className="tk-facts">
           <div><small>Cliente</small><b>{ticket.clientName || "Interno"}{ticket.unit ? ` · ${ticket.unit}` : ""}</b></div>
@@ -374,4 +391,3 @@ function DepartmentManager({ departments, onClose, onChange }: { departments: De
     </section>
   </div>;
 }
-

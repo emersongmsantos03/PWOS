@@ -157,7 +157,7 @@ export function TicketForm({ user }: { user: SessionUser }) {
               <datalist id="tk-units">{units.map((unit) => <option key={unit} value={unit} />)}</datalist>
             </label>
             <label className="span-4">Origem <em>*</em><SearchableSelect value={form.origin} onChange={chooseOrigin} searchPlaceholder="Buscar reunião…" options={originOptions} /></label>
-            <label className={`span-4 tk-flow-select ${invalid("flowId")}`}>Tipo de solicitação <em>*</em>
+            <label className={`span-4 tk-flow-select ${invalid("flowId")}`}><span className="tk-flow-label">Tipo de solicitação <em>*</em>{data.canManageFlows && !editing && <NavLink to="/chamados/tipos" className="tk-flow-manage">Gerenciar tipos</NavLink>}</span>
               <SearchableSelect value={editing?.flowId || form.flowId} onChange={chooseFlow} disabled={!!editing} placeholder="Selecione o tipo" searchable={false} options={data.flows.map((item) => ({ value: item.id, label: item.name, description: `${item.steps.length} ${item.steps.length === 1 ? "etapa" : "etapas"}` }))} /></label>
             <label className="span-4">Prioridade <em>*</em><SearchableSelect value={form.priority} onChange={(value) => set("priority", value as Ticket["priority"])} searchable={false} options={Object.entries(priorityMeta).map(([value, item]) => ({ value, label: item.label }))} /></label>
             <label className={`span-12 ${invalid("title")}`}>Nome do chamado <em>*</em><input value={form.title} maxLength={150} placeholder={flow && client ? `${flow.name} - ${client.name}` : "Ex.: Landing page institucional - Cliente"} onChange={(event) => set("title", event.target.value)} /><small>{form.title.length}/150</small></label>

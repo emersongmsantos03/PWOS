@@ -47,3 +47,54 @@ html[data-theme="dark"] .client-details.client-details-wide{border-color:var(--b
 .client-cnpj-status button{display:inline-flex;align-items:center;gap:4px;padding:0;border:0;background:none;color:#2c67bf;font:inherit;font-weight:700;cursor:pointer}
 html[data-theme="dark"] .client-cnpj-status.ok{color:#4cc88b}
 html[data-theme="dark"] .client-cnpj-status.warn{color:#ff7b7b}
+
+/* Projetos do cliente: card clicável e editor com entregas */
+.client-record-list .client-project-card{display:flex;align-items:center;gap:11px;width:100%;padding:12px;border:1px solid var(--border);border-radius:11px;background:var(--surface);color:inherit;font:inherit;text-align:left;cursor:pointer;transition:border-color .15s,box-shadow .15s}
+.client-record-list .client-project-card:hover{border-color:#aacce7;box-shadow:0 4px 14px #142c4312}
+.client-project-card>div{display:flex;flex:1;flex-direction:column;gap:3px;min-width:0}
+.client-project-card b{display:flex;flex-wrap:wrap;align-items:center;gap:7px;color:var(--heading)}
+.client-project-card span:not(.record-icon){color:var(--subtle);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.client-project-card small{color:var(--subtle);font-size:9px}
+.client-project-card>strong{color:var(--heading)}
+.project-status{padding:3px 7px;border-radius:6px;background:#eef2f6;color:#536b82;font-size:8px;font-style:normal;font-weight:700}
+.project-status.active{background:#e9f3fd;color:#2c67bf}
+.project-status.completed{background:#e5f5ed;color:#1d7753}
+.project-status.paused{background:#fff5e0;color:#a26a05}
+.project-status.cancelled,.project-status.late{background:#fdecec;color:#c1534c}
+.client-project-editor fieldset{display:flex;flex-direction:column;gap:12px;margin:0;padding:0;border:0;min-width:0}
+.client-project-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.client-project-tasks{display:flex;flex-direction:column;gap:6px;padding:12px;border:1px solid var(--border);border-radius:10px;background:var(--app-bg)}
+.client-project-tasks>b{display:flex;justify-content:space-between;color:var(--heading);font-size:11px}
+.client-project-tasks>b small{color:var(--subtle);font-weight:600}
+.client-project-tasks>div{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.client-project-tasks>div.done span{color:var(--subtle);text-decoration:line-through}
+.client-project-tasks .inline-check{font-weight:500;gap:8px}
+.client-project-tasks>div>button{border:0;background:none;color:var(--subtle);cursor:pointer}
+.client-project-tasks>div>button svg{width:14px}
+.client-project-tasks .client-project-task-add{margin-top:4px}
+.client-project-task-add input{flex:1;min-width:0}
+.client-project-task-add button{display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+.client-project-task-add button svg{width:14px}
+.client-project-editor input[type=range]{min-height:0;padding:0}
+.client-project-hint{color:var(--subtle);font-size:9px;font-weight:500}
+.client-project-editor footer .danger{margin-right:auto;color:var(--red)}
+.client-project-editor footer button{display:inline-flex;align-items:center;gap:5px}
+.client-project-editor footer svg{width:14px}
+@media(max-width:520px){.client-project-grid{grid-template-columns:1fr}}
+
+/* Endereço do cliente: CEP + rua na primeira linha, demais campos abaixo */
+.client-address-grid .client-address-street{grid-column:span 2}
+@media(max-width:760px){.client-address-grid .client-address-street{grid-column:auto}}
+.client-details.client-details-wide>main dl>.client-address-detail{grid-column:1/-1}
+.client-address-detail a{display:inline-flex;align-items:center;gap:5px}
+.client-address-detail a svg{width:13px;flex:0 0 auto}
+
+/* Contatos da Receita Federal sugeridos no cadastro do cliente */
+.client-receita-contacts{display:flex;flex-direction:column;gap:6px;padding:12px;border:1px solid var(--border);border-radius:10px;background:var(--app-bg)}
+.client-receita-contacts>b{color:var(--heading);font-size:11px}
+.client-receita-contacts>small{color:var(--subtle);font-size:10px;font-weight:500}
+.client-receita-contacts>div{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:6px}
+.client-receita-contacts .inline-check{display:flex;flex-direction:row;align-items:center;gap:8px;padding:8px;border:1px solid var(--border);border-radius:8px;background:var(--surface);font-weight:500}
+.client-receita-contacts .inline-check input{width:16px;height:16px;min-height:0}
+.client-receita-contacts .inline-check span{display:flex;flex-direction:column;min-width:0}
+.client-receita-contacts .inline-check small{color:var(--subtle);font-size:9px}

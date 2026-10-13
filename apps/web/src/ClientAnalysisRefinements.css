@@ -75,3 +75,10 @@
 .portfolio-review-entry>dl{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:0 0 12px;padding:12px;border:1px solid var(--border);border-radius:10px}
 .portfolio-review-entry>dl div{min-width:0}.portfolio-review-entry dt{font-size:11px;color:var(--subtle)}.portfolio-review-entry dd{margin:3px 0 0;font-size:14px;font-weight:650;color:var(--heading)}
 @media(max-width:640px){.portfolio-review-entry>dl{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+/* Histórico de revisões enxuto: só os comentários, um embaixo do outro; números recolhidos */
+.portfolio-review-entry{padding:10px 0}
+.portfolio-review-entry>blockquote{margin:6px 0}
+.portfolio-review-entry>details{margin-top:2px}
+.portfolio-review-entry>details>summary{font-size:11px;color:var(--subtle);cursor:pointer}
+.portfolio-review-entry>details[open]>summary{color:var(--accent)}

@@ -1,3 +1,4 @@
+import { systemConfirm } from "./SystemDialog";
 import {
   useEffect,
   useMemo,
@@ -20,10 +21,13 @@ import {
   Plus,
   Users,
   X,
+  Trash2,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { SearchableSelect } from "./SearchableSelect";
 import { DateTimePicker } from "./DateTimePicker";
+import { eventColorHex, googleEventColors } from "./calendarColors";
+import { defaultUserColor, teamPalette } from "./userColors";
 
 type CalendarEvent = {
   id: string;
@@ -44,6 +48,7 @@ type CalendarEvent = {
   source?: "GOOGLE";
   googleHtmlLink?: string;
   googleSyncError?: string;
+  colorId?: string;
   meetUrl?: string;
 };
 type Task = {
@@ -59,7 +64,7 @@ type Task = {
   clientId?: string;
   opportunityId?: string;
 };
-type User = { id: string; name: string };
+type User = { id: string; name: string; profile?: string; color?: string };
 type Client = { id: string; name: string };
 type Opportunity = {
   id: string;
@@ -86,6 +91,7 @@ type CalendarItem = {
   location?: string;
   category: string;
   editable: boolean;
+  color: string;
 };
 
 const pad = (value: number) => String(value).padStart(2, "0");
@@ -104,23 +110,8 @@ const addDays = (date: Date, days: number) =>
 const sameDay = (a: Date, b: Date) => a.toDateString() === b.toDateString();
 const weekStart = (date: Date) =>
   addDays(startOfDay(date), -((date.getDay() + 6) % 7));
-const calendarColors = [
-  "#2563eb",
-  "#7c3aed",
-  "#db2777",
-  "#ea580c",
-  "#0891b2",
-  "#16a34a",
-  "#ca8a04",
-  "#dc2626",
-  "#4f46e5",
-  "#0d9488",
-];
-const ownerColor = (ownerId: string) =>
-  calendarColors[
-    [...ownerId].reduce((sum, char) => sum + char.charCodeAt(0), 0) %
-      calendarColors.length
-  ];
+const calendarColors = teamPalette;
+const ownerColor = defaultUserColor;
 const initialCalendarDate = () => {
   const value = new URLSearchParams(window.location.search).get("date"),
     date = value ? new Date(value) : new Date();
@@ -138,6 +129,28 @@ export function CalendarManagement() {
   const [currentUserId, setCurrentUserId] = useState("");
   const [canViewTeam, setCanViewTeam] = useState(false);
   const [canEditAllEvents, setCanEditAllEvents] = useState(false);
+  // Cor escolhida por quem está vendo para cada agenda; sem escolha, vale a cor padrão.
+  const [agendaColors, setAgendaColors] = useState<Record<string, string>>({});
+  const [colorPicker, setColorPicker] = useState<{ ownerId: string; top: number; left: number } | null>(null);
+  // Ordem: cor que esta pessoa escolheu só para si → cor oficial da equipe (Diretoria) → padrão.
+  const [canManageColors, setCanManageColors] = useState(false);
+  const colorFor = (ownerId: string) => agendaColors[ownerId] || users.find((user) => user.id === ownerId)?.color || ownerColor(ownerId);
+  const chooseTeamColor = async (ownerId: string, color: string) => {
+    setColorPicker(null);
+    const response = await fetch(`/api/users/${ownerId}/color`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ color }) }).catch(() => null);
+    if (!response?.ok) return setError("Não foi possível salvar a cor da equipe.");
+    setUsers((current) => current.map((user) => user.id === ownerId ? { ...user, color: color || undefined } : user));
+    // A cor da equipe passa a valer também na visão de quem escolheu.
+    if (agendaColors[ownerId]) void chooseAgendaColor(ownerId, "");
+  };
+  const chooseAgendaColor = async (ownerId: string, color: string) => {
+    setColorPicker(null);
+    setAgendaColors((current) => { const next = { ...current }; if (color) next[ownerId] = color; else delete next[ownerId]; return next; });
+    const response = await fetch("/api/calendar/colors", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ownerId, color }) }).catch(() => null);
+    const payload = response?.ok ? await response.json().catch(() => null) : null;
+    if (payload?.calendarColors) setAgendaColors(payload.calendarColors);
+    else setError("Não foi possível salvar a cor da agenda.");
+  };
   const [google, setGoogle] = useState<{ connected: boolean; error: string }>({ connected: false, error: "" });
   const [canEditAllTasks, setCanEditAllTasks] = useState(false);
   const [ownerIds, setOwnerIds] = useState<string[]>([]);
@@ -188,18 +201,24 @@ export function CalendarManagement() {
       setCanViewTeam(!!eventData.canViewTeam);
       setCanEditAllEvents(!!eventData.canEditAll);
       setGoogle(eventData.google || { connected: false, error: "" });
+      setAgendaColors(eventData.calendarColors || {});
     }
     if (taskResponse.ok) {
       setTasks(taskData.tasks || []);
       setCanEditAllTasks(!!taskData.canEditAll);
     }
-    if (userResponse.ok) setUsers(userData.users || []);
+    // Clientes externos não têm agenda na equipe.
+    const teamUsers: User[] = userResponse.ok ? (userData.users || []).filter((user: User) => user.profile !== "CLIENT") : [];
+    if (userResponse.ok) setUsers(teamUsers);
     if (clientResponse.ok) setClients(clientData.clients || []);
     if (opportunityResponse.ok)
       setOpportunities(opportunityData.opportunities || []);
     if (sessionResponse.ok) {
       setCurrentUserId(sessionData.user.id);
-      setOwnerIds((value) => (value.length ? value : [sessionData.user.id]));
+      setCanManageColors(sessionData.user.profile === "MASTER" || !!sessionData.user.permissions?.includes("users.manage_colors"));
+      // Quem vê a agenda da equipe (Diretoria, gestão) abre com todas as agendas sobrepostas.
+      const allOwners = eventResponse.ok && eventData.canViewTeam && teamUsers.length ? teamUsers.map((user) => user.id) : [sessionData.user.id];
+      setOwnerIds((value) => (value.length ? value : allOwners));
     }
   };
   useEffect(() => {
@@ -225,6 +244,8 @@ export function CalendarManagement() {
         end: new Date(event.endAt),
         location: event.location,
         category: event.category,
+        // Cor própria do evento (como no Google Agenda) ou a cor da agenda do dono.
+        color: eventColorHex(event.colorId) || colorFor(event.ownerId),
         // Eventos do Google Agenda são editados pelo próprio dono; a alteração volta para o Google.
         editable: event.source === "GOOGLE" ? event.ownerId === currentUserId && google.connected : event.ownerId === currentUserId || canEditAllEvents,
       }));
@@ -246,6 +267,7 @@ export function CalendarManagement() {
           start,
           end: new Date(start.getTime() + 30 * 60_000),
           category: `TASK_${task.priority}`,
+          color: colorFor(task.responsibleId),
           editable: task.responsibleId === currentUserId || canEditAllTasks,
         };
       });
@@ -262,6 +284,7 @@ export function CalendarManagement() {
           start,
           end: new Date(start.getTime() + 30 * 60_000),
           category: `TICKET_${ticket.priority}`,
+          color: colorFor(ticket.assigneeId),
           editable: false,
         };
       });
@@ -279,6 +302,7 @@ export function CalendarManagement() {
           start,
           end: new Date(start.getTime() + 30 * 60_000),
           category: "CRM",
+          color: colorFor(item.responsibleId!),
           editable: false,
         };
       });
@@ -295,6 +319,8 @@ export function CalendarManagement() {
     canEditAllEvents,
     canEditAllTasks,
     google.connected,
+    agendaColors,
+    users,
   ]);
 
   const days = useMemo(() => {
@@ -333,6 +359,18 @@ export function CalendarManagement() {
     if (!item.editable) {
       // Eventos criados direto no Google Agenda são abertos lá.
       const googleEvent = item.kind === "event" ? events.find((event) => event.id === item.id && event.source === "GOOGLE") : undefined;
+      // Evento do Google de um colega: o link do Google só abre para quem foi convidado,
+      // então os dados são mostrados aqui mesmo.
+      if (googleEvent && googleEvent.ownerId !== currentUserId) {
+        const when = `${new Date(googleEvent.startAt).toLocaleString("pt-BR", { weekday: "short", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })} às ${new Date(googleEvent.endAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`;
+        void systemConfirm({
+          title: googleEvent.title,
+          message: [`Google Agenda de ${googleEvent.ownerName}`, when, googleEvent.location, googleEvent.description].filter(Boolean).join("\n"),
+          confirmLabel: "Abrir no Google",
+          cancelLabel: "Fechar",
+        }).then((open) => { if (open && googleEvent.googleHtmlLink) window.open(googleEvent.googleHtmlLink, "_blank", "noopener"); });
+        return;
+      }
       if (googleEvent?.googleHtmlLink) {
         window.open(googleEvent.googleHtmlLink, "_blank", "noopener");
         return;
@@ -434,6 +472,27 @@ export function CalendarManagement() {
     setEditing(null);
     await load();
     setSaving(false);
+  };
+  const remove = async () => {
+    if (!editing) return;
+    const isEvent = createType === "EVENT", label = isEvent ? "evento" : "tarefa";
+    if (!await systemConfirm({
+      title: `Excluir ${isEvent ? "este evento" : "esta tarefa"}?`,
+      message: isEvent
+        ? `“${editing.title}” sai da agenda${(editing as CalendarEvent).googleHtmlLink ? " e do Google Agenda (os convidados são avisados)" : ""}. Se for o compromisso de uma reunião agendada, a reunião é cancelada.`
+        : `“${editing.title}” será arquivada e sai da agenda.`,
+      confirmLabel: `Excluir ${label}`,
+      tone: "danger",
+    })) return;
+    setSaving(true);
+    setError("");
+    const response = await fetch(`${isEvent ? "/api/calendar/events" : "/api/tasks"}/${editing.id}`, { method: "DELETE" });
+    const data = await response.json().catch(() => ({}));
+    setSaving(false);
+    if (!response.ok) return setError(data.message || `Não foi possível excluir ${isEvent ? "o evento" : "a tarefa"}.`);
+    setCreating(false);
+    setEditing(null);
+    await load();
   };
 
   const title =
@@ -550,14 +609,23 @@ export function CalendarManagement() {
               <div>
                 {users.map((user) => {
                   const selected = ownerIds.includes(user.id),
-                    color = ownerColor(user.id);
+                    color = colorFor(user.id);
                   return (
                     <button
                       className={selected ? "selected" : ""}
                       onClick={() => toggleOwner(user.id)}
                       key={user.id}
                     >
-                      <i style={{ background: color }}>
+                      <i
+                        style={{ background: color, "--owner-color": color } as React.CSSProperties}
+                        role="button"
+                        tabIndex={0}
+                        className="calendar-color-swatch"
+                        title="Mudar a cor desta agenda"
+                        aria-label={`Mudar a cor da agenda de ${user.name}`}
+                        onClick={(event) => { event.stopPropagation(); const box = event.currentTarget.getBoundingClientRect(); setColorPicker((current) => current?.ownerId === user.id ? null : { ownerId: user.id, top: box.bottom + 6, left: box.left }); }}
+                        onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); event.stopPropagation(); (event.currentTarget as HTMLElement).click(); } }}
+                      >
                         {selected ? <Check /> : null}
                       </i>
                       <span>
@@ -605,7 +673,7 @@ export function CalendarManagement() {
                 {visibleOwners.slice(0, 4).map((user) => (
                   <span
                     className="calendar-owner-avatar"
-                    style={{ background: ownerColor(user.id) }}
+                    style={{ background: colorFor(user.id) }}
                     key={user.id}
                   >
                     {user.name
@@ -677,7 +745,23 @@ export function CalendarManagement() {
             setEditing(null);
           }}
           onSubmit={save}
+          onDelete={editing ? () => void remove() : undefined}
+          agendaColor={colorFor(editing && "ownerId" in editing ? editing.ownerId : currentUserId)}
         />
+      )}
+      {colorPicker && (
+        <div className="calendar-color-backdrop" onMouseDown={() => setColorPicker(null)}>
+          <div className="calendar-color-popover" role="dialog" aria-label="Cor da agenda" style={{ top: Math.min(colorPicker.top, window.innerHeight - 190), left: Math.min(colorPicker.left, window.innerWidth - 236) }} onMouseDown={(event) => event.stopPropagation()}>
+            <b>Cor da agenda</b>
+            <div>{[...new Set([...calendarColors, ...googleEventColors.map((color) => color.hex)])].map((hex) => (
+              <button type="button" key={hex} style={{ background: hex }} className={colorFor(colorPicker.ownerId) === hex ? "active" : ""} aria-label={`Usar a cor ${hex}`} onClick={() => void (canManageColors ? chooseTeamColor : chooseAgendaColor)(colorPicker.ownerId, hex)}>{colorFor(colorPicker.ownerId) === hex && <Check />}</button>
+            ))}</div>
+            {canManageColors
+              ? users.find((user) => user.id === colorPicker.ownerId)?.color && <button type="button" className="calendar-color-reset" onClick={() => void chooseTeamColor(colorPicker.ownerId, "")}>Voltar à cor padrão</button>
+              : agendaColors[colorPicker.ownerId] && <button type="button" className="calendar-color-reset" onClick={() => void chooseAgendaColor(colorPicker.ownerId, "")}>Voltar à cor da equipe</button>}
+            <small>{canManageColors ? "Cor da pessoa para toda a equipe: agenda, painéis e listas." : "Só muda na sua visão, como no Google Agenda."}</small>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -694,7 +778,7 @@ function ItemCard({
   onOpen: (item: CalendarItem) => void;
   durationHours?: number;
 }) {
-  const color = ownerColor(item.ownerId);
+  const color = item.color;
   return (
     <article
       draggable={item.editable}
@@ -910,6 +994,8 @@ function CreateModal({
   item,
   onClose,
   onSubmit,
+  onDelete,
+  agendaColor,
 }: {
   type: CreateType;
   setType: (type: CreateType) => void;
@@ -924,6 +1010,8 @@ function CreateModal({
   item: CalendarEvent | Task | null;
   onClose: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onDelete?: () => void;
+  agendaColor: string;
 }) {
   const eventItem = type === "EVENT" ? (item as CalendarEvent | null) : null;
   const taskItem = type === "TASK" ? (item as Task | null) : null;
@@ -932,6 +1020,7 @@ function CreateModal({
     ? new Date(eventItem.endAt)
     : new Date(start.getTime() + 60 * 60_000);
   const [participantSearch, setParticipantSearch] = useState("");
+  const [colorId, setColorId] = useState(eventItem?.colorId || "");
   const [participantIds, setParticipantIds] = useState<string[]>(eventItem?.participantIds || []);
   const [clientId, setClientId] = useState(eventItem?.clientId || taskItem?.clientId || "");
   const [category,setCategory]=useState(eventItem?.category || "WORK");
@@ -1005,6 +1094,15 @@ function CreateModal({
                   <option value="PERSONAL">Pessoal</option>
                 </select>
               </label>
+              <div className="full calendar-event-colors">
+                <span>Cor do evento</span>
+                <input type="hidden" name="colorId" value={colorId} />
+                <div role="radiogroup" aria-label="Cor do evento">
+                  <button type="button" role="radio" aria-checked={!colorId} className={`agenda-default ${!colorId ? "active" : ""}`} style={{ background: agendaColor }} title="Cor da agenda" onClick={() => setColorId("")}>{!colorId && <Check />}</button>
+                  {googleEventColors.map((color) => <button type="button" role="radio" aria-checked={colorId === color.id} key={color.id} className={colorId === color.id ? "active" : ""} style={{ background: color.hex }} title={color.name} aria-label={color.name} onClick={() => setColorId(color.id)}>{colorId === color.id && <Check />}</button>)}
+                </div>
+                <small>{colorId ? `${googleEventColors.find((color) => color.id === colorId)?.name} · também no Google Agenda` : "Cor da agenda"}</small>
+              </div>
               <label>
                 Local ou link
                 <div className="input-with-icon">
@@ -1201,6 +1299,7 @@ function CreateModal({
           </label>
           {error && <div className="form-error full">{error}</div>}
           <footer>
+            {onDelete && <button type="button" className="secondary danger calendar-delete" disabled={saving} onClick={onDelete}><Trash2 />Excluir</button>}
             <button type="button" className="secondary" onClick={onClose}>
               Cancelar
             </button>

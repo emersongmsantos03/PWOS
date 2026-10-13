@@ -28,7 +28,7 @@ import {
   Users,
   X,
 } from "lucide-react";
-import { isValidDocument, maskDocument, maskPhone } from "./inputMasks";
+import { isValidDocument, maskDocument, maskPhone, maskPostalCode } from "./inputMasks";
 import { SearchableSelect } from "./SearchableSelect";
 import { systemConfirm } from "./SystemDialog";
 import "./ClientConnections.css";
@@ -49,11 +49,21 @@ type Client = {
   owner: string;
   ownerId?: string;
   notes: string;
+  address?: ClientAddress;
   createdAt: string;
   updatedAt: string;
 };
+type ClientAddress = { postalCode: string; street: string; number: string; complement: string; neighborhood: string; city: string; state: string };
+// "Rua X, 123 - Sala 2 · Centro · Jaraguá do Sul/SC · 89251-000"
+const formatAddress = (address?: ClientAddress) => {
+  if (!address) return "";
+  const street = [address.street, address.number].filter(Boolean).join(", ") + (address.complement ? ` - ${address.complement}` : "");
+  return [street, address.neighborhood, [address.city, address.state].filter(Boolean).join("/"), address.postalCode].filter(Boolean).join(" · ");
+};
+const brazilianStates = ["AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS", "MG", "PA", "PB", "PR", "PE", "PI", "RJ", "RN", "RS", "RO", "RR", "SC", "SP", "SE", "TO"];
 type TeamMember = { id: string; name: string; departmentName: string };
-type CnpjData = { legalName: string; tradeName: string; segment: string; email: string; phone: string; status: string; openedAt: string; address: string };
+type CnpjData = { legalName: string; tradeName: string; segment: string; email: string; phone: string; status: string; openedAt: string; address: string; addressParts?: ClientAddress; phone2?: string; partners?: { name: string; role: string }[] };
+type ReceitaContact = { key: string; name: string; role: string; phone: string };
 type Contact = {
   id: string;
   name: string;
@@ -76,15 +86,35 @@ type Service = {
   startDate: string;
   managerUserId: string;
 };
+type ProjectStatus = "PLANNED" | "ACTIVE" | "PAUSED" | "COMPLETED" | "CANCELLED";
+type ProjectTask = { id: string; title: string; status: "OPEN" | "DONE" };
 type Project = {
   id: string;
   name: string;
   objective?: string;
-  status: string;
+  status: ProjectStatus;
   progress?: number;
+  responsibleId?: string;
   startDate?: string;
   dueDate?: string;
+  tasks?: ProjectTask[];
+  createdAt?: string;
+  updatedAt?: string;
 };
+type ProjectUser = { id: string; name: string };
+const projectStatusLabels: Record<ProjectStatus, string> = {
+  PLANNED: "Planejado",
+  ACTIVE: "Em andamento",
+  PAUSED: "Pausado",
+  COMPLETED: "Concluído",
+  CANCELLED: "Cancelado",
+};
+const projectDate = (value?: string) =>
+  value ? new Date(`${value}T12:00`).toLocaleDateString("pt-BR") : "";
+const projectLate = (item: Project) =>
+  !!item.dueDate &&
+  ["PLANNED", "ACTIVE", "PAUSED"].includes(item.status) &&
+  item.dueDate < new Date().toISOString().slice(0, 10);
 type TimelineEvent = {
   id: string;
   description: string;
@@ -450,6 +480,7 @@ function ClientForm({
   const [ownerId, setOwnerId] = useState(() => client?.ownerId || team.find((member) => member.name === client?.owner)?.id || "");
   const [lookup, setLookup] = useState<{ state: "idle" | "loading" | "done" | "error"; message?: string; data?: CnpjData }>({ state: "idle" });
   const legacyOwner = !ownerId && client?.owner ? client.owner : "";
+  const [receitaContacts, setReceitaContacts] = useState<ReceitaContact[]>([]), [pickedContacts, setPickedContacts] = useState<string[]>([]);
   // Busca o CNPJ na Receita e preenche só os campos ainda vazios, sem apagar o que foi digitado.
   const lookupCnpj = async (masked: string, force = false) => {
     const digits = masked.replace(/\D/g, "");
@@ -468,14 +499,53 @@ function ClientForm({
       fill("name", data.tradeName || data.legalName);
       fill("legalName", data.legalName);
       fill("segment", data.segment);
+      // O sócio-administrador vira o contato principal; os demais sócios e o segundo telefone
+      // aparecem para escolher quais entram em Contatos.
+      const primaryField = form?.elements.namedItem("primaryContactName") as HTMLInputElement | null;
+      const primaryName = primaryField?.value.trim() || data.partners?.[0]?.name || "";
+      fill("primaryContactName", data.partners?.[0]?.name || "");
       fill("primaryContactEmail", data.email);
       fill("primaryContactPhone", maskPhone(data.phone));
-      if (data.address) fill("notes", `Endereço (Receita Federal): ${data.address}`);
+      const candidates: ReceitaContact[] = [
+        ...(data.partners || []).filter((partner) => partner.name.toLowerCase() !== primaryName.toLowerCase()).map((partner) => ({ key: `p:${partner.name}`, name: partner.name, role: partner.role || "Sócio", phone: "" })),
+        ...(data.phone2 ? [{ key: "phone2", name: `${data.tradeName || data.legalName} (telefone 2)`, role: "Telefone da empresa (Receita)", phone: data.phone2 }] : []),
+      ];
+      setReceitaContacts(candidates);
+      setPickedContacts(candidates.map((item) => item.key));
+      const parts = data.addressParts;
+      if (parts) {
+        fill("addressPostalCode", parts.postalCode); fill("addressStreet", parts.street); fill("addressNumber", parts.number);
+        fill("addressComplement", parts.complement); fill("addressNeighborhood", parts.neighborhood); fill("addressCity", parts.city); fill("addressState", parts.state);
+      }
       setLookup({ state: "done", data });
     } catch {
       setLookup({ state: "error", message: "Não foi possível consultar o CNPJ agora. Preencha manualmente." });
     }
   };
+  // CEP completo: busca rua, bairro, cidade e UF e preenche só o que ainda está vazio.
+  const [postalLookup, setPostalLookup] = useState<{ state: "idle" | "loading" | "done" | "error"; message?: string }>({ state: "idle" }), lastPostal = useRef("");
+  const lookupPostalCode = async (masked: string) => {
+    const digits = masked.replace(/\D/g, "");
+    if (digits.length !== 8 || lastPostal.current === digits) return;
+    lastPostal.current = digits;
+    setPostalLookup({ state: "loading" });
+    try {
+      const response = await fetch(`/api/clients/cep/${digits}`);
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) return setPostalLookup({ state: "error", message: payload.message || "CEP não encontrado." });
+      const form = formRef.current;
+      const fill = (name: string, value: string) => {
+        const field = form?.elements.namedItem(name) as HTMLInputElement | HTMLSelectElement | null;
+        if (field && value && !field.value.trim()) field.value = value;
+      };
+      fill("addressStreet", payload.street); fill("addressNeighborhood", payload.neighborhood); fill("addressCity", payload.city); fill("addressState", payload.state);
+      setPostalLookup({ state: "done" });
+      (form?.elements.namedItem(payload.street ? "addressNumber" : "addressStreet") as HTMLInputElement | null)?.focus();
+    } catch {
+      setPostalLookup({ state: "error", message: "Não foi possível consultar o CEP agora. Preencha manualmente." });
+    }
+  };
+  const address = client?.address;
   return (
     <div className="modal-backdrop">
       <section className="client-form-modal" role="dialog" aria-modal="true">
@@ -574,6 +644,58 @@ function ClientForm({
           </div>
           <div className="client-form-section">
             <div className="client-form-section-title">
+              <b>Endereço</b>
+              <span>Digite o CEP para preencher rua, bairro e cidade</span>
+            </div>
+            <div className="client-form-grid client-address-grid">
+              <label>
+                CEP
+                <input
+                  name="addressPostalCode"
+                  defaultValue={address?.postalCode}
+                  inputMode="numeric"
+                  autoComplete="postal-code"
+                  placeholder="00000-000"
+                  onInput={(event) => {
+                    event.currentTarget.value = maskPostalCode(event.currentTarget.value);
+                    void lookupPostalCode(event.currentTarget.value);
+                  }}
+                />
+                {postalLookup.state === "loading" ? <small className="client-cnpj-status"><Loader2 className="spin" />Buscando o CEP…</small>
+                  : postalLookup.state === "error" ? <small className="client-cnpj-status warn"><AlertTriangle />{postalLookup.message}</small>
+                  : postalLookup.state === "done" ? <small className="client-cnpj-status ok"><Check />Endereço encontrado. Confira o número.</small> : null}
+              </label>
+              <label className="client-address-street">
+                Rua / Avenida
+                <input name="addressStreet" defaultValue={address?.street} autoComplete="address-line1" placeholder="Ex.: Rua Walter Marquardt" />
+              </label>
+              <label>
+                Número
+                <input name="addressNumber" defaultValue={address?.number} placeholder="Ex.: 1250" />
+              </label>
+              <label>
+                Complemento
+                <input name="addressComplement" defaultValue={address?.complement} autoComplete="address-line2" placeholder="Sala, loja, bloco…" />
+              </label>
+              <label>
+                Bairro
+                <input name="addressNeighborhood" defaultValue={address?.neighborhood} placeholder="Bairro" />
+              </label>
+              <label>
+                Cidade
+                <input name="addressCity" defaultValue={address?.city} autoComplete="address-level2" placeholder="Cidade" />
+              </label>
+              <label>
+                UF
+                <select name="addressState" defaultValue={address?.state || ""}>
+                  <option value="">—</option>
+                  {brazilianStates.map((state) => <option key={state} value={state}>{state}</option>)}
+                </select>
+              </label>
+            </div>
+          </div>
+          <div className="client-form-section">
+            <div className="client-form-section-title">
               <b>Contato e atendimento</b>
               <span>
                 Quem devemos procurar e quem é responsável internamente
@@ -623,6 +745,15 @@ function ClientForm({
                   options={[{ value: "", label: legacyOwner ? `${legacyOwner} (sem usuário vinculado)` : "Sem responsável" }, ...team.map((member) => ({ value: member.id, label: member.name, description: member.departmentName || undefined }))]}
                 />
               </label>
+              {receitaContacts.length > 0 && <div className="full-field client-receita-contacts">
+                <input type="hidden" name="receitaContacts" value={JSON.stringify(receitaContacts.filter((item) => pickedContacts.includes(item.key)).map(({ name, role, phone }) => ({ name, role, phone })))} />
+                <b>Contatos encontrados na Receita Federal</b>
+                <small>Os marcados entram na aba Contatos do cliente ao salvar.</small>
+                <div>{receitaContacts.map((item) => <label key={item.key} className="inline-check">
+                  <input type="checkbox" checked={pickedContacts.includes(item.key)} onChange={(event) => setPickedContacts((current) => event.target.checked ? [...current, item.key] : current.filter((key) => key !== item.key))} />
+                  <span><b>{item.name}</b><small>{item.role}{item.phone ? ` · ${maskPhone(item.phone)}` : ""}</small></span>
+                </label>)}</div>
+              </div>}
               <label className="full-field">
                 Observações
                 <textarea
@@ -671,6 +802,8 @@ function ClientDetails({
     [contacts, setContacts] = useState<Contact[]>([]),
     [services, setServices] = useState<Service[]>([]),
     [projects, setProjects] = useState<Project[]>([]),
+    [projectUsers, setProjectUsers] = useState<ProjectUser[]>([]),
+    [editingProject, setEditingProject] = useState<Project | "NEW" | null>(null),
     [timeline, setTimeline] = useState<TimelineEvent[]>([]),
     [connections, setConnections] = useState<ClientConnections>({
       mediaAccounts: [],
@@ -680,7 +813,7 @@ function ClientDetails({
       taskCount: 0,
       eventCount: 0,
     }),
-    [adding, setAdding] = useState<null | "CONTACT" | "SERVICE" | "PROJECT">(
+    [adding, setAdding] = useState<null | "CONTACT" | "SERVICE">(
       null,
     ),
     [error, setError] = useState("");
@@ -697,6 +830,7 @@ function ClientDetails({
         setContacts(data.contacts || []);
         setServices(data.services || []);
         setProjects(data.projects || []);
+        setProjectUsers(data.projectUsers || []);
         setTimeline(data.timeline || []);
         setAvailableCompanies(data.availableCompanies || []);
         setAvailableContacts(data.availableContacts || []);
@@ -725,12 +859,7 @@ function ClientDetails({
         ...Object.fromEntries(formData),
         teamIds: formData.getAll("teamIds").map(String),
       };
-    const path =
-      adding === "CONTACT"
-        ? "contacts"
-        : adding === "SERVICE"
-          ? "services"
-          : "projects";
+    const path = adding === "CONTACT" ? "contacts" : "services";
     const response = await fetch(`/api/clients/${client.id}/${path}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -913,6 +1042,10 @@ function ClientDetails({
                     <dt>Responsável interno</dt>
                     <dd>{client.owner || "Não atribuído"}</dd>
                   </div>
+                  <div className="client-address-detail">
+                    <dt>Endereço</dt>
+                    <dd>{formatAddress(client.address) ? <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(formatAddress(client.address))}`} target="_blank" rel="noreferrer">{formatAddress(client.address)}<ExternalLink /></a> : "Não informado"}</dd>
+                  </div>
                 </dl>
               </section>
               <section className="client-system-connections">
@@ -931,7 +1064,7 @@ function ClientDetails({
                   <article className={connections.mediaAssignmentCount ? "connected" : ""}>
                     <Globe2 />
                     <span>
-                      <small>Mídia paga</small>
+                      <small>Inteligência de campanha</small>
                       <b>{connections.mediaAssignmentCount} conta(s)</b>
                     </span>
                     <i />
@@ -1038,8 +1171,10 @@ function ClientDetails({
           {tab === "PROJECTS" && (
             <ClientProjects
               projects={projects}
+              users={projectUsers}
               canEdit={canEdit}
-              onAdd={() => setAdding("PROJECT")}
+              onAdd={() => setEditingProject("NEW")}
+              onOpen={setEditingProject}
             />
           )}{" "}
           {tab === "HISTORY" && <ClientTimeline timeline={timeline} />}
@@ -1052,6 +1187,21 @@ function ClientDetails({
             onSave={add}
           />
         , document.body)}
+        {editingProject && createPortal(
+          <ProjectEditor
+            key={editingProject === "NEW" ? "new" : editingProject.id}
+            clientId={client.id}
+            project={editingProject === "NEW" ? null : editingProject}
+            users={projectUsers}
+            canEdit={canEdit}
+            onClose={() => setEditingProject(null)}
+            onSaved={async () => {
+              setEditingProject(null);
+              await load();
+            }}
+          />,
+          document.body,
+        )}
         {addingAccess && createPortal(<div className="modal-backdrop client-access-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) setAddingAccess(false); }}><section className="client-access-modal" role="dialog" aria-modal="true" aria-labelledby="client-access-title"><header><span><Users/></span><div><small>NOVO USUÁRIO</small><h2 id="client-access-title">Criar acesso do cliente</h2><p>Este acesso será exclusivo para consulta de campanhas.</p></div><button type="button" onClick={() => setAddingAccess(false)} aria-label="Fechar"><X/></button></header><form onSubmit={createAccess}><div className="client-access-notice"><ShieldCheck/><div><b>Acesso protegido e somente leitura</b><p>O usuário poderá visualizar apenas os portfólios Meta e Google vinculados a {client.name}. Nenhuma edição será permitida.</p></div></div><div className="client-access-fields"><label>Nome completo <span>*</span><input name="name" required autoFocus placeholder="Ex.: João da Silva" autoComplete="name"/></label><label>E-mail de acesso <span>*</span><input name="email" type="email" required placeholder="joao@empresa.com.br" autoComplete="email"/></label><label className="client-password-field">Senha temporária <span>*</span><input name="password" type="password" minLength={6} required autoComplete="new-password" placeholder="Mínimo de 6 caracteres"/><small><LockKeyhole/> No primeiro login, o cliente será obrigado a criar uma nova senha.</small></label></div>{error && <div className="form-error"><AlertTriangle/>{error}</div>}<div className="client-portal-link"><ExternalLink/><span><small>LINK DE ACESSO</small><b>{window.location.origin}/portal-cliente</b></span></div><footer><button type="button" className="secondary" onClick={() => setAddingAccess(false)}>Cancelar</button><button className="primary"><UserRound/> Criar acesso</button></footer></form></section></div>, document.body)}
       </aside>
     </div>
@@ -1219,12 +1369,16 @@ function ClientServices({
 }
 function ClientProjects({
   projects,
+  users,
   canEdit,
   onAdd,
+  onOpen,
 }: {
   projects: Project[];
+  users: ProjectUser[];
   canEdit: boolean;
   onAdd: () => void;
+  onOpen: (project: Project) => void;
 }) {
   return (
     <section>
@@ -1238,25 +1392,196 @@ function ClientProjects({
         </button>}
       </div>
       <div className="client-record-list">
-        {projects.map((item) => (
-          <article key={item.id}>
-            <span className="record-icon">
-              <FolderKanban />
-            </span>
-            <div>
-              <b>{item.name}</b>
-              <span>
-                {item.objective || "Sem objetivo descrito"} · {item.status}
+        {projects.map((item) => {
+          const tasks = item.tasks || [],
+            done = tasks.filter((task) => task.status === "DONE").length,
+            responsible = users.find((user) => user.id === item.responsibleId)?.name;
+          return (
+            <button type="button" key={item.id} className="client-project-card" onClick={() => onOpen(item)}>
+              <span className="record-icon">
+                <FolderKanban />
               </span>
-              <div className="project-progress">
-                <i style={{ width: `${item.progress || 0}%` }} />
+              <div>
+                <b>
+                  {item.name}
+                  <em className={`project-status ${item.status.toLowerCase()}`}>{projectStatusLabels[item.status] || item.status}</em>
+                  {projectLate(item) && <em className="project-status late">Atrasado</em>}
+                </b>
+                <span>{item.objective || "Sem objetivo descrito"}</span>
+                <small>
+                  {[
+                    responsible && `Responsável: ${responsible}`,
+                    item.dueDate && `Prazo ${projectDate(item.dueDate)}`,
+                    tasks.length && `${done}/${tasks.length} entregas`,
+                  ].filter(Boolean).join(" · ") || "Sem responsável ou prazo definido"}
+                </small>
+                <div className="project-progress">
+                  <i style={{ width: `${item.progress || 0}%` }} />
+                </div>
               </div>
-            </div>
-            <strong>{item.progress || 0}%</strong>
-          </article>
-        ))}
+              <strong>{item.progress || 0}%</strong>
+            </button>
+          );
+        })}
+        {!projects.length && (
+          <div className="client-module-empty">
+            <FolderKanban />
+            <p>Nenhum projeto cadastrado para este cliente.</p>
+          </div>
+        )}
       </div>
     </section>
+  );
+}
+// Abrir, editar e excluir um projeto. Com entregas cadastradas, o progresso é calculado
+// pelas concluídas; sem entregas, é informado manualmente.
+function ProjectEditor({
+  clientId,
+  project,
+  users,
+  canEdit,
+  onClose,
+  onSaved,
+}: {
+  clientId: string;
+  project: Project | null;
+  users: ProjectUser[];
+  canEdit: boolean;
+  onClose: () => void;
+  onSaved: () => void | Promise<void>;
+}) {
+  const [form, setForm] = useState({
+      name: project?.name || "",
+      objective: project?.objective || "",
+      status: project?.status || ("PLANNED" as ProjectStatus),
+      responsibleId: project?.responsibleId || "",
+      startDate: project?.startDate || "",
+      dueDate: project?.dueDate || "",
+      progress: project?.progress || 0,
+    }),
+    [tasks, setTasks] = useState<ProjectTask[]>(project?.tasks || []),
+    [newTask, setNewTask] = useState(""),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState("");
+  const set = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) =>
+    setForm((current) => ({ ...current, [key]: value }));
+  const progress = tasks.length
+    ? Math.round((tasks.filter((task) => task.status === "DONE").length / tasks.length) * 100)
+    : form.status === "COMPLETED" ? 100 : form.progress;
+  const addTask = () => {
+    const title = newTask.trim();
+    if (!title) return;
+    setTasks((current) => [...current, { id: crypto.randomUUID(), title, status: "OPEN" }]);
+    setNewTask("");
+  };
+  const request = async (method: "POST" | "PATCH" | "DELETE", payload?: unknown) => {
+    setBusy(true);
+    setError("");
+    try {
+      const response = await fetch(
+        `/api/clients/${clientId}/projects${project ? `/${project.id}` : ""}`,
+        { method, headers: { "Content-Type": "application/json" }, body: payload ? JSON.stringify(payload) : undefined },
+      );
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.message || "Não foi possível salvar o projeto.");
+      await onSaved();
+    } catch (reason) {
+      setError((reason as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const save = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    void request(project ? "PATCH" : "POST", { ...form, progress, tasks });
+  };
+  const remove = async () => {
+    if (!project) return;
+    if (!await systemConfirm({ title: `Excluir ${project.name}?`, message: "O projeto e suas entregas serão removidos. Tarefas e eventos ligados a ele continuam, sem o vínculo.", confirmLabel: "Excluir projeto", tone: "danger" })) return;
+    await request("DELETE");
+  };
+  return (
+    <div className="modal-backdrop client-subform-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <section className="client-subform client-project-editor" role="dialog" aria-modal="true">
+      <header>
+        <div>
+          <h3>{project ? (canEdit ? "Editar projeto" : project.name) : "Novo projeto"}</h3>
+          <p>
+            {project?.updatedAt
+              ? `Atualizado em ${new Date(project.updatedAt).toLocaleString("pt-BR")}`
+              : "Entregas, objetivo e progresso deste cliente."}
+          </p>
+        </div>
+        <button type="button" onClick={onClose} aria-label="Fechar">
+          <X />
+        </button>
+      </header>
+      <form onSubmit={save}>
+        <fieldset disabled={!canEdit || busy}>
+          <label>
+            Nome do projeto *
+            <input value={form.name} onChange={(event) => set("name", event.target.value)} required minLength={2} autoFocus={!project} />
+          </label>
+          <label>
+            Objetivo
+            <textarea value={form.objective} onChange={(event) => set("objective", event.target.value)} />
+          </label>
+          <div className="client-project-grid">
+            <label>
+              Status
+              <select value={form.status} onChange={(event) => set("status", event.target.value as ProjectStatus)}>
+                {Object.entries(projectStatusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
+            </label>
+            <label>
+              Responsável
+              <select value={form.responsibleId} onChange={(event) => set("responsibleId", event.target.value)}>
+                <option value="">Sem responsável</option>
+                {users.map((user) => <option key={user.id} value={user.id}>{user.name}</option>)}
+              </select>
+            </label>
+            <label>
+              Data inicial
+              <input type="date" value={form.startDate} onChange={(event) => set("startDate", event.target.value)} />
+            </label>
+            <label>
+              Prazo
+              <input type="date" value={form.dueDate} onChange={(event) => set("dueDate", event.target.value)} />
+            </label>
+          </div>
+          <div className="client-project-tasks">
+            <b>Entregas <small>{tasks.filter((task) => task.status === "DONE").length}/{tasks.length}</small></b>
+            {tasks.map((task) => (
+              <div key={task.id} className={task.status === "DONE" ? "done" : ""}>
+                <label className="inline-check">
+                  <input type="checkbox" checked={task.status === "DONE"} onChange={(event) => setTasks((current) => current.map((item) => item.id === task.id ? { ...item, status: event.target.checked ? "DONE" : "OPEN" } : item))} />
+                  <span>{task.title}</span>
+                </label>
+                {canEdit && <button type="button" aria-label={`Remover ${task.title}`} onClick={() => setTasks((current) => current.filter((item) => item.id !== task.id))}><X /></button>}
+              </div>
+            ))}
+            {canEdit && <div className="client-project-task-add">
+              <input value={newTask} onChange={(event) => setNewTask(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addTask(); } }} placeholder="Nova entrega (ex.: Landing page publicada)" />
+              <button type="button" className="secondary" onClick={addTask} disabled={!newTask.trim()}><Plus /> Adicionar</button>
+            </div>}
+          </div>
+          <label>
+            Progresso · {progress}%
+            <input type="range" min={0} max={100} step={5} value={progress} disabled={!!tasks.length || form.status === "COMPLETED"} onChange={(event) => set("progress", Number(event.target.value))} />
+            {(!!tasks.length || form.status === "COMPLETED") && <small className="client-project-hint">{tasks.length ? "Calculado pelas entregas concluídas." : "Projeto concluído conta como 100%."}</small>}
+          </label>
+        </fieldset>
+        {error && <div className="form-error">{error}</div>}
+        <footer>
+          {project && canEdit && <button type="button" className="secondary danger" disabled={busy} onClick={() => void remove()}><Trash2 /> Excluir</button>}
+          <button type="button" className="secondary" onClick={onClose}>
+            {canEdit ? "Cancelar" : "Fechar"}
+          </button>
+          {canEdit && <button className="primary" disabled={busy}>{busy ? <Loader2 className="spin" /> : <Save />} Salvar</button>}
+        </footer>
+      </form>
+    </section>
+    </div>
   );
 }
 function ClientTimeline({ timeline }: { timeline: TimelineEvent[] }) {
@@ -1306,7 +1631,7 @@ function ClientSubForm({
   onClose,
   onSave,
 }: {
-  kind: "CONTACT" | "SERVICE" | "PROJECT";
+  kind: "CONTACT" | "SERVICE";
   error: string;
   onClose: () => void;
   onSave: (event: FormEvent<HTMLFormElement>) => void;
@@ -1317,11 +1642,7 @@ function ClientSubForm({
       <header>
         <div>
           <h3>
-            {kind === "CONTACT"
-              ? "Novo contato"
-              : kind === "SERVICE"
-                ? "Novo serviço ou contrato"
-                : "Novo projeto"}
+            {kind === "CONTACT" ? "Novo contato" : "Novo serviço ou contrato"}
           </h3>
           <p>As informações ficarão vinculadas permanentemente ao cliente.</p>
         </div>
@@ -1374,7 +1695,7 @@ function ClientSubForm({
               principal
             </label>
           </>
-        ) : kind === "SERVICE" ? (
+        ) : (
           <>
             <label>
               Serviço contratado *<input name="name" required />
@@ -1393,33 +1714,6 @@ function ClientSubForm({
             <label>
               Data de início
               <input name="startDate" type="date" />
-            </label>
-          </>
-        ) : (
-          <>
-            <label>
-              Nome do projeto *<input name="name" required />
-            </label>
-            <label>
-              Objetivo
-              <textarea name="objective" />
-            </label>
-            <label>
-              Status
-              <select name="status">
-                <option value="PLANNED">Planejado</option>
-                <option value="ACTIVE">Ativo</option>
-                <option value="PAUSED">Pausado</option>
-                <option value="COMPLETED">Concluído</option>
-              </select>
-            </label>
-            <label>
-              Data inicial
-              <input name="startDate" type="date" />
-            </label>
-            <label>
-              Prazo
-              <input name="dueDate" type="date" />
             </label>
           </>
         )}

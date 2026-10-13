@@ -19,7 +19,9 @@ import {
   type GoogleDayRow,
 } from "./googleDailyStore";
 import { googleOAuthReturnPage } from "./oauthCallback";
-import { applyFlowAction, canReturnStep, findFlow, flowStatus, reopenFlow, scheduleSteps, ticketFlows, type TicketStep } from "./apps/web/src/ticketFlows";
+import { applyFlowAction, canReturnStep, flowStatus, mergeFlows, reopenFlow, sanitizeFlow, scheduleSteps, ticketFlows, type TicketFlow, type TicketStep } from "./apps/web/src/ticketFlows";
+import { applyWorkAction, workElapsed, type TicketChecklistItem, type TicketWorkAction } from "./apps/web/src/ticketWork";
+import { linkedTaskStatus, ticketTaskDepartments, ticketTaskType, workActionsForTaskStatus } from "./apps/web/src/ticketTasks";
 import {
   createHash,
   createHmac,
@@ -52,6 +54,9 @@ import { defineConfig, loadEnv, type Plugin, type PreviewServer, type ViteDevSer
 import nodemailer from "nodemailer";
 import OpenAI from "openai";
 import { extractMetaLeads, type MetaAction } from "./metaInsights";
+import { metaPrepaidBalance } from "./metaPrepaidBalance";
+import { mergeById, mergeVerifications } from "./reviewStoreMerge";
+import { validCalendarColor, validEventColorId } from "./apps/web/src/calendarColors";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 import {
@@ -82,6 +87,10 @@ type User = {
   salt: string;
   passwordHash: string;
   clientId?: string;
+  // Cor que esta pessoa escolheu para cada agenda (id do dono → hexadecimal).
+  calendarColors?: Record<string, string>;
+  // Cor oficial da pessoa em todo o sistema, escolhida pela Diretoria.
+  color?: string;
 };
 type Role = {
   id: string;
@@ -217,6 +226,7 @@ type MetaAccountPayload = {
   currency?: string;
   amount_spent?: string;
   spend_cap?: string;
+  prepaidBalance?: number | null;
   pageName?: string;
   profilePictureUrl?: string;
   business?: { id: string; name?: string; profile_picture_uri?: string };
@@ -262,8 +272,20 @@ type Client = {
   // Usuário responsável interno; `owner` guarda o nome para exibição e cadastros antigos.
   ownerId?: string;
   notes: string;
+  address?: ClientAddress;
   createdAt: string;
   updatedAt: string;
+};
+type ClientAddress = { postalCode: string; street: string; number: string; complement: string; neighborhood: string; city: string; state: string };
+// Endereço do cadastro do cliente, a partir dos campos `address*` do formulário.
+const clientAddress = (input: Record<string, unknown>): ClientAddress => {
+  const text = (key: string, max = 120) => String(input[key] ?? "").trim().slice(0, max);
+  const postal = text("addressPostalCode", 9).replace(/\D/g, "");
+  return {
+    postalCode: postal.length === 8 ? `${postal.slice(0, 5)}-${postal.slice(5)}` : "",
+    street: text("addressStreet"), number: text("addressNumber", 20), complement: text("addressComplement", 80),
+    neighborhood: text("addressNeighborhood", 80), city: text("addressCity", 80), state: text("addressState", 2).toUpperCase(),
+  };
 };
 type ClientReportSchedule = {
   id: string;
@@ -337,6 +359,9 @@ type TicketComment = {
   // Devolução para ajustes: destacada no histórico com o texto do pedido.
   action?: "RETURN";
   note?: string;
+  // Etapa a que o comentário se refere; `delivery` marca o comentário enviado junto com a entrega.
+  stepId?: string;
+  delivery?: boolean;
 };
 type Ticket = {
   id: string;
@@ -366,9 +391,11 @@ type Ticket = {
   steps?: TicketStep[];
   notes?: string;
   attachments?: TicketAttachment[];
+  checklist?: TicketChecklistItem[];
+  projectValue?: number;
 };
 type TicketOriginType = "INTERNAL" | "MEETING" | "WHATSAPP" | "EMAIL" | "PHONE";
-type TicketAttachment = { id: string; name: string; contentType: string; sizeBytes: number; storagePath: string; uploadedById: string; uploadedByName: string; createdAt: string };
+type TicketAttachment = { id: string; name: string; contentType: string; sizeBytes: number; storagePath: string; uploadedById: string; uploadedByName: string; createdAt: string; stepId?: string };
 type CrmStage = {
   id: string;
   name: string;
@@ -519,8 +546,40 @@ type OnboardingProject = {
   progress?: number;
   status: "PLANNED" | "ACTIVE" | "PAUSED" | "COMPLETED" | "CANCELLED";
   createdAt: string;
+  updatedAt?: string;
   tasks: { id: string; title: string; status: string }[];
 };
+const projectStatuses = ["PLANNED", "ACTIVE", "PAUSED", "COMPLETED", "CANCELLED"] as const;
+// Campos editáveis do projeto. Com entregas cadastradas, o progresso vem delas;
+// sem entregas, vale o progresso informado (projeto concluído conta como 100%).
+function projectFields(input: Record<string, any>, current?: OnboardingProject) {
+  const tasks: OnboardingProject["tasks"] = Array.isArray(input.tasks)
+      ? input.tasks
+          .map((item: any) => ({
+            id: String(item?.id || randomUUID()).slice(0, 64),
+            title: String(item?.title || "").trim().slice(0, 200),
+            status: item?.status === "DONE" ? "DONE" : "OPEN",
+          }))
+          .filter((item: { title: string }) => item.title)
+          .slice(0, 100)
+      : current?.tasks || [],
+    status: OnboardingProject["status"] = projectStatuses.includes(input.status)
+      ? input.status
+      : current?.status || "PLANNED",
+    manual = Math.min(100, Math.max(0, Math.round(Number(input.progress ?? current?.progress ?? 0) || 0)));
+  return {
+    name: String(input.name ?? current?.name ?? "").trim().slice(0, 160),
+    objective: String(input.objective ?? current?.objective ?? "").trim().slice(0, 2000),
+    responsibleId: String(input.responsibleId ?? current?.responsibleId ?? ""),
+    startDate: String(input.startDate ?? current?.startDate ?? ""),
+    dueDate: String(input.dueDate ?? current?.dueDate ?? ""),
+    status,
+    tasks,
+    progress: tasks.length
+      ? Math.round((tasks.filter((item) => item.status === "DONE").length / tasks.length) * 100)
+      : status === "COMPLETED" ? 100 : manual,
+  };
+}
 type WorkTask = {
   id: string;
   title: string;
@@ -616,6 +675,10 @@ type WorkTask = {
   googleSignature?: string;
   googleUpdated?: string;
   googleSyncError?: string;
+  // Demanda criada a partir de uma etapa de chamado (Marketing e Criação): o chamado manda no andamento.
+  ticketId?: string;
+  ticketStepId?: string;
+  ticketCode?: string;
 };
 type CalendarEvent = {
   id: string;
@@ -642,6 +705,8 @@ type CalendarEvent = {
   googleOwnerId?: string;
   googleHtmlLink?: string;
   googleSyncError?: string;
+  // Cor própria do evento (colorId do Google Agenda); sem ela, vale a cor da agenda.
+  colorId?: string;
   // Valor de `updated` do Google após a última gravação do PW OS: diferente disso,
   // o evento foi alterado no Google e a mudança volta para o PW OS.
   googleUpdated?: string;
@@ -862,6 +927,8 @@ const directorsMonitoringPermissions = [
   "meetings.view", "meetings.view_team", "meetings.create", "meetings.edit", "meetings.delete",
   "tickets.view", "tickets.view_all", "tickets.create", "tickets.edit", "tickets.delete", "tickets.comment", "tickets.assign", "tickets.manage_departments",
   "calendar.view", "calendar.view_team", "media.view",
+  // Painel da Diretoria: tarefas de toda a equipe, clientes e projetos em implantação.
+  "tasks.view", "tasks.view_team", "clients.view",
 ];
 const isDirectorsMember = (user: User) =>
   user.profile !== "CLIENT" &&
@@ -872,6 +939,10 @@ const hasPermission = (user: User | undefined, permission: string) => {
   // Ver (e editar) as reuniões de toda a equipe é exclusivo do Master e da Diretoria;
   // os demais só acessam as reuniões em que são responsáveis, criaram ou foram convidados.
   if (permission === "meetings.view_team") return isDirectorsMember(user);
+  // Criar tipos de chamado e editar as suas etapas também é exclusivo da Diretoria.
+  if (permission === "tickets.manage_flows") return isDirectorsMember(user);
+  // Escolher a cor de cada pessoa da equipe também é da Diretoria.
+  if (permission === "users.manage_colors") return isDirectorsMember(user);
   const override = user.permissionOverrides?.[permission];
   if (override) return override === "ALLOW";
   if (directorsMonitoringPermissions.includes(permission) && isDirectorsMember(user)) return true;
@@ -1270,6 +1341,8 @@ function localApi(
       attendees: attendees.map((email) => ({ email })),
       reminders: { useDefault: false, overrides: [{ method: "popup", minutes: Math.max(0, Math.min(40320, Number(event.reminderMinutes) || 15)) }] },
       extendedProperties: { private: { pwOsEventId: event.id } },
+      // Sem cor própria, volta para a cor padrão da agenda no Google.
+      colorId: event.colorId || null,
     };
     if (options.createMeet && !event.meetUrl) payload.conferenceData = { createRequest: { requestId: randomUUID(), conferenceSolutionKey: { type: "hangoutsMeet" } } };
     const query = `?conferenceDataVersion=1&sendUpdates=${options.notify ? "all" : "none"}`;
@@ -1369,7 +1442,7 @@ function localApi(
     const cached = googleAgendaCache.get(user.id);
     if (cached && Date.now() - cached.at < (cached.error ? 60000 : 120000)) return cached;
     type GoogleTime = { dateTime?: string; date?: string };
-    type GoogleItem = { id: string; status?: string; summary?: string; description?: string; location?: string; hangoutLink?: string; htmlLink?: string; created?: string; updated?: string; start?: GoogleTime; end?: GoogleTime; extendedProperties?: { private?: Record<string, string> } };
+    type GoogleItem = { id: string; status?: string; colorId?: string; summary?: string; description?: string; location?: string; hangoutLink?: string; htmlLink?: string; created?: string; updated?: string; start?: GoogleTime; end?: GoogleTime; extendedProperties?: { private?: Record<string, string> } };
     const toIso = (value: GoogleTime | undefined) => value?.dateTime ? new Date(value.dateTime).toISOString() : new Date(`${value?.date}T00:00:00-03:00`).toISOString();
     let result: { at: number; events: CalendarEvent[]; error: string };
     try {
@@ -1406,7 +1479,7 @@ function localApi(
               meetingsChanged = true;
             }
           } else if ((item.start?.dateTime || item.start?.date) && changedInGoogle(item.updated, event.updatedAt, event.googleUpdated)) {
-            const next = { title: item.summary || event.title, description: item.description || "", location: item.location || "", startAt: toIso(item.start), endAt: toIso(item.end || item.start) };
+            const next = { title: item.summary || event.title, description: item.description || "", location: item.location || "", startAt: toIso(item.start), endAt: toIso(item.end || item.start), colorId: validEventColorId(item.colorId) };
             const moved = next.startAt !== event.startAt || next.endAt !== event.endAt;
             Object.assign(event, next, { updatedAt: item.updated, googleUpdated: item.updated, googleHtmlLink: item.htmlLink || event.googleHtmlLink });
             eventsChanged = true;
@@ -1449,6 +1522,7 @@ function localApi(
         id: `google:${item.id}`, title: item.summary || "(Sem título)", description: item.description || "", ownerId: user.id, ownerName: user.name, participantIds: [],
         startAt: toIso(item.start), endAt: toIso(item.end || item.start), location: item.hangoutLink || item.location || "", category: "GOOGLE", clientId: "", projectId: "", opportunityId: "", taskId: "",
         recurrence: "NONE", reminderMinutes: 0, createdAt: item.created || "", updatedAt: item.updated || "", source: "GOOGLE", googleHtmlLink: item.htmlLink || "", meetUrl: item.hangoutLink || "",
+        colorId: validEventColorId(item.colorId),
       }));
       result = { at: Date.now(), events, error: "" };
     } catch (error) {
@@ -1700,12 +1774,24 @@ function localApi(
     ? JSON.parse(readFileSync(localCampaignVerificationsPath, "utf8"))
     : {};
   let campaignVerificationsPersistTimer: ReturnType<typeof setTimeout> | undefined;
+  // Durante uma troca de versão, duas revisões do servidor gravam o mesmo arquivo. Antes de
+  // usar ou gravar, o que a outra revisão gravou é juntado à memória (nada se perde).
+  const fileMtime = (path: string) => { try { return statSync(path).mtimeMs; } catch { return 0; } };
+  let campaignVerificationsMtime = fileMtime(localCampaignVerificationsPath);
+  const syncCampaignVerificationsFromDisk = () => {
+    const mtime = fileMtime(localCampaignVerificationsPath);
+    if (!mtime || mtime <= campaignVerificationsMtime) return;
+    try { mergeVerifications(campaignVerifications, JSON.parse(readFileSync(localCampaignVerificationsPath, "utf8"))); } catch { /* arquivo em gravação: tenta na próxima */ return; }
+    campaignVerificationsMtime = mtime;
+  };
   const persistCampaignVerifications = () => {
     clearTimeout(campaignVerificationsPersistTimer);
     campaignVerificationsPersistTimer = setTimeout(() => {
       try {
         mkdirSync("data", { recursive: true });
+        syncCampaignVerificationsFromDisk();
         writeFileSync(localCampaignVerificationsPath, JSON.stringify(campaignVerifications, null, 2), { mode: 0o600 });
+        campaignVerificationsMtime = fileMtime(localCampaignVerificationsPath);
       } catch (error) {
         console.error("Não foi possível persistir o histórico de verificações.", error);
       }
@@ -1715,6 +1801,7 @@ function localApi(
   const campaignVerificationKey = (platform: string, accountId: string, campaignId: string) => `${platform}:${accountId}:${campaignId}`;
   // O histórico fica gravado pelo ID da campanha e nunca é apagado, mesmo que ela saia da conta.
   const recordCampaignReviewEntry = (key: string, entry: CampaignReviewEntry, userId: string) => {
+    syncCampaignVerificationsFromDisk();
     const current = campaignVerifications[key] || { verified: false, verifiedAt: "", verifiedBy: "", history: [] },
       // Revisões são registro de auditoria e nunca saem do histórico;
       // o limite de 200 vale só para as demais ações.
@@ -1727,7 +1814,7 @@ function localApi(
     };
     persistCampaignVerifications();
   };
-  const withCampaignVerifications = (payload: any, platform: string) => ({
+  const withCampaignVerifications = (payload: any, platform: string) => (syncCampaignVerificationsFromDisk(), {
     ...payload,
     campaigns: (payload.campaigns || []).map((campaign: any) => ({
       ...campaign,
@@ -1755,7 +1842,8 @@ function localApi(
   // Controle manual do pedido de crédito por conta ("PLATAFORMA:contaId"): quem marcou
   // que o crédito foi solicitado ao cliente e quando ele foi recebido.
   const localCreditRequestsPath = "data/credit-requests.local.json";
-  type CreditRequestMark = { requestedAt?: string; requestedBy?: string; receivedAt?: string; receivedBy?: string };
+  // `previous`: o último ciclo encerrado, mostrado como "Último pedido" quando a conta volta a precisar de crédito.
+  type CreditRequestMark = { requestedAt?: string; requestedBy?: string; receivedAt?: string; receivedBy?: string; previous?: { requestedAt: string; receivedAt?: string } };
   const creditRequests: Record<string, CreditRequestMark> = existsSync(localCreditRequestsPath)
     ? JSON.parse(readFileSync(localCreditRequestsPath, "utf8"))
     : {};
@@ -1783,12 +1871,21 @@ function localApi(
     }
   };
   let portfolioReviewsPersistTimer: ReturnType<typeof setTimeout> | undefined;
+  let portfolioReviewsMtime = fileMtime(localPortfolioReviewsPath);
+  const syncPortfolioReviewsFromDisk = () => {
+    const mtime = fileMtime(localPortfolioReviewsPath);
+    if (!mtime || mtime <= portfolioReviewsMtime) return;
+    try { mergeById(portfolioReviews, JSON.parse(readFileSync(localPortfolioReviewsPath, "utf8"))); } catch { return; }
+    portfolioReviewsMtime = mtime;
+  };
   const persistPortfolioReviews = () => {
     clearTimeout(portfolioReviewsPersistTimer);
     portfolioReviewsPersistTimer = setTimeout(() => {
       try {
         mkdirSync("data", { recursive: true });
+        syncPortfolioReviewsFromDisk();
         writeFileSync(localPortfolioReviewsPath, JSON.stringify(portfolioReviews, null, 2), { mode: 0o600 });
+        portfolioReviewsMtime = fileMtime(localPortfolioReviewsPath);
       } catch (error) {
         console.error("Não foi possível persistir as revisões de portfólio.", error);
       }
@@ -2356,6 +2453,8 @@ function localApi(
   const localMasterUserPath = "data/master-user.local.json";
   const localDepartmentsPath = "data/departments.local.json";
   const localTicketsPath = "data/tickets.local.json";
+  // Tipos de chamado criados ou editados pela Diretoria (os padrões ficam no código).
+  const localTicketFlowsPath = "data/ticket-flows.local.json";
   const localPipelinesPath = "data/crm-pipelines.local.json";
   const localOpportunitiesPath = "data/crm-opportunities.local.json";
   const localCrmContactsPath = "data/crm-contacts.local.json";
@@ -2613,6 +2712,14 @@ function localApi(
     standardDepartmentsChanged = true;
   });
   if (standardDepartmentsChanged) persistDepartments();
+  const storedTicketFlows: TicketFlow[] = existsSync(localTicketFlowsPath)
+    ? JSON.parse(readFileSync(localTicketFlowsPath, "utf8"))
+    : [];
+  const persistTicketFlows = () => {
+    mkdirSync("data", { recursive: true });
+    writeFileSync(localTicketFlowsPath, JSON.stringify(storedTicketFlows, null, 2), { mode: 0o600 });
+  };
+  const activeTicketFlows = () => mergeFlows(storedTicketFlows);
   const persistTickets = () => {
     mkdirSync("data", { recursive: true });
     writeFileSync(
@@ -2885,6 +2992,59 @@ function localApi(
     writeWorkTasksFile();
     scheduleTaskGoogleSync();
   };
+  // Chamado → Creative Ops: cada etapa de execução ativa vira uma demanda de quem está com ela,
+  // e a demanda acompanha a etapa (status, responsável, prazo, tempo trabalhado). Grava
+  // `taskId` na etapa; quem chama persiste o chamado.
+  const linkedTaskLabels: Record<string, string> = { TODO: "a fazer", IN_PROGRESS: "em andamento", REVIEW: "em revisão (etapa finalizada)", CHANGES_REQUESTED: "ajustes solicitados", DONE: "entregue", CANCELLED: "cancelada" };
+  const syncTicketTasks = (ticket: Ticket, options: { deleted?: boolean } = {}) => {
+    if (!ticket.steps?.length || !ticketTaskDepartments.includes(ticket.departmentId)) return false;
+    let changed = false;
+    const now = new Date().toISOString();
+    for (const step of ticket.steps) {
+      if (step.role !== "EXECUTOR") continue;
+      let task = [...workTasks.values()].find((item) => item.ticketStepId === step.id && !item.archivedAt);
+      if (options.deleted) {
+        if (task) { task.archivedAt = now; task.updatedAt = now; changed = true; }
+        continue;
+      }
+      if (!task) {
+        if (step.status !== "ACTIVE" || ["CLOSED", "RESOLVED"].includes(ticket.status)) continue;
+        const kind = ticketTaskType(ticket.flowId);
+        task = {
+          id: randomUUID(), title: "", description: `${ticket.title}\n\n${ticket.description}`.trim().slice(0, 2000),
+          clientId: ticket.clientId || "", projectId: "", opportunityId: "",
+          responsibleId: step.assigneeId, responsibleName: step.assigneeName, participantIds: [ticket.requesterId].filter((id) => id !== step.assigneeId),
+          type: kind.type, subtype: kind.subtype, priority: ticket.priority, status: "TODO", approvalStatus: "NOT_REQUIRED", approvalHistory: [],
+          startAt: "", dueAt: step.dueAt, plannedAt: "", publishedAt: "", completedAt: "", estimateMinutes: 0, trackedMinutes: 0, tags: ["chamado"],
+          details: {}, checklist: [], comments: [], attachments: [],
+          activity: [{ id: randomUUID(), actorId: ticket.requesterId, actorName: ticket.requesterName, action: `criou esta demanda a partir do chamado ${ticket.code} (${step.name})`, createdAt: now }],
+          createdBy: ticket.requesterId, createdAt: now, updatedAt: now, archivedAt: "",
+          ticketId: ticket.id, ticketStepId: step.id, ticketCode: ticket.code,
+        };
+        workTasks.set(task.id, task);
+        changed = true;
+      }
+      if (step.taskId !== task.id) { step.taskId = task.id; changed = true; }
+      const status = linkedTaskStatus(step, ticket.status);
+      const desired: Partial<WorkTask> = {
+        title: `${ticket.code} · ${step.name} — ${ticket.clientName || ticket.title}`,
+        clientId: ticket.clientId || "", responsibleId: step.assigneeId, responsibleName: step.assigneeName,
+        priority: ticket.priority, dueAt: step.dueAt, trackedMinutes: Math.round(workElapsed(step.work) / 60000),
+        status, completedAt: status === "DONE" ? task.completedAt || step.completedAt || now : "", ticketCode: ticket.code,
+      };
+      const previous = task.status;
+      const differs = (Object.keys(desired) as (keyof WorkTask)[]).some((key) => task![key] !== desired[key]);
+      if (!differs) continue;
+      Object.assign(task, desired, { updatedAt: now });
+      if (previous !== status)
+        task.activity.push({ id: randomUUID(), actorId: step.assigneeId, actorName: "Chamado", action: `${ticket.code} · ${step.name}: ${linkedTaskLabels[status]}`, createdAt: now });
+      changed = true;
+    }
+    if (changed) persistWorkTasks();
+    return changed;
+  };
+  // Chamados abertos antes da ligação ganham a demanda da etapa ativa.
+  if ([...tickets.values()].map((ticket) => syncTicketTasks(ticket)).some(Boolean)) persistTickets();
   const removeTaskAttachmentFile = (attachment: WorkTask["attachments"][number]) => {
     if (
       attachment.storagePath &&
@@ -3011,6 +3171,18 @@ function localApi(
           );
         return payload;
       };
+      // Saldo pré-pago é complementar: sem permissão ou sem pré-pago, segue o limite de gastos.
+      const withMetaPrepaidBalance = async (account: MetaAccountPayload) => {
+        try {
+          const funding = await graph<{ is_prepay_account?: boolean; funding_source_details?: { display_string?: string } }>(
+            `${account.id}?fields=is_prepay_account,funding_source_details`,
+          );
+          account.prepaidBalance = funding.is_prepay_account ? metaPrepaidBalance(funding.funding_source_details?.display_string) : null;
+        } catch {
+          /* forma de pagamento opcional */
+        }
+        return account;
+      };
       const listAll = async <T>(path: string) => {
         const rows: T[] = [];
         let next: string | undefined = path;
@@ -3051,7 +3223,7 @@ function localApi(
       for (const ref of accountRefs) {
         const detail = await graph<MetaAccountPayload>(
             `${ref.id}?fields=id,name,currency,amount_spent,spend_cap`,
-          ),
+          ).then(withMetaPrepaidBalance),
           campaignRows = await listAll<MetaCampaignPayload>(
             `${ref.id}/campaigns?fields=id,name,objective,effective_status,daily_budget,lifetime_budget,budget_remaining,promoted_object&limit=500`,
           ),
@@ -3195,6 +3367,7 @@ function localApi(
             currency: account.currency || "BRL",
             amountSpent: Number(account.amount_spent || 0) / 100,
             spendCap: Number(account.spend_cap || 0) / 100,
+            prepaidBalance: account.prepaidBalance ?? null,
           })),
           campaigns,
         };
@@ -4597,7 +4770,10 @@ function localApi(
           hasPermission(currentUser, "tickets.view_all") ||
           ticket.requesterId === currentUser.id ||
           ticket.assigneeId === currentUser.id ||
-          ticket.participantIds.includes(currentUser.id);
+          ticket.participantIds.includes(currentUser.id) ||
+          // Responsável por alguma etapa do fluxo e líder do setor do chamado.
+          !!ticket.steps?.some((step) => step.assigneeId === currentUser.id) ||
+          departments.get(ticket.departmentId)?.managerUserId === currentUser.id;
         const staffUser = (id: unknown) => {
           const user = users.get(String(id || ""));
           return user && user.profile !== "CLIENT" ? user : undefined;
@@ -4622,6 +4798,10 @@ function localApi(
           }
           if (input.unit !== undefined) ticket.unit = String(input.unit || "").trim().slice(0, 80);
           if (input.notes !== undefined) ticket.notes = String(input.notes || "").trim().slice(0, 500);
+          if (input.projectValue !== undefined) {
+            const value = Number(String(input.projectValue).replace(/\./g, "").replace(",", "."));
+            ticket.projectValue = Number.isFinite(value) && value > 0 ? Math.round(value * 100) / 100 : undefined;
+          }
         };
         // O responsável e o status do chamado acompanham a etapa ativa.
         const syncTicketFlow = (ticket: Ticket) => {
@@ -4676,16 +4856,49 @@ function localApi(
                       departmentName: user.departmentName,
                     }))
                 : [],
-            flows: ticketFlows,
+            flows: activeTicketFlows(),
+            // Criar tipos de chamado e editar as etapas é da Diretoria (e do Master).
+            canManageFlows: hasPermission(currentUser, "tickets.manage_flows"),
             clients: [...clients.values()]
               .filter((client) => client.status !== "INACTIVE")
-              .map((client) => ({ id: client.id, name: client.name }))
+              // Contato principal: exibido em "Informações adicionais" do chamado.
+              .map((client) => ({ id: client.id, name: client.name, contactName: client.primaryContactName, contactEmail: client.primaryContactEmail, contactPhone: client.primaryContactPhone }))
               .sort((a, b) => a.name.localeCompare(b.name, "pt-BR")),
             meetings: [...meetings.values()]
               .filter((meeting) => (hasPermission(currentUser, "meetings.view_team") || meeting.responsibleId === currentUser.id || meeting.createdById === currentUser.id || meeting.participantIds.includes(currentUser.id)) && meeting.status !== "CANCELLED" && new Date(meeting.startAt).getTime() >= meetingWindowStart && new Date(meeting.startAt).getTime() <= meetingWindowEnd)
               .map((meeting) => ({ id: meeting.id, clientId: meeting.clientId, subject: meeting.subject, startAt: meeting.startAt, unit: meeting.unit }))
               .sort((a, b) => b.startAt.localeCompare(a.startAt)),
           });
+        }
+        const ticketFlowItem = url.match(/^\/tickets\/flows(?:\/([^/]+))?$/);
+        if (ticketFlowItem && ["POST", "PATCH", "DELETE"].includes(request.method || "")) {
+          if (!hasPermission(currentUser, "tickets.manage_flows"))
+            return json(response, 403, { message: "Somente a Diretoria pode gerenciar os tipos de chamado." });
+          const id = ticketFlowItem[1] ? decodeURIComponent(ticketFlowItem[1]) : "";
+          const current = activeTicketFlows().find((item) => item.id === id);
+          if (request.method !== "POST" && !current)
+            return json(response, 404, { message: "Tipo de chamado não encontrado." });
+          const index = storedTicketFlows.findIndex((item) => item.id === id);
+          if (request.method === "DELETE") {
+            // Chamados já abertos guardam as próprias etapas: excluir o tipo não muda nenhum deles.
+            const builtIn = ticketFlows.find((item) => item.id === id);
+            if (builtIn) {
+              const archived = { ...(index >= 0 ? storedTicketFlows[index] : builtIn), archived: true };
+              if (index >= 0) storedTicketFlows[index] = archived;
+              else storedTicketFlows.push(archived);
+            } else storedTicketFlows.splice(index, 1);
+            persistTicketFlows();
+            return json(response, 200, { ok: true });
+          }
+          const result = sanitizeFlow(await body(request));
+          if ("error" in result) return json(response, 400, { message: result.error });
+          if (result.flow.departmentId && !departments.has(result.flow.departmentId))
+            return json(response, 400, { message: "Setor inválido." });
+          const flow: TicketFlow = { id: id || `custom-${randomUUID()}`, ...result.flow };
+          if (index >= 0) storedTicketFlows[index] = flow;
+          else storedTicketFlows.push(flow);
+          persistTicketFlows();
+          return json(response, request.method === "POST" ? 201 : 200, { flow: activeTicketFlows().find((item) => item.id === flow.id) });
         }
         if (url === "/tickets" && request.method === "POST") {
           if (!hasPermission(currentUser, "tickets.create"))
@@ -4694,7 +4907,7 @@ function localApi(
             });
           const input = await body(request);
           const title = String(input.title || "").trim().slice(0, 150);
-          const flow = findFlow(String(input.flowId || "simple"));
+          const flow = activeTicketFlows().find((item) => item.id === String(input.flowId || "simple"));
           const department = departments.get(String(input.departmentId || "") || flow?.departmentId || "");
           const origin = ticketOrigin(input.origin);
           if (title.length < 4)
@@ -4751,6 +4964,7 @@ function localApi(
           ticketMeta(ticket, { ...input, clientId: input.clientId || meetingClientId || "" });
           syncTicketFlow(ticket);
           tickets.set(ticket.id, ticket);
+          syncTicketTasks(ticket);
           persistTickets();
           return json(response, 201, { ticket });
         }
@@ -4779,6 +4993,7 @@ function localApi(
             message,
             mentions: mentioned.map((user) => user.id),
             createdAt: new Date().toISOString(),
+            ...(ticket.steps?.some((item) => item.id === input.stepId) ? { stepId: String(input.stepId) } : {}),
           };
           ticket.comments.push(comment);
           ticket.participantIds = [
@@ -4816,6 +5031,16 @@ function localApi(
               } else ticket.status = "OPEN";
               systemTicketComment(ticket, `reabriu o chamado${note ? ` — “${note}”` : ""}`);
             }
+          } else if (action === "COMPLETE" && !ticket.steps?.length) {
+            // Chamado do modelo antigo (sem etapas): o responsável conclui direto.
+            if (["RESOLVED", "CLOSED"].includes(ticket.status))
+              return json(response, 409, { message: "Este chamado já está encerrado." });
+            if (ticket.assigneeId !== currentUser.id && !canManage)
+              return json(response, 403, { message: `Somente ${ticket.assigneeName || "o responsável"} pode concluir este chamado.` });
+            ticket.status = "RESOLVED";
+            systemTicketComment(ticket, "concluiu o chamado");
+            if (note)
+              ticket.comments.push({ id: randomUUID(), authorId: currentUser.id, authorName: currentUser.name, message: note, mentions: [], createdAt: ticket.updatedAt });
           } else if (action === "COMPLETE" || action === "RETURN") {
             if (!ticket.steps?.length || ticket.status === "CLOSED")
               return json(response, 409, { message: "Este chamado não tem etapa em andamento." });
@@ -4838,7 +5063,66 @@ function localApi(
                 : `${verb} “${active.name}” e finalizou o chamado`);
             if (action === "RETURN") Object.assign(ticket.comments[ticket.comments.length - 1], { action: "RETURN", note });
             if (action === "COMPLETE" && note)
-              ticket.comments.push({ id: randomUUID(), authorId: currentUser.id, authorName: currentUser.name, message: note, mentions: [], createdAt: ticket.updatedAt });
+              ticket.comments.push({ id: randomUUID(), authorId: currentUser.id, authorName: currentUser.name, message: note, mentions: [], createdAt: ticket.updatedAt, stepId: active.id, delivery: true });
+          } else return json(response, 400, { message: "Ação inválida." });
+          tickets.set(ticket.id, ticket);
+          syncTicketTasks(ticket);
+          persistTickets();
+          return json(response, 200, { ticket });
+        }
+        // Cronômetro e rascunho de quem executa a etapa ativa: iniciar, pausar, retomar, finalizar.
+        const ticketWorkMatch = url.match(/^\/tickets\/([^/]+)\/work$/);
+        if (ticketWorkMatch && request.method === "POST") {
+          const ticket = tickets.get(ticketWorkMatch[1]);
+          if (!ticket || !canSeeTicket(ticket))
+            return json(response, 404, { message: "Chamado não encontrado." });
+          const active = ticket.status === "CLOSED" ? undefined : ticket.steps?.find((item) => item.status === "ACTIVE");
+          if (!active) return json(response, 409, { message: "Este chamado não tem etapa em andamento." });
+          if (active.assigneeId !== currentUser.id && !hasPermission(currentUser, "tickets.edit"))
+            return json(response, 403, { message: `Somente ${active.assigneeName} pode trabalhar nesta etapa.` });
+          const input = await body(request), action = String(input.action || "") as TicketWorkAction;
+          if (!["START", "PAUSE", "RESUME", "FINISH", "REOPEN", "DRAFT"].includes(action))
+            return json(response, 400, { message: "Ação inválida." });
+          const now = new Date();
+          try {
+            active.work = applyWorkAction(active.work, action, now, String(input.draft || ""));
+          } catch (cause) {
+            return json(response, 409, { message: cause instanceof Error ? cause.message : "Ação inválida." });
+          }
+          if (action !== "DRAFT") {
+            ticket.updatedAt = now.toISOString();
+            const verbs: Record<string, string> = { START: "iniciou a produção de", PAUSE: "pausou", RESUME: "retomou a produção de", FINISH: "finalizou", REOPEN: "reabriu" };
+            systemTicketComment(ticket, `${verbs[action]} “${active.name}”`);
+          }
+          tickets.set(ticket.id, ticket);
+          syncTicketTasks(ticket);
+          persistTickets();
+          return json(response, 200, { ticket });
+        }
+        // Checklist do chamado (próximas ações de cada etapa).
+        const ticketChecklistMatch = url.match(/^\/tickets\/([^/]+)\/checklist$/);
+        if (ticketChecklistMatch && request.method === "POST") {
+          const ticket = tickets.get(ticketChecklistMatch[1]);
+          if (!ticket || !canSeeTicket(ticket))
+            return json(response, 404, { message: "Chamado não encontrado." });
+          const involved = ticket.assigneeId === currentUser.id || ticket.requesterId === currentUser.id || !!ticket.steps?.some((item) => item.assigneeId === currentUser.id);
+          if (!involved && !hasPermission(currentUser, "tickets.edit"))
+            return json(response, 403, { message: "Somente quem participa do chamado pode mexer no checklist." });
+          const input = await body(request), action = String(input.action || "");
+          ticket.checklist ||= [];
+          const item = ticket.checklist.find((value) => value.id === String(input.itemId || ""));
+          if (action === "ADD") {
+            const text = String(input.text || "").trim().slice(0, 200);
+            if (!text) return json(response, 400, { message: "Escreva o item do checklist." });
+            if (ticket.checklist.length >= 60) return json(response, 409, { message: "Limite de 60 itens no checklist." });
+            const stepId = ticket.steps?.some((value) => value.id === input.stepId) ? String(input.stepId) : undefined;
+            ticket.checklist.push({ id: randomUUID(), text, done: false, ...(stepId ? { stepId } : {}) });
+          } else if (action === "TOGGLE" && item) {
+            item.done = !item.done;
+            item.doneAt = item.done ? new Date().toISOString() : undefined;
+            item.doneByName = item.done ? currentUser.name : undefined;
+          } else if (action === "REMOVE" && item) {
+            ticket.checklist = ticket.checklist.filter((value) => value.id !== item.id);
           } else return json(response, 400, { message: "Ação inválida." });
           tickets.set(ticket.id, ticket);
           persistTickets();
@@ -4883,7 +5167,8 @@ function localApi(
             if (existsSync(storagePath)) unlinkSync(storagePath);
             return json(response, 400, { message: "Arquivo inválido ou muito grande." });
           }
-          const attachment: TicketAttachment = { id, name, contentType, sizeBytes, storagePath, uploadedById: currentUser.id, uploadedByName: currentUser.name, createdAt: new Date().toISOString() };
+          const stepId = String(request.headers["x-ticket-step"] || "");
+          const attachment: TicketAttachment = { id, name, contentType, sizeBytes, storagePath, uploadedById: currentUser.id, uploadedByName: currentUser.name, createdAt: new Date().toISOString(), ...(ticket.steps?.some((item) => item.id === stepId) ? { stepId } : {}) };
           ticket.attachments.push(attachment);
           // Arquivos enviados junto com a abertura não poluem o histórico.
           if (Date.now() - new Date(ticket.createdAt).getTime() > 120000) {
@@ -5013,6 +5298,7 @@ function localApi(
           ].filter(Boolean) as string[];
           if (changes.length) systemTicketComment(ticket, changes.join(" · "));
           tickets.set(ticket.id, ticket);
+          syncTicketTasks(ticket);
           persistTickets();
           return json(response, 200, { ticket });
         }
@@ -5025,6 +5311,7 @@ function localApi(
               message: "Você não possui permissão para excluir chamados.",
             });
           (ticket.attachments || []).forEach(removeTicketAttachmentFile);
+          syncTicketTasks(ticket, { deleted: true });
           tickets.delete(ticket.id);
           persistTickets();
           return json(response, 200, { ok: true });
@@ -5045,6 +5332,7 @@ function localApi(
           ),
           canViewTaskTeam = currentUser.profile === "MASTER" || teamDepartmentIds.size > 0;
         const canSeeTask = (task: WorkTask) =>
+          isDirectorsMember(currentUser) ||
           (canViewTaskTeam &&
             (currentUser.profile === "MASTER" ||
               managedTeamUserIds.has(task.responsibleId) ||
@@ -5216,6 +5504,8 @@ function localApi(
           const task = workTasks.get(taskReviewSubmitMatch[1]);
           if (!task || !canSeeTask(task))
             return json(response, 404, { message: "Tarefa não encontrada." });
+          if (task.ticketId)
+            return json(response, 409, { message: `A aprovação desta demanda é a do chamado ${task.ticketCode || ""}: envie a entrega pela página do chamado.` });
           if (
             task.responsibleId !== currentUser.id &&
             task.createdBy !== currentUser.id &&
@@ -5594,6 +5884,31 @@ function localApi(
             return json(response, 409, {
               message: "Uma demanda recusada está encerrada definitivamente.",
             });
+          // Demanda de chamado: mover o status vira ação no cronômetro da etapa; a entrega é pelo chamado.
+          const linkedTicket = task.ticketId ? tickets.get(task.ticketId) : undefined;
+          if (task.ticketStepId && input.status !== undefined && input.status !== task.status) {
+            const step = linkedTicket?.steps?.find((item) => item.id === task.ticketStepId);
+            if (!linkedTicket || !step)
+              return json(response, 409, { message: "O chamado desta demanda não existe mais." });
+            if (step.status !== "ACTIVE" || linkedTicket.status === "CLOSED")
+              return json(response, 409, { message: `Esta etapa do chamado ${linkedTicket.code} já foi entregue ou encerrada.` });
+            if (step.assigneeId !== currentUser.id && !hasPermission(currentUser, "tickets.edit"))
+              return json(response, 403, { message: `Somente ${step.assigneeName} pode mexer nesta etapa do chamado.` });
+            const plan = workActionsForTaskStatus(String(input.status), step.work?.state || "NOT_STARTED", linkedTicket.code);
+            if ("error" in plan) return json(response, 409, { message: plan.error });
+            const moment = new Date();
+            try {
+              for (const action of plan.actions) step.work = applyWorkAction(step.work, action, moment);
+            } catch (cause) {
+              return json(response, 409, { message: cause instanceof Error ? cause.message : "Ação inválida." });
+            }
+            if (plan.actions.length) {
+              linkedTicket.updatedAt = moment.toISOString();
+              const verbs: Record<string, string> = { START: "iniciou a produção de", PAUSE: "pausou", RESUME: "retomou a produção de", FINISH: "finalizou", REOPEN: "reabriu" };
+              linkedTicket.comments.push({ id: randomUUID(), authorId: currentUser.id, authorName: currentUser.name, message: `${plan.actions.map((action) => verbs[action]).join(" e ")} “${step.name}” pelo Creative Ops`, mentions: [], createdAt: linkedTicket.updatedAt, kind: "SYSTEM" });
+            }
+            delete input.status;
+          }
           if (
             ["WAITING_APPROVAL", "CHANGES_REQUESTED", "APPROVED"].includes(
               input.status,
@@ -5683,6 +5998,11 @@ function localApi(
               createdAt: now,
             });
           workTasks.set(task.id, task);
+          // Campos que vêm do chamado (status, responsável, prazo, título) voltam a seguir a etapa.
+          if (linkedTicket) {
+            syncTicketTasks(linkedTicket);
+            persistTickets();
+          }
           persistWorkTasks();
           return json(response, 200, { task });
         }
@@ -5709,15 +6029,40 @@ function localApi(
               message: "Você não possui acesso à agenda.",
             });
           const google = await googleAgendaEvents(currentUser);
+          // Quem vê a agenda da equipe também vê o que os colegas marcaram direto no Google
+          // deles. O mesmo convite pode estar em mais de uma agenda: vale o primeiro.
+          const teamGoogle = hasPermission(currentUser, "calendar.view_team")
+            ? await Promise.all(
+                [...users.values()]
+                  .filter((user) => user.id !== currentUser.id && !user.clientId && googleCalendarConnected(user.id))
+                  .map((user) => googleAgendaEvents(user).then((result) => result.events)),
+              )
+            : [];
+          const googleEvents = [...new Map([...google.events, ...teamGoogle.flat()].reverse().map((event) => [event.id, event])).values()];
           return json(response, 200, {
             events: [...calendarEvents.values()]
               .filter(canSeeEvent)
-              .concat(google.events)
+              .concat(googleEvents)
               .sort((a, b) => a.startAt.localeCompare(b.startAt)),
             google: { connected: googleCalendarConnected(currentUser.id), error: google.error },
             canViewTeam: hasPermission(currentUser, "calendar.view_team"),
             canEditAll: hasPermission(currentUser, "calendar.edit_all"),
+            calendarColors: currentUser.calendarColors || {},
           });
+        }
+        // Cor de uma agenda na visão de quem escolheu (como no Google Agenda). Vazio volta à cor padrão.
+        if (url === "/calendar/colors" && request.method === "PUT") {
+          if (!hasPermission(currentUser, "calendar.view"))
+            return json(response, 403, { message: "Você não possui acesso à agenda." });
+          const input = await body(request), ownerId = String(input.ownerId || ""), color = validCalendarColor(input.color);
+          if (!users.has(ownerId)) return json(response, 400, { message: "Agenda inválida." });
+          const colors = { ...(currentUser.calendarColors || {}) };
+          if (color) colors[ownerId] = color;
+          else delete colors[ownerId];
+          currentUser.calendarColors = colors;
+          users.set(currentUser.id, currentUser);
+          persistUsers();
+          return json(response, 200, { calendarColors: colors });
         }
         if (url === "/calendar/events" && request.method === "POST") {
           if (!hasPermission(currentUser, "calendar.create"))
@@ -5758,6 +6103,7 @@ function localApi(
               taskId: String(input.taskId || ""),
               recurrence: String(input.recurrence || "NONE"),
               reminderMinutes: Number(input.reminderMinutes || 15),
+              colorId: validEventColorId(input.colorId),
               createdAt: now,
               updatedAt: now,
             };
@@ -5790,6 +6136,7 @@ function localApi(
           }
           if (input.description !== undefined) patch.description = String(input.description).trim();
           if (input.location !== undefined) patch.location = String(input.location).trim();
+          if (input.colorId !== undefined) patch.colorId = validEventColorId(input.colorId) || null;
           if (input.startAt !== undefined || input.endAt !== undefined) {
             const startAt = new Date(String(input.startAt || "")), endAt = new Date(String(input.endAt || ""));
             if (Number.isNaN(startAt.getTime()) || Number.isNaN(endAt.getTime()) || endAt <= startAt)
@@ -5801,6 +6148,20 @@ function localApi(
           const result = await googleResponse.json().catch(() => ({})) as { error?: { message?: string } };
           if (!googleResponse.ok)
             return json(response, googleResponse.status === 404 || googleResponse.status === 410 ? 404 : 502, { message: result.error?.message || "Não foi possível atualizar o evento no Google Agenda." });
+          googleAgendaCache.delete(currentUser.id);
+          return json(response, 200, { ok: true });
+        }
+        // Excluir um evento do próprio Google Agenda (os convidados são avisados pelo Google).
+        if (googleOnlyMatch && request.method === "DELETE") {
+          if (!hasPermission(currentUser, "calendar.delete") && !hasPermission(currentUser, "calendar.edit"))
+            return json(response, 403, { message: "Você não possui permissão para excluir eventos." });
+          if (!googleCalendarConnected(currentUser.id))
+            return json(response, 409, { message: "Conecte sua conta Google em Configurações para excluir eventos do Google Agenda." });
+          const googleResponse = await googleCalendarFetch(currentUser.id, `/calendars/primary/events/${encodeURIComponent(decodeURIComponent(googleOnlyMatch[1]))}?sendUpdates=all`, { method: "DELETE" });
+          if (!googleResponse.ok && googleResponse.status !== 404 && googleResponse.status !== 410) {
+            const result = await googleResponse.json().catch(() => ({})) as { error?: { message?: string } };
+            return json(response, 502, { message: result.error?.message || "Não foi possível excluir o evento no Google Agenda." });
+          }
           googleAgendaCache.delete(currentUser.id);
           return json(response, 200, { ok: true });
         }
@@ -5859,6 +6220,7 @@ function localApi(
             participantIds: Array.isArray(input.participantIds)
               ? input.participantIds.map(String).filter((id) => users.has(id))
               : event.participantIds,
+            colorId: input.colorId !== undefined ? validEventColorId(input.colorId) : event.colorId,
             updatedAt: new Date().toISOString(),
           });
           calendarEvents.set(event.id, event);
@@ -5878,15 +6240,24 @@ function localApi(
           const event = calendarEvents.get(calendarMatch[1]);
           if (!event || !canSeeEvent(event))
             return json(response, 404, { message: "Evento não encontrado." });
+          // O próprio usuário exclui os seus agendamentos; os de outras pessoas só quem
+          // pode editar todas as agendas (gestão, Diretoria com permissão geral).
           if (
             event.ownerId !== currentUser.id &&
-            !hasPermission(currentUser, "calendar.delete")
+            !hasPermission(currentUser, "calendar.edit_all")
           )
             return json(response, 403, {
-              message: "Você não pode excluir este evento.",
+              message: "Você só pode excluir seus próprios agendamentos.",
             });
           await removeCalendarEventFromGoogle(event, true);
           calendarEvents.delete(event.id);
+          // Excluir o compromisso de uma reunião ainda não realizada cancela a reunião.
+          const linkedMeeting = [...meetings.values()].find((value) => value.calendarEventId === event.id);
+          if (linkedMeeting) {
+            if (["SCHEDULED", "PAUSED"].includes(linkedMeeting.status)) linkedMeeting.status = "CANCELLED";
+            Object.assign(linkedMeeting, { calendarEventId: "", updatedAt: new Date().toISOString() });
+            persistMeetings();
+          }
           persistCalendarEvents();
           return json(response, 200, { ok: true });
         }
@@ -6492,6 +6863,18 @@ function localApi(
           persistClientReportSchedules();
           return json(response, 200, { schedule });
         }
+        // Projetos de todos os clientes, para o painel da Diretoria (Projetos novos).
+        if (url === "/projects" && request.method === "GET") {
+          if (!hasPermission(currentUser, "clients.view"))
+            return json(response, 403, { message: "Você não possui acesso aos clientes." });
+          return json(response, 200, {
+            projects: [...onboardingProjects.values()].map((project) => ({
+              ...project,
+              clientName: clients.get(project.clientId)?.name || "Cliente removido",
+              responsibleName: users.get(project.responsibleId || "")?.name || "",
+            })),
+          });
+        }
         if (url === "/clients" && request.method === "GET") {
           if (!hasPermission(currentUser, "clients.view"))
             return json(response, 403, {
@@ -6508,19 +6891,43 @@ function localApi(
           });
         }
         // Dados públicos do CNPJ na Receita Federal (via BrasilAPI) para preencher o cadastro.
+        // CEP do endereço do cliente (ViaCEP): devolve rua, bairro, cidade e UF.
+        const postalLookupMatch = url.match(/^\/clients\/cep\/(\d{8})$/);
+        if (postalLookupMatch && request.method === "GET") {
+          if (!hasPermission(currentUser, "clients.create") && !hasPermission(currentUser, "clients.edit"))
+            return json(response, 403, { message: "Você não possui permissão para cadastrar clientes." });
+          try {
+            const result = await fetch(`https://viacep.com.br/ws/${postalLookupMatch[1]}/json/`, { signal: AbortSignal.timeout(6000) });
+            const data = await result.json().catch(() => ({})) as { logradouro?: string; bairro?: string; localidade?: string; uf?: string; erro?: boolean | string };
+            if (!result.ok || data.erro) return json(response, 404, { message: "CEP não encontrado. Preencha o endereço manualmente." });
+            return json(response, 200, { street: data.logradouro || "", neighborhood: data.bairro || "", city: data.localidade || "", state: data.uf || "" });
+          } catch {
+            return json(response, 502, { message: "A consulta de CEP está indisponível agora. Preencha manualmente." });
+          }
+        }
         const cnpjLookupMatch = url.match(/^\/clients\/cnpj\/(\d{14})$/);
         if (cnpjLookupMatch && request.method === "GET") {
           if (!hasPermission(currentUser, "clients.create") && !hasPermission(currentUser, "clients.edit"))
             return json(response, 403, { message: "Você não possui permissão para cadastrar clientes." });
           if (!validCNPJ(cnpjLookupMatch[1])) return json(response, 400, { message: "CNPJ inválido." });
           try {
-            const result = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${cnpjLookupMatch[1]}`, { signal: AbortSignal.timeout(12000), headers: { accept: "application/json" } });
+            const result = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${cnpjLookupMatch[1]}`, {
+              signal: AbortSignal.timeout(12000),
+              // Sem User-Agent próprio a BrasilAPI recusa (403) as chamadas feitas pelo Node.
+              headers: { accept: "application/json", "user-agent": "PW-OS/1.0 (cadastro de clientes)" },
+            });
             if (result.status === 404) return json(response, 404, { message: "CNPJ não encontrado na Receita Federal." });
             if (!result.ok) return json(response, 502, { message: "A consulta à Receita está indisponível agora. Preencha manualmente ou tente de novo." });
             const data = await result.json() as Record<string, unknown>;
             const textOf = (value: unknown) => String(value ?? "").trim();
             const titleCase = (value: string) => value.toLowerCase().replace(/(^|[\s/(-])(\p{L})/gu, (_, sep: string, letter: string) => sep + letter.toUpperCase());
-            const phone = textOf(data.ddd_telefone_1).replace(/\D/g, "");
+            const phone = textOf(data.ddd_telefone_1).replace(/\D/g, ""), phone2 = textOf(data.ddd_telefone_2).replace(/\D/g, "");
+            // Quadro de sócios (QSA): administradores primeiro, para virar o contato principal.
+            const partners = (Array.isArray(data.qsa) ? data.qsa as Record<string, unknown>[] : [])
+              .map((item) => ({ name: titleCase(textOf(item.nome_socio)), role: textOf(item.qualificacao_socio) }))
+              .filter((item) => item.name && !/^\*+$/.test(item.name))
+              .sort((a, b) => Number(/administrador/i.test(b.role)) - Number(/administrador/i.test(a.role)))
+              .slice(0, 10);
             const address = [
               [textOf(data.descricao_tipo_de_logradouro), textOf(data.logradouro)].filter(Boolean).join(" "),
               textOf(data.numero), textOf(data.complemento), textOf(data.bairro),
@@ -6533,14 +6940,48 @@ function localApi(
               segment: titleCase(textOf(data.cnae_fiscal_descricao)),
               email: textOf(data.email).toLowerCase(),
               phone: phone.length >= 10 ? phone : "",
+              phone2: phone2.length >= 10 && phone2 !== phone ? phone2 : "",
+              partners,
               status: textOf(data.descricao_situacao_cadastral),
               openedAt: textOf(data.data_inicio_atividade),
               address: titleCase(address),
+              addressParts: {
+                postalCode: textOf(data.cep).replace(/^(\d{5})(\d{3})$/, "$1-$2"),
+                street: titleCase([textOf(data.descricao_tipo_de_logradouro), textOf(data.logradouro)].filter(Boolean).join(" ")),
+                number: textOf(data.numero), complement: titleCase(textOf(data.complemento)),
+                neighborhood: titleCase(textOf(data.bairro)), city: titleCase(textOf(data.municipio)), state: textOf(data.uf).toUpperCase(),
+              },
             });
           } catch {
             return json(response, 502, { message: "A consulta à Receita está indisponível agora. Preencha manualmente ou tente de novo." });
           }
         }
+        // Contatos escolhidos da Receita Federal no cadastro (sócios e telefones). Quem já
+        // é contato do cliente, pelo nome, não é duplicado.
+        const addReceitaContacts = (client: Client, raw: unknown, now: string) => {
+          let list: unknown;
+          try { list = typeof raw === "string" ? JSON.parse(raw || "[]") : raw; } catch { list = []; }
+          if (!Array.isArray(list)) return 0;
+          const existing = new Set([...clientContacts.values(), ...crmContacts.values()]
+            .filter((item) => item.clientId === client.id).map((item) => item.name.trim().toLowerCase()));
+          let added = 0;
+          for (const item of list.slice(0, 12) as Record<string, unknown>[]) {
+            const name = String(item?.name || "").trim().slice(0, 120), key = name.toLowerCase();
+            const phone = String(item?.phone || "").replace(/\D/g, "").slice(0, 13);
+            if (name.length < 2 || existing.has(key)) continue;
+            existing.add(key);
+            const contact: ClientContact = {
+              id: randomUUID(), clientId: client.id, name,
+              role: String(item?.role || "").trim().slice(0, 80) || "Contato (Receita Federal)",
+              email: String(item?.email || "").trim().toLowerCase().slice(0, 160),
+              phone, whatsapp: "", primary: false, createdAt: now,
+            };
+            clientContacts.set(contact.id, contact);
+            added += 1;
+          }
+          if (added) persistClientContacts();
+          return added;
+        };
         if (url === "/clients" && request.method === "POST") {
           if (!hasPermission(currentUser, "clients.create"))
             return json(response, 403, {
@@ -6577,6 +7018,7 @@ function localApi(
             id: randomUUID(),
             name,
             legalName: String(input.legalName || "").trim(),
+            address: clientAddress(input),
             document,
             status: ["ACTIVE", "ATTENTION", "RISK", "INACTIVE"].includes(
               input.status,
@@ -6657,6 +7099,7 @@ function localApi(
             crmContacts.set(crmContact.id, crmContact);
             persistClientContacts();
           }
+          addReceitaContacts(client, input.receitaContacts, now);
           persistCrmCompanies();
           persistCrmContacts();
           persistClients();
@@ -6797,6 +7240,10 @@ function localApi(
             })),
             services,
             projects,
+            projectUsers: [...users.values()]
+              .filter((item) => !item.clientId)
+              .map((item) => ({ id: item.id, name: item.name }))
+              .sort((a, b) => a.name.localeCompare(b.name, "pt-BR")),
             timeline: [...commercial].sort((a, b) =>
               a.createdAt.localeCompare(b.createdAt),
             ),
@@ -6864,9 +7311,12 @@ function localApi(
             primaryContactPhone,
             ...clientOwner(input),
             notes: String(input.notes || "").trim(),
+            // Formulários antigos (sem os campos de endereço) não apagam o endereço salvo.
+            ...("addressPostalCode" in input ? { address: clientAddress(input) } : {}),
             updatedAt: new Date().toISOString(),
           });
           clients.set(client.id, client);
+          addReceitaContacts(client, input.receitaContacts, client.updatedAt);
           const linkedCompany = [...crmCompanies.values()].find(
             (item) => item.clientId === client.id,
           );
@@ -7117,39 +7567,62 @@ function localApi(
           if (!client)
             return json(response, 404, { message: "Cliente não encontrado." });
           const input = await body(request),
-            name = String(input.name || "").trim();
-          if (name.length < 2)
+            fields = projectFields(input);
+          if (fields.name.length < 2)
             return json(response, 400, {
               message: "Informe o nome do projeto.",
             });
+          if (fields.responsibleId && !users.has(fields.responsibleId))
+            return json(response, 400, { message: "Responsável inválido." });
+          const now = new Date().toISOString();
           const project: OnboardingProject = {
             id: randomUUID(),
             clientId: client.id,
             serviceId: String(input.serviceId || ""),
-            name,
-            objective: String(input.objective || "").trim(),
-            responsibleId: String(input.responsibleId || ""),
             teamIds: Array.isArray(input.teamIds)
               ? input.teamIds.map(String).filter((id) => users.has(id))
               : [],
-            startDate: String(input.startDate || ""),
-            dueDate: String(input.dueDate || ""),
-            progress: 0,
-            status: [
-              "PLANNED",
-              "ACTIVE",
-              "PAUSED",
-              "COMPLETED",
-              "CANCELLED",
-            ].includes(input.status)
-              ? input.status
-              : "PLANNED",
-            createdAt: new Date().toISOString(),
-            tasks: [],
+            ...fields,
+            createdAt: now,
+            updatedAt: now,
           };
           onboardingProjects.set(project.id, project);
           persistProjects();
           return json(response, 201, { project });
+        }
+        const clientProjectItem = url.match(
+          /^\/clients\/([^/]+)\/projects\/([^/]+)$/,
+        );
+        if (clientProjectItem && ["PATCH", "DELETE"].includes(request.method || "")) {
+          if (!hasPermission(currentUser, "clients.edit"))
+            return json(response, 403, {
+              message: "Você não possui permissão para editar clientes.",
+            });
+          const project = onboardingProjects.get(clientProjectItem[2]);
+          if (!project || project.clientId !== clientProjectItem[1])
+            return json(response, 404, { message: "Projeto não encontrado." });
+          if (request.method === "DELETE") {
+            onboardingProjects.delete(project.id);
+            // Tarefas e eventos ligados ao projeto continuam, só perdem o vínculo.
+            let tasksChanged = false, eventsChanged = false;
+            for (const task of workTasks.values())
+              if (task.projectId === project.id) { task.projectId = ""; tasksChanged = true; }
+            for (const event of calendarEvents.values())
+              if (event.projectId === project.id) { event.projectId = ""; eventsChanged = true; }
+            if (tasksChanged) persistWorkTasks();
+            if (eventsChanged) persistCalendarEvents();
+            persistProjects();
+            return json(response, 200, { ok: true });
+          }
+          const fields = projectFields(await body(request), project);
+          if (fields.name.length < 2)
+            return json(response, 400, { message: "Informe o nome do projeto." });
+          if (fields.responsibleId && !users.has(fields.responsibleId))
+            return json(response, 400, { message: "Responsável inválido." });
+          Object.assign(project, fields, { updatedAt: new Date().toISOString() });
+          onboardingProjects.set(project.id, project);
+          persistProjects();
+          return json(response, 200, { project });
         }
         if (url === "/crm/contacts" && request.method === "GET") {
           if (!hasPermission(currentUser, "crm.view"))
@@ -9074,6 +9547,8 @@ function localApi(
                 if (!assignment?.responsibleId) return;
                 if (!isMaster && assignment?.responsibleId !== currentUser.id)
                   return;
+                // Conta oculta no pedido de crédito (cliente pausado) não gera alerta.
+                if (creditHidden[`META_ADS:${input.accountId}`]) return;
                 const readKey = `${currentUser.id}:${input.id}`;
                 alerts.push({
                   ...input,
@@ -9141,7 +9616,7 @@ function localApi(
               isMaster = currentUser.profile === "MASTER";
             campaigns.forEach((campaign) => {
               if (campaign.status !== "ACTIVE" || (Number(campaign.dailyBudget || 0) <= 0 && Number(campaign.lifetimeBudget || 0) <= 0) || Number(campaign.spend || 0) <= 0) return;
-              if (campaign.remainingBudget == null) return;
+              if (campaign.remainingBudget == null || creditHidden[`${platform}:${campaign.accountId}`]) return;
               const dailyBudget = Number(campaign.dailyBudget || 0), lifetimeBudget = Number(campaign.lifetimeBudget || 0), totalBudget = lifetimeBudget > 0 ? lifetimeBudget : dailyBudget * days,
                 balance = Math.max(0, Number(campaign.remainingBudget)), lowThreshold = lifetimeBudget > 0 ? lifetimeBudget * .3 : dailyBudget * 2;
               if (balance > lowThreshold) return;
@@ -9475,20 +9950,22 @@ function localApi(
             return json(response, 400, { message: "Conta inválida." });
           const key = `${platform}:${accountId}`, now = new Date().toISOString();
           let mark: CreditRequestMark = { ...(creditRequests[key] || {}) };
+          const closedCycle = mark.requestedAt ? { requestedAt: mark.requestedAt, ...(mark.receivedAt ? { receivedAt: mark.receivedAt } : {}) } : mark.previous;
           if (step === "CLOSE") {
             // O saldo voltou a cobrir o alerta: encerra o ciclo que o painel viu, nunca
-            // uma solicitação feita depois dele.
-            if (mark.requestedAt && mark.requestedAt === String(input.requestedAt || "")) mark = {};
+            // uma solicitação feita depois dele. O ciclo encerrado fica como "último pedido".
+            if (mark.requestedAt && mark.requestedAt === String(input.requestedAt || "")) mark = { previous: closedCycle };
           } else if (step === "REQUESTED") {
-            // Uma nova solicitação começa um novo ciclo; desmarcar limpa tudo.
-            mark = checked ? { requestedAt: now, requestedBy: currentUser.name } : {};
+            // Uma nova solicitação começa um novo ciclo (o anterior vira "último pedido");
+            // desmarcar volta para Pendente, mantendo o último ciclo encerrado.
+            mark = checked ? { requestedAt: now, requestedBy: currentUser.name, ...(closedCycle ? { previous: closedCycle } : {}) } : { ...(mark.previous ? { previous: mark.previous } : {}) };
           } else if (checked) {
             mark = { ...mark, requestedAt: mark.requestedAt || now, requestedBy: mark.requestedBy || currentUser.name, receivedAt: now, receivedBy: currentUser.name };
           } else {
             delete mark.receivedAt;
             delete mark.receivedBy;
           }
-          if (mark.requestedAt) creditRequests[key] = mark;
+          if (mark.requestedAt || mark.previous) creditRequests[key] = mark;
           else delete creditRequests[key];
           persistCreditRequests();
           return json(response, 200, { key, request: creditRequests[key] || null });
@@ -9514,6 +9991,7 @@ function localApi(
           return json(response, 200, { key, hidden: creditHidden[key] || null });
         }
         // Revisões do portfólio e das campanhas das contas dele, inclusive das que já saíram da conta.
+        if (url.startsWith("/media/portfolio/reviews")) syncPortfolioReviewsFromDisk();
         if (url.startsWith("/media/portfolio/reviews") && request.method === "GET") {
           if (!hasPermission(currentUser, "media.view"))
             return json(response, 403, { message: "Você não possui acesso às campanhas." });
@@ -10188,6 +10666,18 @@ function localApi(
             }
             return payload;
           };
+          // Saldo pré-pago é complementar: sem permissão ou sem pré-pago, segue o limite de gastos.
+          const withMetaPrepaidBalance = async (account: MetaAccountPayload) => {
+            try {
+              const funding = await graph<{ is_prepay_account?: boolean; funding_source_details?: { display_string?: string } }>(
+                `${account.id}?fields=is_prepay_account,funding_source_details`,
+              );
+              account.prepaidBalance = funding.is_prepay_account ? metaPrepaidBalance(funding.funding_source_details?.display_string) : null;
+            } catch {
+              /* forma de pagamento opcional */
+            }
+            return account;
+          };
           try {
             const listAll = async <T>(path: string, allConnections = false) => {
               const rows: T[] = [];
@@ -10305,9 +10795,9 @@ function localApi(
             const campaignLandingPages = new Map<string, string>();
             await forEachConcurrent(accountRefs, 4, async (item) => {
               try {
-              const accountDetail = await graph<MetaAccountPayload>(
+              const accountDetail = await withMetaPrepaidBalance(await graph<MetaAccountPayload>(
                 `${item.id}?fields=id,name,currency,amount_spent,spend_cap`,
-              );
+              ));
               const portfolio =
                 portfolioByAccount.get(accountDetail.id) ||
                 portfolioByAccount.get(accountDetail.id.replace(/^act_/, ""));
@@ -10740,6 +11230,8 @@ function localApi(
                   currency: account.currency || "BRL",
                   amountSpent: Number(account.amount_spent || 0) / 100,
                   spendCap: Number(account.spend_cap || 0) / 100,
+                  // Crédito pré-pago (Pix/boleto), lido do texto da forma de pagamento.
+                  prepaidBalance: account.prepaidBalance ?? null,
                   // A Graph API não expõe crédito/saldo disponível no nível da
                   // conta: `balance` é o valor já faturável (o que se deve à
                   // Meta), o oposto do saldo restante. Sem um saldo confiável,
@@ -10874,7 +11366,8 @@ function localApi(
           return json(response, 200, { ok: true });
         }
         if (url === "/users" && request.method === "GET") {
-          if (!hasPermission(currentUser, "users.view") && !hasPermission(currentUser, "tasks.assign") && !hasPermission(currentUser, "tasks.view_team") && !hasPermission(currentUser, "creative_ops.view_team_demands"))
+          // A agenda da equipe precisa da lista de pessoas para o seletor de agendas.
+          if (!["users.view", "tasks.assign", "tasks.view_team", "creative_ops.view_team_demands", "calendar.view_team"].some((permission) => hasPermission(currentUser, permission)))
             return json(response, 403, { message: "Permissão insuficiente." });
           return json(response, 200, {
             users: [...users.values()].map(publicUser),
@@ -10994,12 +11487,23 @@ function localApi(
             return json(response, 400, {
               message: "Setor inválido para este usuário.",
             });
+          // Correção do e-mail de login: exclusiva do Master.
+          const nextEmail = input.email === undefined ? user.email : String(input.email).trim().toLowerCase();
+          if (nextEmail !== user.email) {
+            if (currentUser.profile !== "MASTER")
+              return json(response, 403, { message: "Somente o Master pode alterar o e-mail de um usuário." });
+            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(nextEmail) || nextEmail.length > 160)
+              return json(response, 400, { message: "Informe um e-mail válido." });
+            if ([...users.values()].some((item) => item.id !== user.id && item.email.toLowerCase() === nextEmail))
+              return json(response, 409, { message: "Este e-mail já é usado por outro usuário." });
+          }
           const overrides =
             input.permissionOverrides &&
             typeof input.permissionOverrides === "object"
               ? input.permissionOverrides
               : {};
           const previousDepartment = user.departmentId;
+          user.email = nextEmail;
           user.roleId = role.id;
           user.role = role.name;
           user.departmentId = department?.id;
@@ -11034,6 +11538,20 @@ function localApi(
                 : "ROLE",
             })),
           });
+        }
+        // Cor oficial de uma pessoa (agenda, painéis e listas). Vazio volta à cor padrão.
+        const userColorMatch = url.match(/^\/users\/([^/]+)\/color$/);
+        if (userColorMatch && request.method === "PUT") {
+          if (!hasPermission(currentUser, "users.manage_colors"))
+            return json(response, 403, { message: "Somente a Diretoria pode escolher as cores da equipe." });
+          const user = users.get(userColorMatch[1]);
+          if (!user || user.profile === "CLIENT") return json(response, 404, { message: "Usuário não encontrado." });
+          const color = validCalendarColor((await body(request)).color);
+          if (color) user.color = color;
+          else delete user.color;
+          users.set(user.id, user);
+          persistUsers();
+          return json(response, 200, { id: user.id, color: user.color || "" });
         }
         const temporaryPasswordMatch = url.match(/^\/users\/([^/]+)\/temporary-password$/);
         if (temporaryPasswordMatch && request.method === "POST") {

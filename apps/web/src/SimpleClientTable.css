@@ -135,3 +135,29 @@ body .score-reason-popover.score-reason-floating{left:var(--score-left,12px)!imp
 .tv-board .simple-client-table .simple-expand svg,.tv-board .simple-client-table .simple-edit svg{width:18px;height:18px}
 .simple-comparison .compiled-metric{display:flex;flex-direction:column;gap:4px}.simple-comparison .compiled-metric>b{font-size:11px;white-space:nowrap}.simple-comparison .compiled-metric>small{font-size:9px;line-height:1.5}.simple-comparison .compiled-metric em{display:block;font-size:8px;font-style:normal;color:var(--subtle)}
 .simple-comparison .compiled-metric .good{color:#22844f}.simple-comparison .compiled-metric .bad{color:#c54a4a}.simple-comparison .compiled-metric .neutral{color:var(--subtle)}
+
+/* Ocultar cliente da Gestão de mídia (mesma lista do pedido de crédito) */
+/* Editar e Ocultar: dois botões pequenos só com ícone, ao lado do nome */
+.simple-client-name>span.simple-client-actions{display:flex;flex:0 0 auto;gap:4px}
+.simple-client-name .simple-client-icon{display:grid;place-items:center;width:28px;height:28px;padding:0;border:1px solid var(--border);border-radius:7px;background:var(--surface);color:var(--accent);cursor:pointer;transition:border-color .15s,color .15s,background .15s}
+.simple-client-name .simple-client-icon svg{width:14px;height:14px}
+.simple-client-name .simple-client-icon:hover{border-color:color-mix(in srgb,var(--accent) 45%,var(--border));background:color-mix(in srgb,var(--accent) 6%,var(--surface))}
+.simple-client-name .simple-client-icon.hide{color:var(--subtle)}
+.simple-client-name .simple-client-icon.hide:hover{border-color:#efc1c1;background:#fff5f5;color:var(--red)}
+.simple-client-name .simple-client-icon:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.simple-client-name>span:not(.simple-client-actions){min-width:0}
+.simple-client-name>span:not(.simple-client-actions) b{overflow-wrap:break-word;word-break:normal}
+.media-hidden-toggle{display:inline-flex;align-items:center;gap:6px;height:40px;padding:0 13px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--text);font:inherit;font-size:11px;font-weight:700;white-space:nowrap;cursor:pointer}
+.media-hidden-toggle:hover{border-color:var(--accent);color:var(--accent)}
+.media-hidden-toggle svg{width:15px;height:15px}
+.media-hidden-error{margin:0 0 10px;color:var(--red);font-size:11px}
+
+/* "Analisar" vira "Analisado" (verde) quando a análise do ciclo de 7 dias já foi feita */
+.campaign-analyze.analyzed,html[data-theme="light"] .campaign-analyze.analyzed{border-color:#1f9d5c!important;background:#e5f5ed!important;color:#16805c!important}
+html[data-theme="dark"] .campaign-analyze.analyzed{border-color:#2fb36d!important;background:#123526!important;color:#5bd58d!important}
+/* Mesmo tamanho do "Analisar": não passa da coluna */
+.campaign-analyze.analyzed,.campaign-analyze.partial{gap:3px!important;white-space:nowrap;max-width:100%}
+.simple-client-table .campaign-analyze.analyzed{padding:5px 7px}
+.campaign-analyze.analyzed svg{width:11px!important;height:11px!important;flex:0 0 auto}
+.campaign-analyze.partial{border-color:#d9a21b!important;color:#a26a05!important}
+html[data-theme="dark"] .campaign-analyze.partial{color:#f0c050!important}

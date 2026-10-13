@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addBusinessDays, applyFlowAction, canReturnStep, pendingAdjustment, flowStatus, reopenFlow, scheduleSteps, ticketFlows, type TicketStep } from "./ticketFlows";
+import { addBusinessDays, applyFlowAction, canReturnStep, mergeFlows, pendingAdjustment, flowStatus, reopenFlow, sanitizeFlow, scheduleSteps, ticketFlows, type TicketStep } from "./ticketFlows";
 
 const steps = (...roles: TicketStep["role"][]): TicketStep[] =>
   roles.map((role, index) => ({ id: `s${index}`, name: `Etapa ${index + 1}`, role, days: 1, assigneeId: `u${index}`, assigneeName: `Pessoa ${index}`, status: index === 0 ? "ACTIVE" : "PENDING", dueAt: "", startedAt: index === 0 ? "2026-10-05T12:00:00.000Z" : undefined }));
@@ -52,5 +52,37 @@ describe("ajustes solicitados", () => {
     const returned = applyFlowAction(sent, "RETURN", "Bia", monday, " Trocar a foto ").steps;
     expect(pendingAdjustment(returned)).toMatchObject({ note: "Trocar a foto", byName: "Bia", fromStepName: "Etapa 2" });
     expect(pendingAdjustment(applyFlowAction(returned, "COMPLETE", "Ana", monday).steps)).toBeUndefined();
+  });
+});
+
+describe("cronômetro no fluxo", () => {
+  it("enviar a etapa para o relógio e devolver recomeça a etapa anterior", () => {
+    const flow = steps("EXECUTOR", "APPROVER");
+    flow[0].work = { state: "RUNNING", elapsedMs: 0, runningSince: "2026-10-05T11:00:00.000Z" };
+    const sent = applyFlowAction(flow, "COMPLETE", "Ana", monday);
+    expect(sent.steps[0].work).toMatchObject({ state: "PAUSED", elapsedMs: 3600000 });
+    const returned = applyFlowAction(sent.steps, "RETURN", "Bia", monday, "Trocar a cor");
+    expect(returned.steps[0].work).toMatchObject({ state: "NOT_STARTED", elapsedMs: 3600000 });
+  });
+});
+
+describe("tipos de chamado personalizados", () => {
+  it("edições salvas substituem o tipo padrão; tipos novos entram no fim; excluídos somem", () => {
+    const merged = mergeFlows([
+      { ...ticketFlows[0], name: "Atendimento rápido" },
+      { id: "custom-1", name: "Novo tipo", description: "", departmentId: "", steps: [{ name: "Fazer", role: "EXECUTOR", owner: "DEPARTMENT", days: 1 }] },
+      { ...ticketFlows[1], archived: true },
+    ]);
+    expect(merged[0].name).toBe("Atendimento rápido");
+    expect(merged.some((flow) => flow.id === ticketFlows[1].id)).toBe(false);
+    expect(merged.at(-1)).toMatchObject({ id: "custom-1", custom: true });
+  });
+
+  it("valida nome, etapas e a primeira etapa de execução", () => {
+    expect(sanitizeFlow({ name: "X", steps: [] })).toEqual({ error: "Dê um nome ao tipo de chamado." });
+    expect(sanitizeFlow({ name: "Tipo", steps: [] })).toEqual({ error: "Adicione pelo menos uma etapa." });
+    expect("error" in sanitizeFlow({ name: "Tipo", steps: [{ name: "Aprovar", role: "APPROVER" }] })).toBe(true);
+    expect(sanitizeFlow({ name: " Tipo ", steps: [{ name: "Fazer", role: "EXECUTOR", owner: "REQUESTER", days: 99 }] }))
+      .toEqual({ flow: { name: "Tipo", description: "", departmentId: "", steps: [{ name: "Fazer", role: "EXECUTOR", owner: "REQUESTER", days: 60 }] } });
   });
 });

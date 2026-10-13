@@ -66,7 +66,7 @@ type ViewProps = { store: Store; user: SessionUser; can: (permission: string) =>
 
 function PageHeader({ icon: Icon, crumb, title, subtitle, quote, actions }: { icon: typeof CalendarDays; crumb: string; title: string; subtitle: string; quote?: number; actions?: ReactNode }) {
   return <header className="mt-header">
-    <nav className="mt-crumbs" aria-label="Você está em"><NavLink to="/" aria-label="Início"><Home /></NavLink><ChevronRight /><NavLink to="/reunioes/agendadas">Reuniões</NavLink><ChevronRight /><b>{crumb}</b></nav>
+    <nav className="mt-crumbs" aria-label="Você está em"><NavLink to="/" aria-label="Início"><Home /></NavLink><ChevronRight /><NavLink to="/reunioes/agendadas">Customer Success</NavLink><ChevronRight /><b>{crumb}</b></nav>
     <div className="mt-header-row">
       <span className="mt-header-icon"><Icon /></span>
       <div className="mt-header-copy"><h1>{title}</h1><p>{subtitle}</p></div>
@@ -410,7 +410,7 @@ function LiveMeeting({ meeting, store, can, onDone }: ViewProps & { meeting: Mee
   const statementLength = draft.statements.reduce((sum, item) => sum + item.text.length, 0) + input.length;
 
   return <>
-    <nav className="mt-crumbs" aria-label="Você está em"><NavLink to="/" aria-label="Início"><Home /></NavLink><ChevronRight /><NavLink to="/reunioes/agendadas">Reuniões</NavLink><ChevronRight /><b>{completed ? "Editar registro" : "Em andamento"}</b></nav>
+    <nav className="mt-crumbs" aria-label="Você está em"><NavLink to="/" aria-label="Início"><Home /></NavLink><ChevronRight /><NavLink to="/reunioes/agendadas">Customer Success</NavLink><ChevronRight /><b>{completed ? "Editar registro" : "Em andamento"}</b></nav>
     <header className="mt-live-header">
       <span className="mt-client-logo" style={{ color: avatarTone(meeting.clientName) }}>{initials(meeting.clientName)}</span>
       <div className="mt-live-title"><Badge tone={badge[0]}>{live && <i className="mt-pulse" />}{badge[1].toUpperCase()}</Badge><h1>{meeting.clientName}</h1><p>{meeting.type === "FOLLOW_UP" ? "Reunião de acompanhamento" : typeLabels[meeting.type]}</p></div>
@@ -636,7 +636,7 @@ function DetailView({ store, can }: ViewProps) {
   const fileIcon = (mime: string) => mime.startsWith("image/") ? FileImage : /zip|rar|7z/.test(mime) ? FileArchive : FileText;
 
   return <>
-    <nav className="mt-crumbs" aria-label="Você está em"><NavLink to="/" aria-label="Início"><Home /></NavLink><ChevronRight /><NavLink to="/reunioes/agendadas">Reuniões</NavLink><ChevronRight /><NavLink to={completed ? "/reunioes/concluidas" : "/reunioes/agendadas"}>{completed ? "Concluídas" : "Agendadas"}</NavLink><ChevronRight /><b>Detalhes da Reunião</b></nav>
+    <nav className="mt-crumbs" aria-label="Você está em"><NavLink to="/" aria-label="Início"><Home /></NavLink><ChevronRight /><NavLink to="/reunioes/agendadas">Customer Success</NavLink><ChevronRight /><NavLink to={completed ? "/reunioes/concluidas" : "/reunioes/agendadas"}>{completed ? "Concluídas" : "Agendadas"}</NavLink><ChevronRight /><b>Detalhes da Reunião</b></nav>
     <header className="mt-detail-header">
       <span className="mt-header-icon"><CalendarCheck /></span>
       <div><Badge tone={state.tone}>{completed && <CheckCircle2 />}{completed ? "REUNIÃO CONCLUÍDA" : state.label.toUpperCase()}</Badge><h1>{meeting.clientName}</h1><p>{meeting.type === "FOLLOW_UP" ? "Reunião de acompanhamento" : typeLabels[meeting.type]}{meeting.unit ? ` · ${meeting.unit}` : ""}</p></div>

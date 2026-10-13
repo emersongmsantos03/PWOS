@@ -2,12 +2,15 @@
 // Um chamado nasce de um modelo: cada etapa tem papel, responsável e prazo em dias úteis.
 // A etapa só é concluída quando o responsável a envia para a próxima; aprovações podem
 // devolver o chamado para a etapa anterior.
+import { closeWork, reopenWorkForAdjustment, type TicketWork } from "./ticketWork";
 
 export type TicketStepRole = "EXECUTOR" | "APPROVER" | "CLIENT";
 // Quem assume a etapa por padrão: quem abriu o chamado ou o responsável do setor.
 export type TicketStepOwner = "REQUESTER" | "DEPARTMENT";
 export type TicketFlowStep = { name: string; role: TicketStepRole; owner: TicketStepOwner; days: number };
-export type TicketFlow = { id: string; name: string; description: string; departmentId: string; steps: TicketFlowStep[] };
+// `custom`: criado pela Diretoria; `archived`: tipo padrão excluído (some da lista, mas os
+// chamados abertos com ele continuam com as próprias etapas).
+export type TicketFlow = { id: string; name: string; description: string; departmentId: string; steps: TicketFlowStep[]; custom?: boolean; archived?: boolean };
 export type TicketStepStatus = "PENDING" | "ACTIVE" | "DONE";
 export type TicketStep = {
   id: string;
@@ -23,6 +26,10 @@ export type TicketStep = {
   completedByName?: string;
   // Preenchido quando uma aprovação devolve a etapa; some quando a etapa é concluída de novo.
   adjustment?: { note: string; byName: string; fromStepName: string; at: string };
+  // Cronômetro e rascunho de quem executa a etapa (ver ticketWork.ts).
+  work?: TicketWork;
+  // Demanda do Creative Ops que acompanha esta etapa (ver ticketTasks.ts).
+  taskId?: string;
 };
 export type TicketFlowStatus = "OPEN" | "IN_PROGRESS" | "WAITING" | "RESOLVED";
 export type TicketFlowAction = "COMPLETE" | "RETURN";
@@ -111,6 +118,39 @@ export const ticketFlows: TicketFlow[] = [
 
 export const findFlow = (id: string) => ticketFlows.find((flow) => flow.id === id);
 
+export const ticketStepOwnerLabels: Record<TicketStepOwner, string> = { DEPARTMENT: "Responsável do setor", REQUESTER: "Quem abriu o chamado" };
+const stepRoles = Object.keys(stepRoleLabels) as TicketStepRole[];
+
+// Tipos em vigor: os padrões (com as edições salvas por cima) e os criados pela Diretoria.
+export function mergeFlows(stored: TicketFlow[]) {
+  const byId = new Map(stored.map((flow) => [flow.id, flow]));
+  return [
+    ...ticketFlows.map((flow) => ({ ...flow, ...byId.get(flow.id), custom: false })),
+    ...stored.filter((flow) => !ticketFlows.some((item) => item.id === flow.id)).map((flow) => ({ ...flow, custom: true })),
+  ].filter((flow) => !flow.archived);
+}
+
+// Valida um tipo enviado pela tela. Devolve a mensagem de erro ou o tipo limpo.
+export function sanitizeFlow(input: unknown): { flow: Omit<TicketFlow, "id"> } | { error: string } {
+  const raw = (input || {}) as Record<string, unknown>;
+  const name = String(raw.name || "").trim().slice(0, 80);
+  if (name.length < 2) return { error: "Dê um nome ao tipo de chamado." };
+  const steps = (Array.isArray(raw.steps) ? raw.steps : []).map((item) => {
+    const step = (item || {}) as Record<string, unknown>;
+    return {
+      name: String(step.name || "").trim().slice(0, 80),
+      role: stepRoles.includes(step.role as TicketStepRole) ? step.role as TicketStepRole : "EXECUTOR",
+      owner: step.owner === "REQUESTER" ? "REQUESTER" as const : "DEPARTMENT" as const,
+      days: Math.min(60, Math.max(0, Math.round(Number(step.days) || 0))),
+    };
+  });
+  if (!steps.length) return { error: "Adicione pelo menos uma etapa." };
+  if (steps.length > 20) return { error: "Use no máximo 20 etapas." };
+  if (steps.some((step) => step.name.length < 2)) return { error: "Dê um nome a cada etapa." };
+  if (steps[0].role !== "EXECUTOR") return { error: "A primeira etapa precisa ser de execução: aprovações vêm depois de algo feito." };
+  return { flow: { name, description: String(raw.description || "").trim().slice(0, 300), departmentId: String(raw.departmentId || ""), steps } };
+}
+
 // Prazos em dias úteis: sábado e domingo não contam.
 export function addBusinessDays(from: Date, days: number) {
   const date = new Date(from);
@@ -158,11 +198,12 @@ export function applyFlowAction(steps: TicketStep[], action: TicketFlowAction, a
   const next = steps.map((item, position): TicketStep => {
     if (position === index)
       return action === "COMPLETE"
-        ? { ...item, status: "DONE", completedAt: at, completedByName: actorName, adjustment: undefined }
-        : { ...item, status: "PENDING", startedAt: undefined };
+        ? { ...item, status: "DONE", completedAt: at, completedByName: actorName, adjustment: undefined, work: closeWork(item.work, now) }
+        : { ...item, status: "PENDING", startedAt: undefined, work: closeWork(item.work, now) };
     if (position === target) return {
       ...item, status: "ACTIVE", startedAt: at, completedAt: undefined, completedByName: undefined,
       adjustment: action === "RETURN" ? { note: note.trim(), byName: actorName, fromStepName: steps[index].name, at } : undefined,
+      work: action === "RETURN" ? reopenWorkForAdjustment(item.work) : item.work,
     };
     return item;
   });

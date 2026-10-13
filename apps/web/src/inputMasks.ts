@@ -6,6 +6,7 @@ export function maskDocument(value:string){
   return raw.replace(/^(\d{2})(\d)/,"$1.$2").replace(/^(\d{2})\.(\d{3})(\d)/,"$1.$2.$3").replace(/\.(\d{3})(\d)/,".$1/$2").replace(/(\d{4})(\d{1,2})$/,"$1-$2");
 }
 
+export const maskPostalCode=(value:string)=>digits(value).slice(0,8).replace(/^(\d{5})(\d)/,"$1-$2");
 export function maskPhone(value:string){
   const raw=digits(value).slice(0,11);
   if(!raw)return "";
