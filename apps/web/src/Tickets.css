@@ -363,3 +363,14 @@ html[data-theme="dark"] .tk-now{border-color:transparent}
 .tk-flow-manage:hover{text-decoration:underline}
 @media(max-width:980px){.tk-flows-layout{grid-template-columns:minmax(0,1fr)}.tk-flows-list{position:static;flex-direction:row;overflow-x:auto}.tk-flows-list button{min-width:180px}}
 @media(max-width:720px){.tk-flows-page{min-width:0;overflow-x:hidden}.tk-flows-editor{padding:14px;min-width:0}.tk-flow-editor-fields{grid-template-columns:minmax(0,1fr)}.tk-flow-steps-labels{display:none}.tk-flow-steps li{grid-template-columns:26px minmax(0,1fr) auto;row-gap:6px}.tk-flow-steps li>input,.tk-flow-steps li>select{grid-column:2/-1}.tk-flow-days{grid-column:2}.tk-flow-step-actions{grid-column:3;justify-content:flex-end}.tk-flows-editor>header{flex-direction:column}.tk-flows-editor footer{flex-wrap:wrap}.tk-flows-dirty{width:100%}}
+/* Editar e apagar comentário (gaveta e página do chamado). */
+.tk-comment-actions{display:flex;align-items:center;justify-content:flex-end;gap:4px;margin-top:4px}
+.tk-comment-actions small{margin-right:auto;color:var(--mt-muted,var(--subtle));font-size:10.5px;font-style:italic}
+.tk-comment-actions button{display:inline-flex;align-items:center;gap:4px;padding:2px 6px;border:0;border-radius:6px;background:transparent;color:var(--mt-muted,var(--subtle));font-size:11px;font-weight:600;cursor:pointer}
+.tk-comment-actions button:hover:not(:disabled){background:var(--mt-surface,var(--surface));color:var(--mt-heading,var(--heading))}
+.tk-comment-actions button.danger:hover:not(:disabled){color:#c2410c}
+.tk-comment-actions button svg{width:12px;height:12px}.tk-comment-actions button:disabled{opacity:.5;cursor:not-allowed}
+.tk-comment-edit{display:grid;gap:6px;margin-top:4px}
+.tk-comment-edit textarea{box-sizing:border-box;width:100%;padding:8px 10px;border:1px solid var(--mt-border,var(--border));border-radius:8px;background:var(--mt-surface,var(--surface));color:inherit;font:inherit;font-size:12.5px;resize:vertical}
+.tk-comment-edit>div{display:flex;justify-content:flex-end;gap:6px}
+.tk-comment-error{display:block;margin-top:4px;color:#c2410c;font-size:11px}

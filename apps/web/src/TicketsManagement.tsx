@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import { NavLink, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import {
   AlertTriangle, Building2, Check, CheckCircle2, ChevronRight, Clock3, Download, Edit3, FileText,
-  Hourglass, Home, KanbanSquare, List, MessageSquare, MessagesSquare, Paperclip, Plus, Quote, RotateCcw, Search, Send, Settings2, Trash2, Undo2, UserRound, Workflow, X, XCircle,
+  Hourglass, Home, KanbanSquare, List, MessageSquare, MessagesSquare, Paperclip, Pencil, Plus, Quote, RotateCcw, Search, Send, Settings2, Trash2, Undo2, UserRound, Workflow, X, XCircle,
 } from "lucide-react";
 import { systemConfirm } from "./SystemDialog";
 import { SearchableSelect } from "./SearchableSelect";
@@ -15,7 +15,7 @@ import "./Tickets.css";
 
 export type TicketUser = { id: string; name: string; email: string; avatarDataUrl?: string; departmentName?: string };
 export type Department = { id: string; name: string; description: string; active: boolean; managerUserId?: string; managerName?: string };
-export type TicketComment = { id: string; authorId: string; authorName: string; message: string; mentions: string[]; createdAt: string; kind?: "SYSTEM"; action?: "RETURN"; note?: string; stepId?: string; delivery?: boolean };
+export type TicketComment = { id: string; authorId: string; authorName: string; message: string; mentions: string[]; createdAt: string; kind?: "SYSTEM"; action?: "RETURN"; note?: string; stepId?: string; delivery?: boolean; editedAt?: string };
 type Comment = TicketComment;
 export type TicketAttachment = { id: string; name: string; contentType: string; sizeBytes: number; uploadedById: string; uploadedByName: string; createdAt: string; stepId?: string };
 export type TicketOriginType = "INTERNAL" | "MEETING" | "WHATSAPP" | "EMAIL" | "PHONE";
@@ -309,7 +309,7 @@ function TicketDetails({ ticket, data, currentUser, onClose, onEdit, onChange, o
               ? <article key={item.id} className="adjust"><span><Undo2 /></span><div><header><b>Ajustes solicitados</b><time>{dateTime(item.createdAt)}</time></header><p><b>{item.authorName}</b> {item.message.replace(/ — “[\s\S]*”$/, "")}</p>{returnNote(item) && <blockquote>{returnNote(item)}</blockquote>}</div></article>
               : item.kind === "SYSTEM"
               ? <article key={item.id} className="system"><span><Clock3 /></span><p><b>{item.authorName}</b> {item.message} · <time>{dateTime(item.createdAt)}</time></p></article>
-              : <article key={item.id}><PersonAvatar size="sm" name={item.authorName} src={users.find((user) => user.id === item.authorId)?.avatarDataUrl} /><div><header><b>{item.authorName}</b><time>{dateTime(item.createdAt)}</time></header><p>{highlightMentions(item.message, users.map((user) => user.name))}</p></div></article>)}
+              : <article key={item.id}><PersonAvatar size="sm" name={item.authorName} src={users.find((user) => user.id === item.authorId)?.avatarDataUrl} /><div><header><b>{item.authorName}</b><time>{dateTime(item.createdAt)}</time></header><EditableComment ticketId={ticket.id} comment={item} userId={currentUser.id} canDelete={data.canDelete} onChange={onChange}><p>{highlightMentions(item.message, users.map((user) => user.name))}</p></EditableComment></div></article>)}
           </div>
         </section>
       </div>
@@ -324,6 +324,36 @@ function TicketDetails({ ticket, data, currentUser, onClose, onEdit, onChange, o
       </footer>}
     </aside>
   </div>;
+}
+
+// Quem escreveu edita ou apaga o próprio comentário; quem pode excluir chamados também apaga.
+// Registros automáticos e pedidos de ajuste fazem parte do fluxo e não mudam.
+export function EditableComment({ ticketId, comment, userId, canDelete, onChange, children }: { ticketId: string; comment: TicketComment; userId: string; canDelete: boolean; onChange: () => unknown; children: ReactNode }) {
+  const [draft, setDraft] = useState<string | null>(null), [busy, setBusy] = useState(false), [error, setError] = useState("");
+  const fixed = comment.kind === "SYSTEM" || comment.action === "RETURN", mine = comment.authorId === userId;
+  const canEdit = !fixed && mine, canRemove = !fixed && (mine || canDelete);
+  const send = async (method: "PATCH" | "DELETE") => {
+    if (method === "DELETE" && !await systemConfirm({ title: "Apagar comentário?", message: "O comentário sai da conversa do chamado.", confirmLabel: "Apagar", tone: "danger" })) return;
+    setBusy(true); setError("");
+    try {
+      await ticketApi(`/tickets/${ticketId}/comments/${encodeURIComponent(comment.id)}`, { method, ...(method === "PATCH" ? { json: { message: draft } } : {}) });
+      setDraft(null); await onChange();
+    } catch (reason) { setError((reason as Error).message); } finally { setBusy(false); }
+  };
+  if (draft !== null) return <div className="tk-comment-edit">
+    <textarea aria-label="Editar comentário" rows={3} autoFocus value={draft} disabled={busy} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Escape") setDraft(null); if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && draft.trim()) void send("PATCH"); }} />
+    {error && <small className="tk-comment-error" role="alert">{error}</small>}
+    <div><button type="button" className="mt-button outline small" disabled={busy} onClick={() => setDraft(null)}>Cancelar</button><button type="button" className="mt-button primary small" disabled={busy || !draft.trim()} onClick={() => void send("PATCH")}><Check />Salvar</button></div>
+  </div>;
+  return <>
+    {children}
+    {(comment.editedAt || canEdit || canRemove) && <div className="tk-comment-actions">
+      {comment.editedAt && <small title={`Editado em ${dateTime(comment.editedAt)}`}>editado</small>}
+      {canEdit && <button type="button" disabled={busy} onClick={() => setDraft(comment.message)}><Pencil />Editar</button>}
+      {canRemove && <button type="button" className="danger" disabled={busy} onClick={() => void send("DELETE")}><Trash2 />Apagar</button>}
+    </div>}
+    {error && <small className="tk-comment-error" role="alert">{error}</small>}
+  </>;
 }
 
 function TicketAttachments({ ticket, currentUserId, canEdit, canUpload, onChange }: { ticket: Ticket; currentUserId: string; canEdit: boolean; canUpload: boolean; onChange: () => void }) {

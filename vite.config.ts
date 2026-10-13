@@ -363,6 +363,7 @@ type TicketComment = {
   // Etapa a que o comentário se refere; `delivery` marca o comentário enviado junto com a entrega.
   stepId?: string;
   delivery?: boolean;
+  editedAt?: string;
 };
 type Ticket = {
   id: string;
@@ -5041,6 +5042,36 @@ function localApi(
           tickets.set(ticket.id, ticket);
           persistTickets();
           return json(response, 201, { comment, ticket });
+        }
+        // Editar (só quem escreveu) ou apagar (quem escreveu ou quem pode excluir chamados) um
+        // comentário. Registros automáticos e pedidos de ajuste fazem parte do fluxo e não mudam.
+        const ticketCommentItemMatch = url.split("?")[0].match(/^\/tickets\/([^/]+)\/comments\/([^/]+)$/);
+        if (ticketCommentItemMatch && (request.method === "PATCH" || request.method === "DELETE")) {
+          const ticket = tickets.get(ticketCommentItemMatch[1]);
+          if (!ticket || !canSeeTicket(ticket))
+            return json(response, 404, { message: "Chamado não encontrado." });
+          const comment = ticket.comments.find((item) => item.id === decodeURIComponent(ticketCommentItemMatch[2]));
+          if (!comment || comment.kind === "SYSTEM" || comment.action === "RETURN")
+            return json(response, 404, { message: "Comentário não encontrado." });
+          const mine = comment.authorId === currentUser.id;
+          if (request.method === "PATCH") {
+            if (!mine) return json(response, 403, { message: "Só quem escreveu pode editar o comentário." });
+            const message = String((await body(request)).message || "").trim();
+            if (!message) return json(response, 400, { message: "Escreva o comentário." });
+            const mentioned = [...users.values()].filter((user) =>
+              user.profile !== "CLIENT" && user.id !== currentUser.id &&
+              message.toLowerCase().includes(`@${user.name.toLowerCase()}`),
+            );
+            Object.assign(comment, { message, mentions: mentioned.map((user) => user.id), editedAt: new Date().toISOString() });
+            ticket.participantIds = [...new Set([...ticket.participantIds, ...comment.mentions])];
+          } else {
+            if (!mine && !hasPermission(currentUser, "tickets.delete"))
+              return json(response, 403, { message: "Só quem escreveu pode apagar o comentário." });
+            ticket.comments = ticket.comments.filter((item) => item.id !== comment.id);
+          }
+          tickets.set(ticket.id, ticket);
+          persistTickets();
+          return json(response, 200, { ticket });
         }
         // Andamento do fluxo: concluir/aprovar, devolver para ajustes, cancelar e reabrir.
         const ticketFlowMatch = url.match(/^\/tickets\/([^/]+)\/flow$/);

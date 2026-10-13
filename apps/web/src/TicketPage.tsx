@@ -6,7 +6,7 @@ import {
   RotateCcw, Send, ShieldCheck, Square, Trash2, Undo2, Upload, UserRound, X, XCircle,
 } from "lucide-react";
 import { systemConfirm } from "./SystemDialog";
-import { PersonAvatar, dateTime, fileSize, ticketApi, uploadTicketFile, type Ticket, type TicketAttachment, type TicketComment, type TicketsData } from "./TicketsManagement";
+import { EditableComment, PersonAvatar, dateTime, fileSize, ticketApi, uploadTicketFile, type Ticket, type TicketAttachment, type TicketComment, type TicketsData } from "./TicketsManagement";
 import { activeStep, clientJustApproved, isOpenTicket, sentForApproval } from "./marketingTickets";
 import { ClientMark, PriorityTag } from "./MarketingBoard";
 import { stepRoleLabels, type TicketStep } from "./ticketFlows";
@@ -108,7 +108,7 @@ function TicketView({ ticket, data, user, tab, setTab, reload, back }: { ticket:
         {error && <p className="mc-alert" role="alert">{error}</p>}
         {tab === "overview" && <Overview ticket={ticket} data={data} user={user} busy={busy} mine={mine} canAct={canAct} next={next} work={work} flow={flow} run={run} reload={reload} avatar={avatar} onHistory={() => setTab("history")} />}
         {tab === "files" && <FilesTab ticket={ticket} canEdit={data.canEdit} userId={user.id} canUpload={data.canCreate || data.canEdit || data.canComment} reload={reload} />}
-        {tab === "comments" && <CommentsTab ticket={ticket} data={data} canComment={data.canComment} run={run} avatar={avatar} />}
+        {tab === "comments" && <CommentsTab ticket={ticket} data={data} canComment={data.canComment} run={run} avatar={avatar} userId={user.id} reload={reload} />}
         {tab === "history" && <HistoryTab ticket={ticket} avatar={avatar} />}
         {tab === "checklist" && <ChecklistTab ticket={ticket} run={run} busy={busy} />}
         {tab === "approvals" && <ApprovalsTab ticket={ticket} />}
@@ -500,7 +500,7 @@ function FilesTab({ ticket, canEdit, userId, canUpload, reload }: { ticket: Tick
   </section>;
 }
 
-function CommentsTab({ ticket, data, canComment, run, avatar }: { ticket: Ticket; data: TicketsData; canComment: boolean; run: (action: () => Promise<unknown>) => Promise<boolean>; avatar: (id?: string) => string | undefined }) {
+function CommentsTab({ ticket, data, canComment, run, avatar, userId, reload }: { ticket: Ticket; data: TicketsData; canComment: boolean; run: (action: () => Promise<unknown>) => Promise<boolean>; avatar: (id?: string) => string | undefined; userId: string; reload: () => Promise<void> }) {
   const [message, setMessage] = useState("");
   const comments = ticket.comments.filter((item) => item.kind !== "SYSTEM");
   const stepName = (comment: TicketComment) => ticket.steps?.find((step) => step.id === comment.stepId)?.name;
@@ -512,7 +512,7 @@ function CommentsTab({ ticket, data, canComment, run, avatar }: { ticket: Ticket
     <header className="tp-card-head"><span className="mc-card-icon dark"><MessageSquare /></span><div><h2>Comentários</h2><p>Use @ para mencionar alguém da equipe: a pessoa recebe um aviso e passa a ver o chamado.</p></div></header>
     {comments.length ? <ul className="tp-comments">{comments.map((item) => <li key={item.id} className={item.action === "RETURN" ? "adjust" : item.delivery ? "delivery" : ""}>
       <PersonAvatar size="sm" name={item.authorName} src={avatar(item.authorId)} />
-      <div><header><b>{item.authorName}</b>{item.delivery && <em className="mc-pill green">Entrega</em>}{stepName(item) && <small>{stepName(item)}</small>}<time>{full(item.createdAt)}</time></header><p>{item.message}</p></div>
+      <div><header><b>{item.authorName}</b>{item.delivery && <em className="mc-pill green">Entrega</em>}{stepName(item) && <small>{stepName(item)}</small>}<time>{full(item.createdAt)}</time></header><EditableComment ticketId={ticket.id} comment={item} userId={userId} canDelete={data.canDelete} onChange={reload}><p>{item.message}</p></EditableComment></div>
     </li>)}</ul> : <p className="mc-empty">Nenhum comentário ainda.</p>}
     {canComment && <div className="tp-composer">
       {mentionable.length > 0 && <div className="tp-mentions">{mentionable.map((person) => <button type="button" key={person.id} onClick={() => setMessage((value) => value.replace(/@[^@\n]*$/, `@${person.name} `))}><PersonAvatar size="sm" name={person.name} src={person.avatarDataUrl} />{person.name}</button>)}</div>}
