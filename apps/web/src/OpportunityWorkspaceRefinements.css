@@ -64,3 +64,81 @@ html[data-theme="dark"] .crm-workspace-backdrop .crm-workspace{--op-line:var(--b
 
 /* Compact proposal editor: all controls and actions fit in the viewport. */
 .crm-proposal-drawer{width:min(920px,100%)!important}.crm-proposal-drawer>header{min-height:76px!important;padding:13px 20px!important}.crm-proposal-drawer>header>div>span{width:38px!important;height:38px!important}.crm-proposal-drawer h2{font-size:18px!important}.crm-proposal-drawer .crm-task-form{grid-template-columns:minmax(0,2fr) minmax(180px,1fr);gap:9px 12px;padding:12px 20px 14px;overflow:hidden}.crm-proposal-drawer .crm-task-form>label{gap:4px}.crm-proposal-drawer .crm-task-form>label:first-child{grid-column:1}.crm-proposal-drawer .crm-task-form>label:nth-child(2){grid-column:2}.crm-proposal-drawer .crm-task-form input,.crm-proposal-drawer .crm-task-form select{height:38px}.crm-proposal-drawer .crm-proposal-services{grid-column:1/-1;gap:8px;padding:9px}.crm-proposal-drawer .crm-proposal-service-row{grid-template-columns:minmax(150px,1.25fr) 70px minmax(125px,.85fr) 105px minmax(180px,1.4fr);align-items:end;gap:8px;padding:9px}.crm-proposal-drawer .crm-proposal-service-row .full{grid-column:auto}.crm-proposal-drawer .crm-proposal-service-row textarea{height:38px;min-height:38px;padding:9px;resize:none}.crm-proposal-drawer .crm-proposal-service-row .danger-text{grid-column:1/-1;margin-top:-2px;padding:0}.crm-proposal-drawer .crm-add-proposal-service{height:34px}.crm-proposal-drawer .crm-proposal-total{min-height:38px;padding:8px 12px}.crm-proposal-drawer .crm-task-form>label:last-of-type textarea{height:56px;min-height:56px;padding:9px;resize:none}.crm-proposal-drawer>footer{padding:10px 20px!important}.crm-proposal-drawer>footer button{height:38px!important}@media(max-width:760px){.crm-proposal-drawer .crm-task-form{display:flex;flex-direction:column;overflow-y:auto}.crm-proposal-drawer .crm-proposal-service-row{grid-template-columns:1fr 80px}.crm-proposal-drawer .crm-proposal-service-row label:first-child,.crm-proposal-drawer .crm-proposal-service-row .full{grid-column:1/-1}}
+
+/* Ações do contato/empresa no painel de detalhes (editar e excluir). */
+.crm-detail>header .crm-record-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+.crm-detail>header .crm-record-actions button{float:none;display:inline-flex;align-items:center;gap:6px;padding:7px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--heading);font-size:12px;font-weight:600;cursor:pointer}
+.crm-detail>header .crm-record-actions button:hover{border-color:color-mix(in srgb,var(--accent) 45%,var(--border))}
+.crm-detail>header .crm-record-actions button.danger{color:#c43d3d;border-color:color-mix(in srgb,#c43d3d 30%,var(--border))}
+.crm-detail>header .crm-record-actions button.danger:hover{background:color-mix(in srgb,#c43d3d 8%,var(--surface))}
+.crm-detail>header .crm-record-actions svg{width:14px;height:14px}
+.crm-detail>header .crm-record-action-error{display:flex;align-items:center;gap:6px;margin-top:10px}
+.crm-detail>header .crm-record-action-error svg{width:14px;height:14px;flex:0 0 auto}
+
+/* Tema escuro da página da oportunidade: as superfícies claras fixas viram as do tema,
+   e os textos escuros fixos passam a usar as cores de título e texto do tema. */
+html[data-theme="dark"] .crm-workspace-backdrop .crm-workspace,
+html[data-theme="dark"] .crm-workspace-backdrop .crm-workspace-insights,
+html[data-theme="dark"] .crm-workspace-backdrop .crm-workspace-grid{background:var(--app-bg)}
+html[data-theme="dark"] .crm-workspace-backdrop .crm-workspace>header,
+html[data-theme="dark"] .crm-workspace-backdrop .crm-workspace-summary,
+html[data-theme="dark"] .crm-workspace-backdrop .crm-workspace-activity,
+html[data-theme="dark"] .crm-workspace-backdrop .crm-workspace-associations,
+html[data-theme="dark"] .crm-workspace-backdrop .crm-activity-composer,
+html[data-theme="dark"] .crm-workspace-backdrop .crm-activity-composer textarea,
+html[data-theme="dark"] .crm-workspace-backdrop .crm-related-tasks,
+html[data-theme="dark"] .crm-workspace-backdrop .crm-activity-feed article,
+html[data-theme="dark"] .crm-workspace-backdrop .crm-association-section>header,
+html[data-theme="dark"] .crm-workspace-backdrop .crm-association-section>div,
+html[data-theme="dark"] .crm-workspace-backdrop .crm-workspace-header-actions .secondary{background:var(--surface)!important;color:var(--text)}
+html[data-theme="dark"] .crm-workspace-backdrop .crm-inline-edit,
+html[data-theme="dark"] .crm-workspace-backdrop .crm-workspace-tabs>span,
+html[data-theme="dark"] .crm-workspace-backdrop .crm-quick-actions,
+html[data-theme="dark"] .crm-workspace-backdrop .crm-activity-composer footer,
+html[data-theme="dark"] .crm-workspace-backdrop .crm-related-tasks>header,
+html[data-theme="dark"] .crm-workspace-backdrop .crm-association-section article,
+html[data-theme="dark"] .crm-workspace-backdrop .crm-workspace-section-title>span,
+html[data-theme="dark"] .crm-workspace-backdrop .crm-workspace-insights>article>i{background:var(--surface-soft)!important}
+html[data-theme="dark"] .crm-workspace-backdrop .crm-workspace-header-actions .danger-icon{background:color-mix(in srgb,#e35d5d 12%,var(--surface))!important}
+html[data-theme="dark"] .crm-workspace-backdrop .crm-workspace-icon{background:color-mix(in srgb,var(--orange) 16%,var(--surface))!important}
+html[data-theme="dark"] .crm-workspace-backdrop .crm-quick-actions button.active{background:color-mix(in srgb,var(--accent) 20%,var(--surface))!important;color:#7cc0ff}
+html[data-theme="dark"] .crm-workspace-backdrop .crm-workspace-title:after{background:color-mix(in srgb,#16805c 25%,var(--surface));color:#6fd6a3}
+html[data-theme="dark"] .crm-workspace-backdrop .crm-workspace-title h2,
+html[data-theme="dark"] .crm-workspace-backdrop .crm-workspace-insights b,
+html[data-theme="dark"] .crm-workspace-backdrop .crm-workspace-section-title h3,
+html[data-theme="dark"] .crm-workspace-backdrop .crm-workspace-tabs>div h3,
+html[data-theme="dark"] .crm-workspace-backdrop .crm-related-tasks h3,
+html[data-theme="dark"] .crm-workspace-backdrop .crm-activity-composer h3,
+html[data-theme="dark"] .crm-workspace-backdrop .crm-activity-composer b,
+html[data-theme="dark"] .crm-workspace-backdrop .crm-related-tasks b,
+html[data-theme="dark"] .crm-workspace-backdrop .crm-activity-feed b,
+html[data-theme="dark"] .crm-workspace-backdrop .crm-association-section b{color:var(--heading)!important}
+html[data-theme="dark"] .crm-workspace-backdrop .crm-workspace-summary dd,
+html[data-theme="dark"] .crm-workspace-backdrop .crm-workspace-summary dd *,
+html[data-theme="dark"] .crm-workspace-backdrop .crm-association-section span,
+html[data-theme="dark"] .crm-workspace-backdrop .crm-association-section small{color:var(--text)}
+html[data-theme="dark"] .crm-workspace-backdrop .crm-inline-edit,
+html[data-theme="dark"] .crm-workspace-backdrop .crm-workspace-tabs>span{color:#7cc0ff}
+html[data-theme="dark"] .crm-workspace-backdrop .crm-activity-composer textarea{color:var(--text);border-color:var(--border)}
+html[data-theme="dark"] .crm-workspace-backdrop .crm-temperature-badge,
+html[data-theme="dark"] .crm-workspace-backdrop .crm-temperature-quick{background:var(--surface-soft);color:var(--text)}
+html[data-theme="dark"] .crm-workspace-backdrop .crm-temperature-badge.warm,
+html[data-theme="dark"] .crm-workspace-backdrop .crm-temperature-quick.warm{background:color-mix(in srgb,#e0a21b 20%,var(--surface));color:#f3c868}
+html[data-theme="dark"] .crm-workspace-backdrop .crm-temperature-badge.hot,
+html[data-theme="dark"] .crm-workspace-backdrop .crm-temperature-quick.hot{background:color-mix(in srgb,#ea6a2a 20%,var(--surface));color:#ffa77a}
+html[data-theme="dark"] .crm-workspace-backdrop .crm-temperature-badge.very-hot,
+html[data-theme="dark"] .crm-workspace-backdrop .crm-temperature-quick.very-hot{background:color-mix(in srgb,#e35d5d 22%,var(--surface));color:#ff9a9a}
+/* O painel de detalhes usa <main>: anula a margem do menu lateral aplicada a todo <main>. */
+.crm-detail main{margin:0;min-height:0}
+/* Temperatura no resumo: a lista acompanha o texto ("Muito quente") sem cortar. */
+/* Temperatura no resumo: coluna do rótulo um pouco menor e seta mais justa, para "Muito quente" caber. */
+.crm-workspace-backdrop .crm-workspace-summary dl>div{grid-template-columns:70px minmax(0,1fr)}
+.crm-workspace-backdrop .crm-workspace-summary .crm-temperature-quick{width:100%;max-width:none}
+.crm-workspace-backdrop .crm-workspace-summary .crm-temperature-quick select{flex:1;min-width:0;width:auto;padding-right:17px!important;font-size:11px!important;appearance:none;-webkit-appearance:none;background:no-repeat right 3px center/9px url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23889' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")}
+html[data-theme="dark"] .crm-workspace-backdrop .crm-compact-empty{background:color-mix(in srgb,#2f9b68 12%,var(--surface))!important}
+html[data-theme="dark"] .crm-workspace-backdrop .crm-compact-empty b{color:var(--heading)}
+html[data-theme="dark"] .crm-workspace-backdrop .crm-compact-empty small{color:var(--subtle)}
+html[data-theme="dark"] .crm-workspace-backdrop .crm-association-section>div>p{background:transparent!important;color:var(--subtle)}
+html[data-theme="dark"] .crm-workspace-backdrop .crm-priority.low{background:color-mix(in srgb,#168553 22%,var(--surface));color:#6fd6a3}
+html[data-theme="dark"] .crm-workspace-backdrop .crm-priority.medium{background:color-mix(in srgb,#e0a21b 20%,var(--surface));color:#f3c868}
+html[data-theme="dark"] .crm-workspace-backdrop .crm-priority.high{background:color-mix(in srgb,#e35d5d 22%,var(--surface));color:#ff9a9a}

@@ -57,6 +57,7 @@ import OpenAI from "openai";
 import { extractMetaLeads, metaCampaignGoal, type MetaAction } from "./metaInsights";
 import { metaPrepaidBalance } from "./metaPrepaidBalance";
 import { landingPageResponseStatus } from "./landingPageStatus";
+import { brMoney } from "./brMoney";
 import { mergeById, mergeVerifications } from "./reviewStoreMerge";
 import { validCalendarColor, validEventColorId } from "./apps/web/src/calendarColors";
 import react from "@vitejs/plugin-react";
@@ -8547,12 +8548,7 @@ function localApi(
             phone: String(input.phone || "").trim(),
             whatsapp: String(input.whatsapp || input.phone || "").trim(),
             serviceInterest: String(input.serviceInterest || "").trim(),
-            potentialValue:
-              Number(
-                String(input.potentialValue || "0")
-                  .replace(/\./g, "")
-                  .replace(",", "."),
-              ) || 0,
+            potentialValue: brMoney(input.potentialValue),
             temperature: ["COLD", "WARM", "HOT", "VERY_HOT"].includes(input.temperature)
               ? input.temperature
               : "WARM",
@@ -8819,7 +8815,7 @@ function localApi(
             createdAt: now,
             updatedAt: now,
           };
-          const moneyValue = (value: unknown) => Number(String(value || "0").replace(/\./g, "").replace(",", ".")) || 0,
+          const moneyValue = brMoney,
             billingType = ["ONE_TIME", "RECURRING", "BOTH"].includes(String(input.billingType)) ? String(input.billingType) : "RECURRING",
             oneTimeValue = moneyValue(input.oneTimeValue),
             recurringValue = moneyValue(input.recurringValue),
@@ -8840,6 +8836,28 @@ function localApi(
           if (!serviceParts.length) return json(response, 400, { message: "Informe ao menos um valor de cobrança válido." });
           if (!existingClient) clients.set(client.id, client);
           serviceParts.forEach((service) => clientServices.set(service.id, service));
+          // A empresa e os contatos do lead passam a apontar para o cliente, como no cadastro direto
+          // em Clientes. Sem empresa no lead, uma é criada para o cliente aparecer no CRM.
+          const leadCompany = crmCompanies.get(opportunity.companyId || "") ||
+            [...crmCompanies.values()].find((item) => item.clientId === client.id || item.name.toLowerCase() === client.name.toLowerCase());
+          const linkedCompany: CrmCompany = leadCompany || {
+            id: randomUUID(), name: client.name, legalName: client.legalName, document: client.document, website: client.website,
+            phone: client.primaryContactPhone, segment: client.segment, clientId: client.id,
+            responsibleId: client.ownerId || "", responsibleName: client.owner, createdAt: now, updatedAt: now, activities: [],
+          };
+          if (!linkedCompany.clientId) {
+            linkedCompany.clientId = client.id;
+            linkedCompany.updatedAt = now;
+            linkedCompany.activities.push({ id: randomUUID(), type: "UPDATED", description: "Empresa vinculada à carteira de clientes", actorId: currentUser.id, actorName: currentUser.name, createdAt: now });
+          }
+          crmCompanies.set(linkedCompany.id, linkedCompany);
+          if (!opportunity.companyId) { opportunity.companyId = linkedCompany.id; opportunity.company = opportunity.company || linkedCompany.name; }
+          (opportunity.contactIds || []).forEach((id) => {
+            const contact = crmContacts.get(id);
+            if (contact && !contact.clientId) { contact.clientId = client.id; contact.companyId = contact.companyId || linkedCompany.id; contact.updatedAt = now; }
+          });
+          persistCrmCompanies();
+          persistCrmContacts();
           opportunity.status = "CONVERTED";
           opportunity.convertedClientId = client.id;
           opportunity.convertedAt = now;
@@ -9225,12 +9243,7 @@ function localApi(
             phone: String(input.phone || "").trim(),
             whatsapp: String(input.whatsapp || input.phone || "").trim(),
             serviceInterest: String(input.serviceInterest || "").trim(),
-            potentialValue:
-              Number(
-                String(input.potentialValue || "0")
-                  .replace(/\./g, "")
-                  .replace(",", "."),
-              ) || 0,
+            potentialValue: brMoney(input.potentialValue),
             temperature: ["COLD", "WARM", "HOT", "VERY_HOT"].includes(input.temperature)
               ? input.temperature
               : opportunity.temperature,

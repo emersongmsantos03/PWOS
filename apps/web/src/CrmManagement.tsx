@@ -37,6 +37,7 @@ import {
 import { isValidDocument, maskCurrency, maskDocument, maskPhone, parseCurrency } from "./inputMasks";
 import { DateTimePicker } from "./DateTimePicker";
 import { SearchableSelect } from "./SearchableSelect";
+import { systemConfirm } from "./SystemDialog";
 import { toDateTimeInput } from "./dateInput";
 import "./OpportunityWorkspaceRefinements.css";
 
@@ -85,6 +86,9 @@ type ProposalService = {
   unitValue: number;
   billingType: "RECURRING" | "ONE_TIME";
 };
+const opportunityStatusLabel: Record<string, string> = { OPEN: "Em aberto", WON: "Ganha", LOST: "Perdida", CONVERTED: "Convertida" };
+const proposalStatusLabel: Record<string, string> = { DRAFT: "Rascunho", SENT: "Enviada", ACCEPTED: "Aceita", REJECTED: "Recusada" };
+const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
 type Opportunity = {
   id: string;
   name: string;
@@ -356,6 +360,7 @@ export function CrmManagement({
   const [entityView, setEntityView] = useState<
       "OPPORTUNITIES" | "CONTACTS" | "COMPANIES"
     >("OPPORTUNITIES"),
+    [editingRecord, setEditingRecord] = useState<CrmContact | CrmCompany | null>(null),
     [recordModal, setRecordModal] = useState<"CONTACT" | "COMPANY" | null>(
       null,
     ),
@@ -485,6 +490,16 @@ export function CrmManagement({
     setCreating(false);
     setEditing(null);
     setSelected(data.opportunity);
+    await load();
+  };
+  // Exclui um contato ou empresa do CRM (o servidor recusa empresa com vínculos).
+  const removeRecord = async (record: CrmContact | CrmCompany): Promise<string | void> => {
+    const contact = "email" in record;
+    if (!await systemConfirm({ title: `Excluir ${record.name}?`, message: contact ? "O contato sai do CRM e das oportunidades em que aparece." : "A empresa sai do CRM. Empresas com contatos ou oportunidades vinculados não podem ser excluídas.", confirmLabel: "Excluir", tone: "danger" })) return;
+    const response = await fetch(`/api/crm/${contact ? "contacts" : "companies"}/${record.id}`, { method: "DELETE" });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) return data.message || "Não foi possível excluir. Tente novamente.";
+    setSelectedRecord(null);
     await load();
   };
   const remove = async (item: Opportunity) => {
@@ -862,20 +877,6 @@ export function CrmManagement({
           onConfirm={() => void remove(deleteTarget)}
         />
       )}
-      {recordModal && (
-        <CrmRecordForm
-          kind={recordModal}
-          users={users}
-          companies={companies}
-          opportunities={items}
-          clients={clients}
-          onClose={() => setRecordModal(null)}
-          onSaved={async () => {
-            setRecordModal(null);
-            await load();
-          }}
-        />
-      )}
       {selectedRecord && (
         <CrmRecordDetail
           record={selectedRecord}
@@ -887,6 +888,25 @@ export function CrmManagement({
           onClose={() => setSelectedRecord(null)}
           onChange={async (record) => {
             setSelectedRecord(record);
+            await load();
+          }}
+          onEdit={can("crm.edit") ? () => setEditingRecord(selectedRecord) : undefined}
+          onDelete={can("crm.delete") ? () => removeRecord(selectedRecord) : undefined}
+        />
+      )}
+      {(recordModal || editingRecord) && (
+        <CrmRecordForm
+          kind={editingRecord ? ("email" in editingRecord ? "CONTACT" : "COMPANY") : recordModal!}
+          record={editingRecord}
+          users={users}
+          companies={companies}
+          opportunities={items}
+          clients={clients}
+          onClose={() => { setRecordModal(null); setEditingRecord(null); }}
+          onSaved={async (saved) => {
+            if (editingRecord && saved) setSelectedRecord(saved);
+            setRecordModal(null);
+            setEditingRecord(null);
             await load();
           }}
         />
@@ -1582,7 +1602,7 @@ function OpportunityWorkspace({
                       ? `Assinada por ${value.customer?.name || "cliente"} em ${new Date(value.signedAt).toLocaleString("pt-BR")}`
                       : value.status === "SENT"
                         ? "Aguardando assinatura"
-                        : value.status}
+                        : proposalStatusLabel[value.status] || value.status}
                   </small>
                   {value.signatureDataUrl && (
                     <img
@@ -2114,8 +2134,8 @@ function CrmRecords({
               <span>{record.responsibleName || "Sem responsável"}</span>
               <span>
                 {contact
-                  ? `${contact.opportunityIds.length} oportunidades`
-                  : `${contacts.filter((value) => value.companyId === company?.id).length} contatos · ${opportunities.filter((value) => value.companyId === company?.id).length} oportunidades`}
+                  ? plural(contact.opportunityIds.length, "oportunidade", "oportunidades")
+                  : `${plural(contacts.filter((value) => value.companyId === company?.id).length, "contato", "contatos")} · ${plural(opportunities.filter((value) => value.companyId === company?.id).length, "oportunidade", "oportunidades")}`}
               </span>
               <time>
                 {new Date(record.updatedAt).toLocaleDateString("pt-BR")}
@@ -2137,6 +2157,7 @@ function CrmRecords({
 
 function CrmRecordForm({
   kind,
+  record,
   users,
   companies,
   opportunities,
@@ -2145,12 +2166,14 @@ function CrmRecordForm({
   onSaved,
 }: {
   kind: "CONTACT" | "COMPANY";
+  // Com registro, o formulário edita (PATCH); sem, cria um novo.
+  record?: CrmContact | CrmCompany | null;
   users: User[];
   companies: CrmCompany[];
   opportunities: Opportunity[];
   clients: Client[];
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (record?: CrmContact | CrmCompany) => void;
 }) {
   const [error, setError] = useState(""),
     [saving, setSaving] = useState(false);
@@ -2164,9 +2187,9 @@ function CrmRecordForm({
         opportunityIds: form.getAll("opportunityIds").map(String),
       };
     const response = await fetch(
-        `/api/crm/${kind === "CONTACT" ? "contacts" : "companies"}`,
+        `/api/crm/${kind === "CONTACT" ? "contacts" : "companies"}${record ? `/${record.id}` : ""}`,
         {
-          method: "POST",
+          method: record ? "PATCH" : "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(input),
         },
@@ -2174,15 +2197,17 @@ function CrmRecordForm({
       data = await response.json();
     setSaving(false);
     if (!response.ok) return setError(data.message);
-    onSaved();
+    onSaved(kind === "CONTACT" ? data.contact : data.company);
   };
+  const contactRecord = kind === "CONTACT" ? (record as CrmContact | null | undefined) : null,
+    companyRecord = kind === "COMPANY" ? (record as CrmCompany | null | undefined) : null;
   return (
     <div className="modal-backdrop">
       <section className="crm-modal crm-record-modal">
         <header>
           <span>{kind === "CONTACT" ? <Contact /> : <Building2 />}</span>
           <div>
-            <h2>{kind === "CONTACT" ? "Novo contato" : "Nova empresa"}</h2>
+            <h2>{record ? (kind === "CONTACT" ? "Editar contato" : "Editar empresa") : kind === "CONTACT" ? "Novo contato" : "Nova empresa"}</h2>
             <p>
               O registro poderá ser associado a clientes e oportunidades sem
               perder histórico.
@@ -2196,22 +2221,23 @@ function CrmRecordForm({
           <div className="crm-form-grid">
             <label>
               {kind === "CONTACT" ? "Nome completo" : "Nome da empresa"} *
-              <input name="name" required autoFocus />
+              <input name="name" required autoFocus defaultValue={record?.name} />
             </label>
             {kind === "CONTACT" ? (
               <>
                 <label>
                   Cargo
-                  <input name="role" />
+                  <input name="role" defaultValue={contactRecord?.role} />
                 </label>
                 <label>
                   E-mail
-                  <input name="email" type="email" />
+                  <input name="email" type="email" defaultValue={contactRecord?.email} />
                 </label>
                 <label>
                   Telefone
                   <input
                     name="phone"
+                    defaultValue={maskPhone(contactRecord?.phone || "")}
                     inputMode="tel"
                     placeholder="(00) 00000-0000"
                     onInput={(event) => {
@@ -2225,6 +2251,7 @@ function CrmRecordForm({
                   WhatsApp
                   <input
                     name="whatsapp"
+                    defaultValue={maskPhone(contactRecord?.whatsapp || "")}
                     inputMode="tel"
                     placeholder="(00) 00000-0000"
                     onInput={(event) => {
@@ -2236,7 +2263,7 @@ function CrmRecordForm({
                 </label>
                 <label>
                   Empresa
-                  <select name="companyId">
+                  <select name="companyId" defaultValue={contactRecord?.companyId || ""}>
                     <option value="">Sem empresa</option>
                     {companies.map((value) => (
                       <option value={value.id} key={value.id}>
@@ -2249,6 +2276,7 @@ function CrmRecordForm({
                   <SearchMultiSelect
                     name="opportunityIds"
                     label="Oportunidades associadas"
+                    defaultValue={contactRecord?.opportunityIds || []}
                     options={opportunities.map((value) => ({
                       id: value.id,
                       title: value.name,
@@ -2262,12 +2290,13 @@ function CrmRecordForm({
               <>
                 <label>
                   Razão social
-                  <input name="legalName" />
+                  <input name="legalName" defaultValue={companyRecord?.legalName} />
                 </label>
                 <label>
                   CPF/CNPJ
                   <input
                     name="document"
+                    defaultValue={maskDocument(companyRecord?.document || "")}
                     inputMode="numeric"
                     placeholder="000.000.000-00 ou 00.000.000/0000-00"
                     onInput={(event) => {
@@ -2284,12 +2313,13 @@ function CrmRecordForm({
                 </label>
                 <label>
                   Segmento
-                  <input name="segment" />
+                  <input name="segment" defaultValue={companyRecord?.segment} />
                 </label>
                 <label>
                   Site
                   <input
                     name="website"
+                    defaultValue={companyRecord?.website}
                     type="url"
                     placeholder="https://empresa.com.br"
                   />
@@ -2298,6 +2328,7 @@ function CrmRecordForm({
                   Telefone
                   <input
                     name="phone"
+                    defaultValue={maskPhone(companyRecord?.phone || "")}
                     inputMode="tel"
                     placeholder="(00) 00000-0000"
                     onInput={(event) => {
@@ -2311,7 +2342,7 @@ function CrmRecordForm({
             )}
             <label>
               Cliente vinculado
-              <select name="clientId">
+              <select name="clientId" defaultValue={record?.clientId || ""}>
                 <option value="">Ainda não é cliente</option>
                 {clients.map((value) => (
                   <option value={value.id} key={value.id}>
@@ -2322,7 +2353,7 @@ function CrmRecordForm({
             </label>
             <label>
               Responsável
-              <select name="responsibleId">
+              <select name="responsibleId" defaultValue={record?.responsibleId || ""}>
                 <option value="">Sem responsável</option>
                 {users.map((value) => (
                   <option value={value.id} key={value.id}>
@@ -2343,7 +2374,7 @@ function CrmRecordForm({
               Cancelar
             </button>
             <button className="primary" disabled={saving}>
-              {saving ? "Salvando…" : "Criar registro"}
+              {saving ? "Salvando…" : record ? "Salvar alterações" : "Criar registro"}
             </button>
           </footer>
         </form>
@@ -2361,6 +2392,8 @@ function CrmRecordDetail({
   clients,
   onClose,
   onChange,
+  onEdit,
+  onDelete,
 }: {
   record: CrmContact | CrmCompany;
   kind: "CONTACT" | "COMPANY";
@@ -2370,10 +2403,13 @@ function CrmRecordDetail({
   clients: Client[];
   onClose: () => void;
   onChange: (record: CrmContact | CrmCompany) => void;
+  onEdit?: () => void;
+  onDelete?: () => Promise<string | void>;
 }) {
   const [text, setText] = useState(""),
     [type, setType] = useState("NOTE"),
-    [error, setError] = useState("");
+    [error, setError] = useState(""),
+    [actionError, setActionError] = useState("");
   const contact = kind === "CONTACT" ? (record as CrmContact) : null,
     company = kind === "COMPANY" ? (record as CrmCompany) : null;
   const linkedOpportunities = contact
@@ -2406,6 +2442,11 @@ function CrmRecordDetail({
           <small>{kind === "CONTACT" ? "CONTATO" : "EMPRESA"}</small>
           <h2>{record.name}</h2>
           <p>{contact?.role || company?.segment || "Registro do CRM"}</p>
+          {(onEdit || onDelete) && <div className="crm-record-actions">
+            {onEdit && <button type="button" className="secondary" onClick={onEdit}><Pencil /> Editar</button>}
+            {onDelete && <button type="button" className="danger" onClick={async () => { setActionError(""); const message = await onDelete(); if (message) setActionError(message); }}><Trash2 /> Excluir</button>}
+          </div>}
+          {actionError && <div className="form-error crm-record-action-error"><AlertTriangle />{actionError}</div>}
         </header>
         <main>
           <section className="crm-detail-values">
@@ -2484,7 +2525,7 @@ function CrmRecordDetail({
                 <span key={value.id}>
                   {value.name}
                   <small>
-                    {money(value.potentialValue)} · {value.status}
+                    {money(value.potentialValue)} · {opportunityStatusLabel[value.status] || value.status}
                   </small>
                 </span>
               ))}
@@ -3971,7 +4012,7 @@ function OpportunityDetail({
                     <b>{value.title}</b>
                     <small>
                       {new Date(value.createdAt).toLocaleDateString("pt-BR")} ·{" "}
-                      {value.status}
+                      {proposalStatusLabel[value.status] || value.status}
                     </small>
                   </div>
                   <strong>{money(value.value)}</strong>
