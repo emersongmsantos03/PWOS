@@ -92,8 +92,8 @@ type CalendarItem = {
   category: string;
   editable: boolean;
   color: string;
-  // Evento com mais de uma pessoa das agendas abertas: uma cor para cada uma.
-  colors?: string[];
+  // Como no Google Agenda, o evento aparece uma vez na agenda de cada pessoa: identifica cada cópia.
+  instanceKey?: string;
 };
 
 // Dono e convidados que não recusaram: o evento aparece na agenda de cada um.
@@ -230,25 +230,24 @@ export function CalendarManagement() {
   }, []);
 
   const items = useMemo<CalendarItem[]>(() => {
-    const eventItems = events
-      .map((event) => ({ event, people: eventPeople(event).filter((id) => ownerIds.includes(id)) }))
-      .filter(({ people }) => people.length)
-      .map(({ event, people }) => ({
+    // Um cartão por pessoa das agendas abertas, cada um com a cor dela (formato Google Agenda).
+    const eventItems = events.flatMap((event) =>
+      eventPeople(event).filter((id) => ownerIds.includes(id)).map((personId) => ({
         kind: "event" as const,
         id: event.id,
+        instanceKey: `event-${event.id}-${personId}`,
         title: event.title,
-        ownerId: event.ownerId,
-        ownerName: event.ownerName,
+        ownerId: personId,
+        ownerName: personId === event.ownerId ? event.ownerName : users.find((user) => user.id === personId)?.name || event.ownerName,
         start: new Date(event.startAt),
         end: new Date(event.endAt),
         location: event.location,
         category: event.category,
-        // Cor própria do evento (como no Google Agenda) ou a cor da agenda de quem está nele.
-        color: eventColorHex(event.colorId) || colorFor(people[0]),
-        colors: people.length > 1 ? people.map(colorFor) : undefined,
+        // A cor própria do evento vale só na agenda do dono; os convidados veem a cor da agenda deles.
+        color: (personId === event.ownerId && eventColorHex(event.colorId)) || colorFor(personId),
         // Eventos do Google Agenda são editados pelo próprio dono; a alteração volta para o Google.
         editable: event.source === "GOOGLE" ? event.ownerId === currentUserId && google.connected : event.ownerId === currentUserId || canEditAllEvents,
-      }));
+      })));
     const taskItems = tasks
       .filter(
         (task) =>
@@ -772,17 +771,16 @@ function ItemCard({
   onDrag,
   onOpen,
   durationHours,
+  column,
 }: {
   item: CalendarItem;
   onDrag: (event: DragEvent, item: CalendarItem) => void;
   onOpen: (item: CalendarItem) => void;
   durationHours?: number;
+  column?: { index: number; count: number };
 }) {
   const color = item.color;
-  const shared: Record<string, string> = item.colors && item.colors.length > 1 ? {
-    "--shared-bar": `linear-gradient(180deg, ${item.colors.map((value, index, all) => `${value} ${(index / all.length) * 100}% ${((index + 1) / all.length) * 100}%`).join(", ")})`,
-    "--shared-fill": `linear-gradient(90deg, ${item.colors.map((value) => `color-mix(in srgb, ${value} 16%, var(--surface))`).join(", ")})`,
-  } : {};
+  const columnStyle: Record<string, number> = column && column.count > 1 ? { "--calendar-col": column.index, "--calendar-cols": column.count } : {};
   return (
     <article
       draggable={item.editable}
@@ -791,8 +789,8 @@ function ItemCard({
         event.stopPropagation();
         onOpen(item);
       }}
-      className={`calendar-item ${item.kind} ${item.category.toLowerCase()} ${item.editable ? "editable" : "read-only"}${durationHours ? " calendar-duration" : ""}${item.colors ? " shared" : ""}`}
-      style={{ "--owner-color": color, ...shared, ...(durationHours ? { "--calendar-duration-height": `${Math.max(30, durationHours * 58 - 6)}px` } : {}) } as React.CSSProperties}
+      className={`calendar-item ${item.kind} ${item.category.toLowerCase()} ${item.editable ? "editable" : "read-only"}${durationHours ? " calendar-duration" : ""}${column && column.count > 1 ? " calendar-overlap" : ""}`}
+      style={{ "--owner-color": color, ...columnStyle, ...(durationHours ? { "--calendar-duration-height": `${Math.max(30, durationHours * 58 - 6)}px` } : {}) } as React.CSSProperties}
       title={
         item.kind === "ticket"
           ? `${item.ownerName} · prazo do chamado — clique para abrir`
@@ -824,6 +822,28 @@ function ItemCard({
   );
 }
 
+const itemKey = (item: CalendarItem) => item.instanceKey || `${item.kind}-${item.id}`;
+// Itens que se sobrepõem na grade ficam lado a lado, como no Google Agenda. O cartão começa
+// no topo da hora de início e tem no mínimo meia hora de altura, então é esse o espaço comparado.
+const overlapColumns = (items: CalendarItem[]) => {
+  const columns = new Map<string, { index: number; count: number }>();
+  const visual = items.map((item) => {
+    const start = new Date(item.start); start.setMinutes(0, 0, 0);
+    return { item, start: start.getTime(), end: start.getTime() + Math.max(30 * 60_000, item.end.getTime() - item.start.getTime()) };
+  }).sort((a, b) => a.start - b.start || b.end - a.end);
+  let cluster: Array<(typeof visual)[number] & { index: number }> = [], clusterEnd = 0;
+  const close = () => { const count = Math.max(1, ...cluster.map((entry) => entry.index + 1)); cluster.forEach((entry) => columns.set(itemKey(entry.item), { index: entry.index, count })); cluster = []; };
+  for (const entry of visual) {
+    if (cluster.length && entry.start >= clusterEnd) close();
+    const taken = new Set(cluster.filter((other) => other.end > entry.start).map((other) => other.index));
+    let index = 0; while (taken.has(index)) index += 1;
+    cluster.push({ ...entry, index });
+    clusterEnd = Math.max(clusterEnd, entry.end);
+  }
+  close();
+  return columns;
+};
+
 function TimeGrid({
   days,
   items,
@@ -841,6 +861,7 @@ function TimeGrid({
 }) {
   const startHour = 6;
   const endHour = 23;
+  const columns = useMemo(() => overlapColumns(items), [items]);
   return (
     <div className="calendar-time-scroll">
       <div
@@ -901,7 +922,8 @@ function TimeGrid({
                       Math.max(0.5, (item.end.getTime() - item.start.getTime()) / 3_600_000),
                       endHour - hour,
                     )}
-                    key={`${item.kind}-${item.id}`}
+                    column={columns.get(itemKey(item))}
+                    key={itemKey(item)}
                   />
                 ))}
             </section>
@@ -968,7 +990,7 @@ function MonthGrid({
                   item={item}
                   onDrag={onDrag}
                   onOpen={onOpen}
-                  key={`${item.kind}-${item.id}`}
+                  key={itemKey(item)}
                 />
               ))}
             {items.filter((item) => sameDay(item.start, day)).length > 4 && (
