@@ -2466,6 +2466,18 @@ function localApi(
             };
           }
         });
+      } else {
+        // Na coleta manual, as páginas de destino já conhecidas são verificadas de novo: é só um
+        // acesso ao site (sem cota do Google Ads) e evita esperar a coleta diária para corrigir o status.
+        const metas = Object.values(googleDaily.campaigns).filter((meta) => meta.landingPageUrl);
+        const statusByUrl = new Map<string, LandingPageStatus>();
+        await forEachConcurrent([...new Set(metas.map((meta) => meta.landingPageUrl!))], 10, async (url) => {
+          statusByUrl.set(url, await validatePublicLandingPage(url));
+        });
+        for (const [key, meta] of Object.entries(googleDaily.campaigns)) {
+          const status = meta.landingPageUrl ? statusByUrl.get(meta.landingPageUrl) : undefined;
+          if (status && status !== "UNKNOWN") googleDaily.campaigns[key] = { ...meta, landingPageStatus: status };
+        }
       }
       // Os detalhes engolem erros por conta; se a cota esgotou no meio, a coleta não está completa.
       if (googleQuotaBlockedSeconds() > 0) complete = false;
