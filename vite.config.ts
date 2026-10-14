@@ -237,6 +237,8 @@ type MediaAssignment = {
   accountId: string;
   platform: "META_ADS" | "GOOGLE_ADS";
   clientId: string;
+  // Filial do cliente a que a conta de anúncios pertence (opcional).
+  branchId?: string;
   responsibleId: string;
   identitySource?: "CLIENT" | "META_PORTFOLIO" | "UNLINKED";
   updatedAt: string;
@@ -274,10 +276,13 @@ type Client = {
   ownerId?: string;
   notes: string;
   address?: ClientAddress;
+  // Filiais (lojas, unidades) do cliente, escolhidas nos demais módulos.
+  branches?: ClientBranch[];
   createdAt: string;
   updatedAt: string;
 };
 type ClientAddress = { postalCode: string; street: string; number: string; complement: string; neighborhood: string; city: string; state: string };
+type ClientBranch = { id: string; name: string; document: string; city: string; state: string; contactName: string; contactPhone: string; active: boolean };
 // Endereço do cadastro do cliente, a partir dos campos `address*` do formulário.
 const clientAddress = (input: Record<string, unknown>): ClientAddress => {
   const text = (key: string, max = 120) => String(input[key] ?? "").trim().slice(0, max);
@@ -587,6 +592,7 @@ type WorkTask = {
   title: string;
   description: string;
   clientId: string;
+  branchId?: string;
   projectId: string;
   opportunityId: string;
   responsibleId: string;
@@ -695,6 +701,7 @@ type CalendarEvent = {
   location: string;
   category: string;
   clientId: string;
+  branchId?: string;
   projectId: string;
   opportunityId: string;
   taskId: string;
@@ -802,6 +809,7 @@ type FinancialEntry = {
   categoryId: string;
   accountId: string;
   clientId: string;
+  branchId?: string;
   supplier: string;
   costCenter: string;
   documentNumber: string;
@@ -850,6 +858,11 @@ const mediaAssignments = new Map<string, MediaAssignment>();
 const notificationReads = new Map<string, string>();
 const metaAccountPictures = new Map<string, string>();
 const clients = new Map<string, Client>();
+// Filial escolhida num lançamento, tarefa, evento ou vínculo: só vale se for do mesmo cliente.
+const clientBranchId = (clientId: unknown, branchId: unknown) => {
+  const id = String(branchId || "");
+  return id && clients.get(String(clientId || ""))?.branches?.some((branch) => branch.id === id) ? id : "";
+};
 const clientReportSchedules = new Map<string, ClientReportSchedule>();
 const departments = new Map<string, Department>();
 const tickets = new Map<string, Ticket>();
@@ -914,6 +927,25 @@ const validDocument = (value: string) => {
 const validPhone = (value: string) => {
   const raw = onlyDigits(value);
   return !value || raw.length === 10 || raw.length === 11;
+};
+// Filiais enviadas pelo cadastro do cliente (JSON). Mantém os ids das já existentes.
+const clientBranches = (raw: unknown, current: ClientBranch[] = []): { branches: ClientBranch[] } | { error: string } => {
+  let list: unknown = raw;
+  if (typeof raw === "string") { try { list = JSON.parse(raw || "[]"); } catch { return { error: "Não foi possível ler as filiais." }; } }
+  if (!Array.isArray(list)) return { branches: current };
+  const known = new Set(current.map((branch) => branch.id)), names = new Set<string>(), branches: ClientBranch[] = [];
+  for (const item of list.slice(0, 200) as Record<string, unknown>[]) {
+    const text = (key: string, max: number) => String(item?.[key] ?? "").trim().slice(0, max);
+    const name = text("name", 120), document = text("document", 20), contactPhone = text("contactPhone", 20);
+    if (name.length < 2) return { error: "Informe o nome de cada filial." };
+    if (names.has(name.toLowerCase())) return { error: `A filial "${name}" está repetida.` };
+    if (document && !validDocument(document)) return { error: `Informe um CNPJ válido para a filial "${name}".` };
+    if (contactPhone && !validPhone(contactPhone)) return { error: `Informe um telefone válido com DDD para a filial "${name}".` };
+    names.add(name.toLowerCase());
+    const id = text("id", 64);
+    branches.push({ id: known.has(id) ? id : randomUUID(), name, document, city: text("city", 80), state: text("state", 2).toUpperCase(), contactName: text("contactName", 120), contactPhone, active: item?.active !== false });
+  }
+  return { branches };
 };
 const safeEqual = (a: string, b: string) => {
   const left = Buffer.from(a);
@@ -4237,6 +4269,7 @@ function localApi(
               categoryId: String(input.categoryId || ""),
               accountId: String(input.accountId || ""),
               clientId: String(input.clientId || ""),
+              branchId: clientBranchId(input.clientId, input.branchId),
               supplier: String(input.supplier || "").trim(),
               costCenter: String(input.costCenter || "").trim(),
               documentNumber: String(input.documentNumber || "").trim(),
@@ -4337,6 +4370,8 @@ function localApi(
               entry.accountId = String(input.accountId);
             if (input.clientId !== undefined)
               entry.clientId = String(input.clientId);
+            if (input.clientId !== undefined || input.branchId !== undefined)
+              entry.branchId = clientBranchId(entry.clientId, input.branchId ?? entry.branchId);
             if (input.supplier !== undefined)
               entry.supplier = String(input.supplier).trim();
             if (input.costCenter !== undefined)
@@ -4933,7 +4968,7 @@ function localApi(
             clients: [...clients.values()]
               .filter((client) => client.status !== "INACTIVE")
               // Contato principal: exibido em "Informações adicionais" do chamado.
-              .map((client) => ({ id: client.id, name: client.name, contactName: client.primaryContactName, contactEmail: client.primaryContactEmail, contactPhone: client.primaryContactPhone }))
+              .map((client) => ({ id: client.id, name: client.name, contactName: client.primaryContactName, contactEmail: client.primaryContactEmail, contactPhone: client.primaryContactPhone, branches: client.branches || [] }))
               .sort((a, b) => a.name.localeCompare(b.name, "pt-BR")),
             meetings: [...meetings.values()]
               .filter((meeting) => (hasPermission(currentUser, "meetings.view_team") || meeting.responsibleId === currentUser.id || meeting.createdById === currentUser.id || meeting.participantIds.includes(currentUser.id)) && meeting.status !== "CANCELLED" && new Date(meeting.startAt).getTime() >= meetingWindowStart && new Date(meeting.startAt).getTime() <= meetingWindowEnd)
@@ -5522,6 +5557,7 @@ function localApi(
               title,
               description: String(input.description || "").trim(),
               clientId: String(input.clientId || ""),
+              branchId: clientBranchId(input.clientId, input.branchId),
               projectId: String(input.projectId || ""),
               opportunityId: String(input.opportunityId || ""),
               responsibleId: responsible?.id || currentUser.id,
@@ -6064,6 +6100,9 @@ function localApi(
                 : task.estimateMinutes,
             clientId:
               input.clientId !== undefined ? String(input.clientId) : task.clientId,
+            branchId: input.clientId !== undefined || input.branchId !== undefined
+              ? clientBranchId(input.clientId ?? task.clientId, input.branchId ?? task.branchId)
+              : task.branchId,
             opportunityId:
               input.opportunityId !== undefined
                 ? String(input.opportunityId)
@@ -6204,6 +6243,7 @@ function localApi(
               location: String(input.location || "").trim(),
               category: String(input.category || "WORK"),
               clientId: String(input.clientId || ""),
+              branchId: clientBranchId(input.clientId, input.branchId),
               projectId: String(input.projectId || ""),
               opportunityId: String(input.opportunityId || ""),
               taskId: String(input.taskId || ""),
@@ -6311,6 +6351,9 @@ function localApi(
               input.clientId !== undefined
                 ? String(input.clientId)
                 : event.clientId,
+            branchId: input.clientId !== undefined || input.branchId !== undefined
+              ? clientBranchId(input.clientId ?? event.clientId, input.branchId ?? event.branchId)
+              : event.branchId,
             opportunityId:
               input.opportunityId !== undefined
                 ? String(input.opportunityId)
@@ -6581,7 +6624,7 @@ function localApi(
             const canSchedule = hasPermission(currentUser, "meetings.create") || hasPermission(currentUser, "meetings.edit");
             return json(response, 200, {
               meetings: [...meetings.values()].filter(canSeeMeeting).sort((a, b) => a.startAt.localeCompare(b.startAt)).map(listMeeting),
-              clients: [...clients.values()].map((client) => ({ id: client.id, name: client.name, status: client.status, segment: client.segment, website: client.website, createdAt: client.createdAt })).sort((a, b) => a.name.localeCompare(b.name, "pt-BR")),
+              clients: [...clients.values()].map((client) => ({ id: client.id, name: client.name, status: client.status, segment: client.segment, website: client.website, createdAt: client.createdAt, branches: client.branches || [] })).sort((a, b) => a.name.localeCompare(b.name, "pt-BR")),
               contacts: canSchedule ? [...clientContacts.values()].map((contact) => ({ id: contact.id, clientId: contact.clientId, name: contact.name, role: contact.role, email: contact.email })) : [],
               users: [...users.values()].filter((user) => user.profile !== "CLIENT").map((user) => ({ id: user.id, name: user.name, role: user.role, departmentName: user.departmentName || "" })).sort((a, b) => a.name.localeCompare(b.name, "pt-BR")),
               canViewTeam: hasPermission(currentUser, "meetings.view_team"),
@@ -7119,12 +7162,15 @@ function localApi(
             return json(response, 409, {
               message: "Já existe um cliente com este nome.",
             });
+          const parsedBranches = clientBranches(input.branches);
+          if ("error" in parsedBranches) return json(response, 400, { message: parsedBranches.error });
           const now = new Date().toISOString();
           const client: Client = {
             id: randomUUID(),
             name,
             legalName: String(input.legalName || "").trim(),
             address: clientAddress(input),
+            branches: parsedBranches.branches,
             document,
             status: ["ACTIVE", "ATTENTION", "RISK", "INACTIVE"].includes(
               input.status,
@@ -7399,9 +7445,12 @@ function localApi(
             return json(response, 409, {
               message: "Já existe outro cliente com este nome.",
             });
+          const parsedBranches = clientBranches(input.branches, client.branches);
+          if ("error" in parsedBranches) return json(response, 400, { message: parsedBranches.error });
           Object.assign(client, {
             name,
             legalName: String(input.legalName || "").trim(),
+            branches: parsedBranches.branches,
             document,
             status: ["ACTIVE", "ATTENTION", "RISK", "INACTIVE"].includes(
               input.status,
@@ -9980,6 +10029,7 @@ function localApi(
             accountId,
             platform,
             clientId,
+            branchId: clientBranchId(clientId, input.branchId),
             responsibleId,
             identitySource,
             updatedAt: new Date().toISOString(),

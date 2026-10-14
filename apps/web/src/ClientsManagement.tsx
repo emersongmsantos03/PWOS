@@ -30,6 +30,7 @@ import {
 } from "lucide-react";
 import { isValidDocument, maskDocument, maskPhone, maskPostalCode } from "./inputMasks";
 import { SearchableSelect } from "./SearchableSelect";
+import { branchLabel, type ClientBranch } from "./BranchSelect";
 import { systemConfirm } from "./SystemDialog";
 import "./ClientConnections.css";
 import "./ClientRefinements.css";
@@ -50,6 +51,7 @@ type Client = {
   ownerId?: string;
   notes: string;
   address?: ClientAddress;
+  branches?: ClientBranch[];
   createdAt: string;
   updatedAt: string;
 };
@@ -233,6 +235,7 @@ export function ClientsManagement({ permissions = [], profile = "" }: { permissi
               client.segment,
               client.primaryContactName,
               client.primaryContactEmail,
+              ...(client.branches || []).flatMap((branch) => [branch.name, branch.city]),
             ].some((value) => value?.toLowerCase().includes(term)))
         );
       }),
@@ -694,6 +697,7 @@ function ClientForm({
               </label>
             </div>
           </div>
+          <BranchesEditor initial={client?.branches || []} />
           <div className="client-form-section">
             <div className="client-form-section-title">
               <b>Contato e atendimento</b>
@@ -779,6 +783,55 @@ function ClientForm({
   );
 }
 
+type BranchDraft = ClientBranch & { key: string };
+const newBranch = (): BranchDraft => ({ key: crypto.randomUUID(), id: "", name: "", document: "", city: "", state: "", contactName: "", contactPhone: "", active: true });
+// Filiais do cliente, enviadas junto com o cadastro (campo `branches`, em JSON).
+function BranchesEditor({ initial }: { initial: ClientBranch[] }) {
+  const [branches, setBranches] = useState<BranchDraft[]>(() => initial.map((branch) => ({ ...branch, key: branch.id })));
+  const update = (key: string, patch: Partial<ClientBranch>) => setBranches((current) => current.map((branch) => branch.key === key ? { ...branch, ...patch } : branch));
+  return (
+    <div className="client-form-section client-branches">
+      <div className="client-form-section-title">
+        <b>Filiais</b>
+        <span>Lojas e unidades do cliente. Elas aparecem para escolha nos chamados, reuniões, tarefas, agenda, financeiro e mídia.</span>
+      </div>
+      <input type="hidden" name="branches" value={JSON.stringify(branches.map(({ key: _key, ...branch }) => branch))} />
+      {branches.length ? <div className="client-branch-list">{branches.map((branch, index) => (
+        <article key={branch.key} className={branch.active ? "" : "inactive"}>
+          <header><b>Filial {index + 1}</b><label className="inline-check"><input type="checkbox" checked={branch.active} onChange={(event) => update(branch.key, { active: event.target.checked })} />Ativa</label><button type="button" onClick={() => setBranches((current) => current.filter((item) => item.key !== branch.key))} aria-label={`Remover ${branch.name || `filial ${index + 1}`}`}><Trash2 /></button></header>
+          <div className="client-form-grid">
+            <label>Nome da filial *<input value={branch.name} required maxLength={120} placeholder="Ex.: Loja Centro, Cambé - PR" onChange={(event) => update(branch.key, { name: event.target.value })} /></label>
+            <label>CNPJ<input value={maskDocument(branch.document)} inputMode="numeric" placeholder="00.000.000/0000-00" onChange={(event) => { const input = event.currentTarget; input.setCustomValidity(input.value && !isValidDocument(maskDocument(input.value)) ? "Informe um CNPJ válido." : ""); update(branch.key, { document: maskDocument(input.value) }); }} /></label>
+            <label>Cidade<input value={branch.city} maxLength={80} placeholder="Cidade" onChange={(event) => update(branch.key, { city: event.target.value })} /></label>
+            <label>UF<select value={branch.state} onChange={(event) => update(branch.key, { state: event.target.value })}><option value="">—</option>{brazilianStates.map((state) => <option key={state} value={state}>{state}</option>)}</select></label>
+            <label>Contato da filial<input value={branch.contactName} maxLength={120} placeholder="Nome do contato" onChange={(event) => update(branch.key, { contactName: event.target.value })} /></label>
+            <label>Telefone<input value={maskPhone(branch.contactPhone)} inputMode="tel" placeholder="(00) 00000-0000" onChange={(event) => update(branch.key, { contactPhone: maskPhone(event.target.value) })} /></label>
+          </div>
+        </article>
+      ))}</div> : <p className="client-branch-empty">Nenhuma filial cadastrada. Clientes com uma única unidade não precisam de filiais.</p>}
+      <button type="button" className="secondary client-branch-add" onClick={() => setBranches((current) => [...current, newBranch()])}><Plus /> Adicionar filial</button>
+    </div>
+  );
+}
+
+function ClientBranches({ branches, canEdit, onEdit }: { branches: ClientBranch[]; canEdit: boolean; onEdit: () => void }) {
+  return (
+    <section className="client-branches-tab">
+      <div className="client-branches-heading"><div><h3><Building2 /> Filiais</h3><p>Lojas e unidades disponíveis para escolha nos demais módulos.</p></div>{canEdit && <button type="button" className="primary" onClick={onEdit}><Plus /> Adicionar ou editar filiais</button>}</div>
+      {branches.length ? <div className="client-branches-grid">{branches.map((branch) => (
+        <article key={branch.id} className={branch.active ? "" : "inactive"}>
+          <header><b>{branch.name}</b><em>{branch.active ? "Ativa" : "Inativa"}</em></header>
+          <dl>
+            <div><dt>Local</dt><dd>{branch.city ? branchLabel(branch).split(" · ").slice(1).join(" · ") : "—"}</dd></div>
+            <div><dt>CNPJ</dt><dd>{branch.document ? maskDocument(branch.document) : "—"}</dd></div>
+            <div><dt>Contato</dt><dd>{branch.contactName || "—"}{branch.contactPhone ? ` · ${maskPhone(branch.contactPhone)}` : ""}</dd></div>
+          </dl>
+        </article>
+      ))}</div> : <p className="client-branch-empty">Nenhuma filial cadastrada.{canEdit ? " Use o botão acima para adicionar." : ""}</p>}
+    </section>
+  );
+}
+
 function ClientDetails({
   client,
   canEdit,
@@ -797,7 +850,7 @@ function ClientDetails({
   onDelete: () => void;
 }) {
   const [tab, setTab] = useState<
-      "OVERVIEW" | "ACCESS" | "CONTACTS" | "SERVICES" | "PROJECTS" | "HISTORY"
+      "OVERVIEW" | "ACCESS" | "CONTACTS" | "BRANCHES" | "SERVICES" | "PROJECTS" | "HISTORY"
     >("OVERVIEW"),
     [contacts, setContacts] = useState<Contact[]>([]),
     [services, setServices] = useState<Service[]>([]),
@@ -945,6 +998,7 @@ function ClientDetails({
             ["OVERVIEW", "Visão geral"],
             ["ACCESS", `Acessos (${portalUsers.length}/2)`],
             ["CONTACTS", `Contatos (${contacts.length})`],
+            ["BRANCHES", `Filiais (${client.branches?.length || 0})`],
             ["SERVICES", `Serviços (${services.length})`],
             ["PROJECTS", `Projetos (${projects.length})`],
             ["HISTORY", "Histórico"],
@@ -960,6 +1014,7 @@ function ClientDetails({
         </nav>
         <main>
           {tab === "ACCESS" && <section className="client-access-section"><div className="client-access-heading"><div><h3><Users/> Portal do Cliente</h3><p>Até 2 usuários, com visualização somente das campanhas vinculadas.</p><small>Link de acesso: <b>/portal-cliente</b></small></div>{canCreateAccess && <button className="primary" disabled={portalUsers.length >= 2} onClick={() => setAddingAccess(true)}><Plus/> Criar acesso</button>}</div><div className="client-access-list">{portalUsers.map(user => <article key={user.id}><span className="client-company-avatar">{user.name.slice(0,2).toUpperCase()}</span><div><b>{user.name}</b><small>{user.email}</small></div><em>{user.mustChangePassword ? "Troca de senha pendente" : "Acesso ativo"}</em></article>)}{Array.from({ length: 2 - portalUsers.length }).map((_, index) => <article className="empty" key={index}><span><UserRound/></span><div><b>Acesso disponível</b><small>Cadastre outro usuário deste cliente</small></div></article>)}</div>{error && <div className="form-error">{error}</div>}</section>}
+          {tab === "BRANCHES" && <ClientBranches branches={client.branches || []} canEdit={canEdit} onEdit={onEdit} />}
           {tab === "OVERVIEW" && (
             <>
               <section className="client-operational-summary client-summary-legacy">

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
+import type { ClientBranch } from "./BranchSelect";
 import { NavLink, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import {
   AlertTriangle, Building2, Check, CheckCircle2, ChevronRight, Clock3, Download, Edit3, FileText,
@@ -32,7 +33,7 @@ export type Ticket = {
 };
 export type TicketsData = {
   tickets: Ticket[]; departments: Department[]; availableUsers: TicketUser[]; flows: TicketFlow[];
-  clients: { id: string; name: string; contactName?: string; contactEmail?: string; contactPhone?: string }[];
+  clients: { id: string; name: string; contactName?: string; contactEmail?: string; contactPhone?: string; branches?: ClientBranch[] }[];
   meetings: { id: string; clientId: string; subject: string; startAt: string; unit: string }[];
   canViewAll: boolean; canCreate: boolean; canEdit: boolean; canDelete: boolean; canComment: boolean; canAssign: boolean; canManageDepartments: boolean; canManageFlows?: boolean;
 };

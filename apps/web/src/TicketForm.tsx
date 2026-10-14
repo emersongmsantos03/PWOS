@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { NavLink, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { AlertCircle, ArrowUp, CheckCircle2, ClipboardList, FilePlus2, FileText, Info, Save, Send, UploadCloud, Workflow, X } from "lucide-react";
 import { SearchableSelect } from "./SearchableSelect";
+import { UnitField } from "./BranchSelect";
 import { DateTimePicker } from "./DateTimePicker";
 import { scheduleSteps, type TicketStep } from "./ticketFlows";
 import {
@@ -153,8 +154,7 @@ export function TicketForm({ user }: { user: SessionUser }) {
               {touched && missing.clientId && <small className="tk-field-error">Este tipo tem aprovação do cliente: selecione o cliente.</small>}
             </label>
             <label className="span-6">Loja / Unidade
-              <input list="tk-units" value={form.unit} maxLength={80} disabled={!form.clientId} placeholder={form.clientId ? "Ex.: Matriz, Cambé - PR (opcional)" : "Selecione o cliente primeiro"} onChange={(event) => set("unit", event.target.value)} />
-              <datalist id="tk-units">{units.map((unit) => <option key={unit} value={unit} />)}</datalist>
+              <UnitField listId="tk-units" branches={data.clients.find((item) => item.id === form.clientId)?.branches} value={form.unit} suggestions={units} disabled={!form.clientId} placeholder={form.clientId ? "Ex.: Matriz, Cambé - PR (opcional)" : "Selecione o cliente primeiro"} onChange={(value) => set("unit", value)} />
             </label>
             <label className="span-4">Origem <em>*</em><SearchableSelect value={form.origin} onChange={chooseOrigin} searchPlaceholder="Buscar reunião…" options={originOptions} /></label>
             <label className={`span-4 tk-flow-select ${invalid("flowId")}`}><span className="tk-flow-label">Tipo de solicitação <em>*</em>{data.canManageFlows && !editing && <NavLink to="/chamados/tipos" className="tk-flow-manage">Gerenciar tipos</NavLink>}</span>

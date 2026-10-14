@@ -1,4 +1,5 @@
 import "./CampaignIntelligenceBoard.css";
+import { branchLabel, findBranch, type ClientBranch } from "./BranchSelect";
 import { landingPageGroups } from "./landingPages";
 import { matchesSearch } from "./searchText";
 import "./ClientAnalysisRefinements.css";
@@ -169,6 +170,7 @@ type Client = {
   legalName?: string;
   status: string;
   segment?: string;
+  branches?: ClientBranch[];
 };
 type User = { id: string; name: string; role: string; profile?: string; avatarDataUrl?: string };
 type ClientPortalUser = {
@@ -181,6 +183,7 @@ type Assignment = {
   accountId: string;
   platform: "META_ADS" | "GOOGLE_ADS";
   clientId: string;
+  branchId?: string;
   responsibleId: string;
   identitySource?: "CLIENT" | "META_PORTFOLIO" | "UNLINKED";
   updatedAt: string;
@@ -746,6 +749,7 @@ function ClientCampaignGroup({
     clientId: string,
     responsibleId: string,
     identitySource: Assignment["identitySource"],
+    branchId?: string,
   ) => Promise<void>;
 }) {
   const [open, setOpen] = useState(initialOpen);
@@ -763,8 +767,10 @@ function ClientCampaignGroup({
     [saved, setSaved] = useState(false),
     [linkError, setLinkError] = useState(""),
     [verifyingId, setVerifyingId] = useState("");
+  const [branchId, setBranchId] = useState(group.assignment?.branchId || "");
   const [draftClientId, setDraftClientId] = useState(clientId);
   const [draftResponsibleId, setDraftResponsibleId] = useState(responsibleId);
+  const [draftBranchId, setDraftBranchId] = useState(branchId);
   // Um portfólio da Meta pode reunir contas de clientes diferentes: o vínculo vale só
   // para as contas marcadas, e a conta desmarcada de um cliente já vinculado fica sem vínculo.
   const groupAccounts = [...new Map(group.campaigns.map((campaign) => {
@@ -773,7 +779,7 @@ function ClientCampaignGroup({
   })).values()];
   const [draftAccountKeys, setDraftAccountKeys] = useState<string[]>([]);
   const editAssignment = () => {
-    setDraftClientId(clientId); setDraftResponsibleId(responsibleId);
+    setDraftClientId(clientId); setDraftResponsibleId(responsibleId); setDraftBranchId(branchId);
     setDraftAccountKeys(group.client || groupAccounts.length === 1 ? groupAccounts.map((account) => account.key) : []);
     setLinkError(""); setSaved(false); setLinkOpen(true);
   };
@@ -921,6 +927,7 @@ function ClientCampaignGroup({
                     value={draftClientId}
                     onChange={(event) => {
                       setDraftClientId(event.target.value);
+                      setDraftBranchId("");
                       setSaved(false);
                       setLinkError("");
                     }}
@@ -947,6 +954,19 @@ function ClientCampaignGroup({
                   <small>Nenhum cliente cadastrado no PW OS.</small>
                 )}
               </label>
+              {!!clients.find((item) => item.id === draftClientId)?.branches?.some((branch) => branch.active || branch.id === draftBranchId) && <label>
+                <span>
+                  <Building2 />
+                  <b>Filial</b>
+                </span>
+                <div className="media-link-select">
+                  <select value={draftBranchId} onChange={(event) => { setDraftBranchId(event.target.value); setSaved(false); setLinkError(""); }}>
+                    <option value="">Matriz / sem filial</option>
+                    {clients.find((item) => item.id === draftClientId)!.branches!.filter((branch) => branch.active || branch.id === draftBranchId).map((branch) => <option key={branch.id} value={branch.id}>{branchLabel(branch)}</option>)}
+                  </select>
+                  <ChevronDown />
+                </div>
+              </label>}
               <label>
                 <span>
                   <UserRound />
@@ -1037,12 +1057,13 @@ function ClientCampaignGroup({
                     await Promise.all(groupPlatforms.map(async (source) => {
                       const ids = (accounts: typeof groupAccounts) => accounts.filter((account) => account.platform === source).map((account) => account.id);
                       if (ids(linked).length)
-                        await onAssign(source, ids(linked), draftClientId === META_PORTFOLIO ? "" : draftClientId, draftResponsibleId, identitySource);
+                        await onAssign(source, ids(linked), draftClientId === META_PORTFOLIO ? "" : draftClientId, draftResponsibleId, identitySource, draftClientId === META_PORTFOLIO ? "" : draftBranchId);
                       if (ids(released).length)
                         await onAssign(source, ids(released), "", "", "UNLINKED");
                     }));
                     setClientId(draftClientId);
                     setResponsibleId(draftResponsibleId);
+                    setBranchId(draftBranchId);
                     setSaved(true);
                     setLinkOpen(false);
                   } catch (cause) {
@@ -1110,6 +1131,7 @@ function TvRotationBoard({
     clientId: string,
     responsibleId: string,
     identitySource: Assignment["identitySource"],
+    branchId?: string,
   ) => Promise<void>;
 }) {
   const scaleRef = useRef<HTMLDivElement>(null);
@@ -1633,6 +1655,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
     clientId: string,
     responsibleId: string,
     identitySource: Assignment["identitySource"],
+    branchId = "",
   ) => {
     const isFirstClientLink =
       !!clientId && !assignments.some((item) => item.clientId === clientId);
@@ -1674,6 +1697,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
             body: JSON.stringify({
               platform: assignmentPlatform,
               clientId,
+              branchId,
               responsibleId,
               identitySource,
             }),
@@ -1792,8 +1816,9 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
       const account = accountsById.get(item.accountId),
         source = item.platform || account?.platform || "META_ADS",
         assignment = assignments.find((value) => value.platform === source && value.accountId === item.accountId),
+        // Contas de filiais diferentes do mesmo cliente ficam em cartões separados.
         key = assignment?.clientId
-          ? `client:${assignment.clientId}`
+          ? `client:${assignment.clientId}${assignment.branchId ? `:${assignment.branchId}` : ""}`
           : account?.businessPortfolioId
             ? `unlinked:${source}:portfolio:${account.businessPortfolioId}`
             : `unlinked:${source}:account:${item.accountId}`;
@@ -1827,7 +1852,9 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
         const assignedClient = clients.find(
             (item) => item.id === assignment?.clientId,
           ),
-          client = assignment?.clientId ? assignedClient : undefined,
+          branch = findBranch(clients, assignment?.clientId, assignment?.branchId),
+          // Com filial, o cartão mostra "Cliente · Filial"; o id continua o do cliente para os filtros.
+          client = assignment?.clientId && assignedClient ? (branch ? { ...assignedClient, name: `${assignedClient.name} · ${branch.name}` } : assignedClient) : undefined,
           responsible = users.find(
             (item) => item.id === assignment?.responsibleId,
           );

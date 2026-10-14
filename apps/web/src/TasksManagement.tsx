@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { BranchSelect, findBranch, type ClientBranch } from "./BranchSelect";
 import {
   AlertCircle,
   CalendarDays,
@@ -92,6 +93,7 @@ type Task = {
   title: string;
   description: string;
   clientId: string;
+  branchId?: string;
   responsibleId: string;
   responsibleName: string;
   responsibleAvatarDataUrl?: string;
@@ -123,7 +125,7 @@ type Task = {
   ticketCode?: string;
 };
 type User = { id: string; name: string };
-type Client = { id: string; name: string };
+type Client = { id: string; name: string; branches?: ClientBranch[] };
 
 const statuses: [Status, string][] = [
   ["TODO", "A fazer"],
@@ -427,8 +429,10 @@ export function TasksManagement({
     setPatchError(payload.message || "Não foi possível atualizar a demanda.");
     await load();
   };
-  const clientName = (task: Task) =>
-    clients.find((client) => client.id === task.clientId)?.name || "Interno";
+  const clientName = (task: Task) => {
+    const client = clients.find((item) => item.id === task.clientId), branch = findBranch(clients, task.clientId, task.branchId);
+    return client ? `${client.name}${branch ? ` · ${branch.name}` : ""}` : "Interno";
+  };
   const canEditTask = (task: Task) =>
     task.responsibleId === sessionId ||
     task.createdBy === sessionId ||
@@ -1391,6 +1395,7 @@ function QuickCreate({
   const [type, setType] = useState<TaskType>("OTHER"),
     [advanced, setAdvanced] = useState(false),
     [meetingMode, setMeetingMode] = useState("ONLINE"),
+    [clientId, setClientId] = useState(""),
     meta = types.find((item) => item.value === type)!;
   const tomorrow = new Date();
   tomorrow.setDate(tomorrow.getDate() + 1);
@@ -1466,6 +1471,7 @@ function QuickCreate({
                 Cliente
                 <SearchableSelect
                   name="clientId"
+                  onChange={setClientId}
                   placeholder="Trabalho interno"
                   searchPlaceholder="Buscar cliente..."
                   options={[
@@ -1477,6 +1483,7 @@ function QuickCreate({
                   ]}
                 />
               </label>
+              <BranchSelect clients={clients} clientId={clientId} />
             </div>
           )}
           <button

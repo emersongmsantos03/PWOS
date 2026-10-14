@@ -1,3 +1,4 @@
+import type { ClientBranch } from "./BranchSelect";
 export type MeetingType = "FOLLOW_UP" | "PLANNING" | "RESULTS" | "ALIGNMENT" | "PRESENTATION" | "SUPPORT" | "OTHER";
 export type MeetingFormat = "GOOGLE_MEET" | "PRESENTIAL" | "PHONE" | "WHATSAPP" | "OTHER";
 export type MeetingStatus = "SCHEDULED" | "IN_PROGRESS" | "PAUSED" | "COMPLETED" | "CANCELLED";
@@ -23,7 +24,7 @@ export type Meeting = {
   rescheduleCount: number; createdById: string; createdByName: string; createdAt: string; updatedAt: string;
   google?: { synced: boolean; link: string; error: string } | null;
 };
-export type MeetingClient = { id: string; name: string; status: string; segment: string; website: string; createdAt: string };
+export type MeetingClient = { id: string; name: string; status: string; segment: string; website: string; createdAt: string; branches?: ClientBranch[] };
 export type MeetingContact = { id: string; clientId: string; name: string; role: string; email: string };
 export type MeetingUser = { id: string; name: string; role: string; departmentName: string };
 export type MeetingsData = { meetings: Meeting[]; clients: MeetingClient[]; contacts: MeetingContact[]; users: MeetingUser[]; canViewTeam: boolean; googleConnected?: boolean };

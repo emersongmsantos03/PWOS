@@ -98,3 +98,34 @@ html[data-theme="dark"] .client-cnpj-status.warn{color:#ff7b7b}
 .client-receita-contacts .inline-check input{width:16px;height:16px;min-height:0}
 .client-receita-contacts .inline-check span{display:flex;flex-direction:column;min-width:0}
 .client-receita-contacts .inline-check small{color:var(--subtle);font-size:9px}
+
+/* Filiais do cliente: edição no cadastro e aba nos detalhes. */
+.client-branches .client-branch-list{display:grid;gap:10px}
+.client-branches .client-branch-list>article{padding:12px;border:1px solid var(--border);border-radius:10px;background:var(--surface)}
+.client-branches .client-branch-list>article.inactive{opacity:.65}
+.client-branches .client-branch-list>article>header{display:flex;align-items:center;gap:12px;margin-bottom:10px}
+.client-branches .client-branch-list>article>header b{flex:1;color:var(--heading);font-size:12px}
+.client-branches .client-branch-list>article>header .inline-check{display:inline-flex;align-items:center;gap:6px;font-size:11px}
+.client-branches .client-branch-list>article>header button{display:grid;place-items:center;width:30px;height:30px;padding:0;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--red,#c43d3d);cursor:pointer}
+.client-branches .client-branch-list>article>header button svg{width:14px;height:14px}
+.client-branch-add{display:inline-flex;align-items:center;gap:6px;margin-top:10px}
+.client-branch-add svg{width:14px;height:14px}
+.client-branch-empty{margin:4px 0 0;color:var(--subtle);font-size:12px}
+.client-branches-tab{display:grid;gap:14px}
+.client-branches-heading{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.client-branches-heading h3{display:flex;align-items:center;gap:8px;margin:0;color:var(--heading);font-size:14px}
+.client-branches-heading h3 svg{width:16px;height:16px}
+.client-branches-heading p{margin:4px 0 0;color:var(--subtle);font-size:12px}
+.client-branches-heading .primary{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.client-branches-heading .primary svg{width:14px;height:14px}
+.client-branches-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px}
+.client-branches-grid>article{padding:14px;border:1px solid var(--border);border-radius:12px;background:var(--surface)}
+.client-branches-grid>article.inactive{opacity:.6}
+.client-branches-grid header{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}
+.client-branches-grid header b{color:var(--heading);font-size:13px}
+.client-branches-grid header em{padding:3px 8px;border-radius:999px;background:var(--surface-soft);color:var(--subtle);font-size:10px;font-style:normal}
+.client-branches-grid dl{display:grid;gap:6px;margin:0}
+.client-branches-grid dl>div{display:flex;justify-content:space-between;gap:10px;font-size:11px}
+.client-branches-grid dt{color:var(--subtle)}
+.client-branches-grid dd{margin:0;color:var(--text);text-align:right}
+@media(max-width:620px){.client-branches-heading{flex-direction:column}}

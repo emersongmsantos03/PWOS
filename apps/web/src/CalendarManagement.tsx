@@ -1,4 +1,5 @@
 import { systemConfirm } from "./SystemDialog";
+import { BranchSelect, type ClientBranch } from "./BranchSelect";
 import {
   useEffect,
   useMemo,
@@ -42,6 +43,7 @@ type CalendarEvent = {
   location: string;
   category: string;
   clientId?: string;
+  branchId?: string;
   opportunityId?: string;
   recurrence?: string;
   reminderMinutes?: number;
@@ -62,10 +64,11 @@ type Task = {
   description?: string;
   estimateMinutes?: number;
   clientId?: string;
+  branchId?: string;
   opportunityId?: string;
 };
 type User = { id: string; name: string; profile?: string; color?: string };
-type Client = { id: string; name: string };
+type Client = { id: string; name: string; branches?: ClientBranch[] };
 type Opportunity = {
   id: string;
   name: string;
@@ -1204,6 +1207,7 @@ function CreateModal({
                 ]}
               />
             </label>
+            <BranchSelect clients={clients} clientId={clientId} defaultValue={eventItem?.branchId || taskItem?.branchId || ""} />
             <label>
               Lead ou oportunidade do CRM
               <SearchableSelect

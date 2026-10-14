@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, Cell, LabelList, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { SearchableSelect } from "./SearchableSelect";
+import { UnitField } from "./BranchSelect";
 import { systemConfirm } from "./SystemDialog";
 import {
   actionOverdue, actionStatusLabels, addDays, avatarTone, contactRoles, csvDownload, dayGroupLabel, dayOf, displayStatus, durationMinutes, endTime, formatLabels,
@@ -204,7 +205,7 @@ function ScheduleView({ store, user, can }: ViewProps) {
         <div className="mt-form">
           <label className={`span-6 ${invalid("clientId")}`}>Cliente / Grupo <em>*</em>
             <SearchableSelect value={form.clientId} onChange={(clientId) => setForm((current) => ({ ...current, clientId, unit: "", contactName: "", contactEmail: "", contactRole: "" }))} placeholder="Selecione o cliente ou grupo" searchPlaceholder="Buscar cliente ou grupo..." options={data.clients.map((client) => ({ value: client.id, label: client.name }))} /></label>
-          <label className="span-6">Loja / Unidade<input list="mt-units" value={form.unit} maxLength={80} placeholder="Ex.: Matriz, Cambé - PR (opcional)" onChange={(event) => set("unit", event.target.value)} /><datalist id="mt-units">{["Matriz", ...units].map((unit) => <option key={unit} value={unit} />)}</datalist></label>
+          <label className="span-6">Loja / Unidade<UnitField listId="mt-units" branches={data.clients.find((item) => item.id === form.clientId)?.branches} value={form.unit} suggestions={["Matriz", ...units]} placeholder="Ex.: Matriz, Cambé - PR (opcional)" onChange={(value) => set("unit", value)} /></label>
           <label className={`span-6 ${invalid("contactName")}`}>Contato / Participante <em>*</em>
             <input list="mt-contacts" value={form.contactName} maxLength={120} placeholder="Nome do participante" onChange={(event) => { const contact = clientContacts.find((item) => item.name === event.target.value); setForm((current) => ({ ...current, contactName: event.target.value, ...(contact ? { contactEmail: contact.email, contactRole: contact.role || current.contactRole } : {}) })); }} />
             <datalist id="mt-contacts">{clientContacts.map((contact) => <option key={contact.id} value={contact.name}>{contact.role}</option>)}</datalist></label>
