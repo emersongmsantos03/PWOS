@@ -169,3 +169,4 @@ html[data-theme="dark"] .campaign-analyze.partial{color:#f0c050!important}
 .simple-client-table td .campaign-delivery-status{min-width:0;align-items:center;justify-content:center}
 .simple-client-table td .campaign-delivery-status .campaign-state{display:inline-block;padding:6px;border:0;border-radius:6px;font-size:9px;font-weight:400;line-height:normal;background:var(--surface-soft)}
 .simple-client-table td .campaign-delivery-status .campaign-state.active{color:#258250;background:#e8f6ed}
+.simple-client-table td .simple-responsible{justify-content:center;text-align:left}

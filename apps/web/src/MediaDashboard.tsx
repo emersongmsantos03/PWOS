@@ -382,8 +382,8 @@ const simpleTableColumns: { label: string; width: number }[] = [
 const showsType = (group: ClientGroup) => group.campaigns.some((item) => (item.platform || group.platform) !== "GOOGLE_ADS");
 const showsLandingPage = (group: ClientGroup) => group.campaigns.some((item) => (item.platform || group.platform) === "GOOGLE_ADS");
 // Cada coluna leva a classe da sua posição original, para larguras fixas não dependerem das colunas ocultas.
-const SimpleTableHead = ({ type = true, landingPage = true, score = true }: { type?: boolean; landingPage?: boolean; score?: boolean }) => {
-  const columns = simpleTableColumns.map((column, index) => ({ ...column, className: `simple-col-${index + 2}` })).filter((column) => (type || column.label !== "Tipo") && (landingPage || column.label !== "Landing page") && (score || column.label !== "Score"));
+const SimpleTableHead = ({ type = true, landingPage = true, score = true, analysis = true }: { type?: boolean; landingPage?: boolean; score?: boolean; analysis?: boolean }) => {
+  const columns = simpleTableColumns.map((column, index) => ({ ...column, className: `simple-col-${index + 2}` })).filter((column) => (type || column.label !== "Tipo") && (landingPage || column.label !== "Landing page") && (score || column.label !== "Score") && (analysis || column.label !== "Análise"));
   return <>
     <colgroup>
       <col className="simple-name-column" />
@@ -2163,7 +2163,6 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
             onSinceChange={setSince}
             onUntilChange={setUntil}
             onPlatformChange={selectPlatform}
-            onAnalyze={openCampaignAnalysis}
             search={query}
             onSearchChange={setQuery}
             filters={<CampaignFilterControls periodDeliveryOption status={status} statuses={statuses} onStatusChange={setStatus} delivery={delivery} onDeliveryChange={setDelivery} showBoosted={showBoosted} onShowBoostedChange={setShowBoosted} />}
@@ -2660,7 +2659,7 @@ function MediaAiInsights({ campaigns, since, until, context, scope = "CAMPAIGNS"
   </>;
 }
 
-function ComparisonClientRows({ group, previousCampaigns, previousAvailable, search, onAnalyze }: { group: ClientGroup; previousCampaigns: Campaign[]; previousAvailable: boolean; search: string; onAnalyze: (campaign: Campaign) => void }) {
+function ComparisonClientRows({ group, previousCampaigns, previousAvailable, search }: { group: ClientGroup; previousCampaigns: Campaign[]; previousAvailable: boolean; search: string }) {
   const [open,setOpen] = useState(false);
   const name = group.client?.name || accountLabel(group.account);
   const current = group.campaigns, type = showsType(group), landingPage = showsLandingPage(group), scored = showsScore(group);
@@ -2688,14 +2687,12 @@ function ComparisonClientRows({ group, previousCampaigns, previousAvailable, sea
       {metric("dailyBudget",value=>money(value,currency),"simple-money")}{metric("impressions",number,"simple-volume")}{metric("clicks",number,"simple-clicks")}{metric("ctr",value=>`${number(value,2)}%`,"simple-rate")}{metric("cpc",value=>money(value,currency),"simple-rate",true)}{metric("leads",number,"simple-rate")}{metric("spend",value=>money(value,currency),"simple-money")}{metric("remainingBudget",value=>money(value,currency),"simple-volume")}
       {scored && <td><CompiledMetric current={averageScore(items, !campaign)} previous={old ? averageScore(oldItems, !campaign) : null} format={value=>`${number(value)} / 100`}/></td>}
       <td><span className="simple-responsible"><ResponsibleAvatar user={group.responsible}/><span>{group.responsible?.name || "Não atribuído"}</span></span></td>
-      <td>{campaign && <AnalyzeButton campaign={campaign} onClick={()=>onAnalyze(campaign)} />}</td>
     </tr>;
   };
-  return <article className={`simple-client-table ${open ? "open" : ""}`}><div className="simple-table-scroll"><table><SimpleTableHead type={type} landingPage={landingPage} score={scored} /><tbody>{[...new Set(current.map(item=>item.currency))].map(currency=>renderRow(current.filter(item=>item.currency===currency),previous.filter(item=>item.currency===currency),currency))}{open && campaignRows.map(item=>{const old=previousById.get(`${item.platform}:${item.accountId}:${item.id}`);return renderRow([item],old && old.currency===item.currency ? [old] : [],item.currency,item)})}</tbody></table></div></article>;
+  return <article className={`simple-client-table ${open ? "open" : ""}`}><div className="simple-table-scroll"><table><SimpleTableHead type={type} landingPage={landingPage} score={scored} analysis={false} /><tbody>{[...new Set(current.map(item=>item.currency))].map(currency=>renderRow(current.filter(item=>item.currency===currency),previous.filter(item=>item.currency===currency),currency))}{open && campaignRows.map(item=>{const old=previousById.get(`${item.platform}:${item.accountId}:${item.id}`);return renderRow([item],old && old.currency===item.currency ? [old] : [],item.currency,item)})}</tbody></table></div></article>;
 }
 
-function CompiledReport({ campaigns, groups, platform, since, until, onSinceChange, onUntilChange, onPlatformChange, onAnalyze, search, onSearchChange, filters }: {
-  onAnalyze: (campaign: Campaign) => void;
+function CompiledReport({ campaigns, groups, platform, since, until, onSinceChange, onUntilChange, onPlatformChange, search, onSearchChange, filters }: {
   search: string;
   onSearchChange: (value: string) => void;
   filters: ReactNode;
@@ -2773,7 +2770,7 @@ function CompiledReport({ campaigns, groups, platform, since, until, onSinceChan
     </section>
     <div className="comparison-simple-filters"><label><Building2/><select aria-label="Cliente para comparação" value={selectedPortfolio} onChange={event => setSelectedPortfolio(event.target.value)}><option value="ALL">Todos os clientes</option>{groups.map(group => <option key={group.key} value={group.key}>{group.client?.name || accountLabel(group.account)}</option>)}</select></label><label><Search/><input value={search} onChange={event => onSearchChange(event.target.value)} placeholder="Buscar cliente ou campanha…"/></label>{filters}<span role="status">{loadingComparison ? "Atualizando período anterior…" : "Atual · variação · anterior"}</span></div>
     {comparisonError && <div className="traffic-error"><AlertTriangle /><div><b>Comparação indisponível</b><p>{comparisonError}</p></div></div>}
-    {comparisonGroups.map(group => <ComparisonClientRows key={group.key} group={group} previousCampaigns={previousCampaigns} previousAvailable={!loadingComparison && !comparisonError} search={search} onAnalyze={onAnalyze}/>)}
+    {comparisonGroups.map(group => <ComparisonClientRows key={group.key} group={group} previousCampaigns={previousCampaigns} previousAvailable={!loadingComparison && !comparisonError} search={search}/>)}
     {!comparisonGroups.length && <div className="panel inline-empty"><Search/><h3>Nenhum cliente encontrado</h3><p>Ajuste os filtros da comparação.</p></div>}
     {!!comparisonGroups.length && <footer className="campaign-pagination compiled-pagination"><span>Exibindo todos os {comparisonGroups.length} clientes</span></footer>}
   </section>;
