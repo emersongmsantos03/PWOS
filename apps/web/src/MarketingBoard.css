@@ -1,5 +1,5 @@
 /* Painel do setor Marketing e Criação — prefixo mc- (também usado pela página do chamado) */
-.mc-board{--mc-blue:#1d6fe0;--mc-green:#16a34a;--mc-orange:#ea8a0c;--mc-red:#dc2626;--mc-purple:#7c3aed;--mc-yellow:#ca8a04;--mc-dark:#13243a;display:flex;flex-direction:column;gap:14px;padding-bottom:24px;color:var(--text);min-width:0}
+.mc-board{--mc-blue:#1d6fe0;--mc-green:#16a34a;--mc-orange:#ea8a0c;--mc-red:#dc2626;--mc-purple:#7c3aed;--mc-yellow:#ca8a04;--mc-dark:#13243a;display:flex;flex-direction:column;gap:14px;padding:28px clamp(16px,2.5vw,40px) 48px;color:var(--text);min-width:0}
 .mc-loading,.mc-alert{display:flex;align-items:center;gap:8px;margin:0;padding:12px 14px;border-radius:10px;font-size:12px}
 .mc-loading{color:var(--subtle)}.mc-loading svg{width:16px}
 .mc-alert{border:1px solid color-mix(in srgb,var(--mc-red,#dc2626) 30%,var(--border));background:color-mix(in srgb,#dc2626 7%,var(--surface));color:#b42318}
@@ -227,6 +227,7 @@ html[data-theme="dark"] .mc-toggle button.active{background:#2a3c52}
   .mc-hero h1{font-size:21px}
   .mc-card{padding:12px}
 }
+@media (max-width:620px){.mc-board{padding:20px 12px 48px}}
 @media (max-width:480px){.mc-kpis{grid-template-columns:1fr}.mc-filters select{flex:1}}
 .mc-task-ticket{display:grid;place-items:center;width:18px;height:18px;border-radius:5px;background:color-mix(in srgb,#1d6fe0 14%,var(--surface));color:#1d5fc4}
 .mc-task-ticket svg{width:12px}

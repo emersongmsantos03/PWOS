@@ -56,6 +56,7 @@ import nodemailer from "nodemailer";
 import OpenAI from "openai";
 import { extractMetaLeads, metaCampaignGoal, type MetaAction } from "./metaInsights";
 import { metaPrepaidBalance } from "./metaPrepaidBalance";
+import { landingPageResponseStatus } from "./landingPageStatus";
 import { mergeById, mergeVerifications } from "./reviewStoreMerge";
 import { validCalendarColor, validEventColorId } from "./apps/web/src/calendarColors";
 import react from "@vitejs/plugin-react";
@@ -171,7 +172,8 @@ const validatePublicLandingPage = async (initialUrl: string): Promise<LandingPag
         signal: AbortSignal.timeout(6_000),
         headers: { "User-Agent": "PW-OS-Landing-Page-Monitor/1.0" },
       });
-      if (result.status === 405)
+      // Há servidores que respondem mal ao HEAD (405, 404, 400…): confirma com um GET leve.
+      if (result.status >= 400 && landingPageResponseStatus(result.status, result.headers) === "INACTIVE")
         result = await fetch(parsed, {
           method: "GET",
           redirect: "manual",
@@ -187,9 +189,7 @@ const validatePublicLandingPage = async (initialUrl: string): Promise<LandingPag
         current = new URL(location, parsed).toString();
         continue;
       }
-      if ((result.status >= 200 && result.status < 300) || result.status === 401 || result.status === 403)
-        return "ACTIVE";
-      return "INACTIVE";
+      return landingPageResponseStatus(result.status, result.headers);
     }
     return "UNKNOWN";
   } catch {
@@ -1444,7 +1444,7 @@ function localApi(
     const cached = googleAgendaCache.get(user.id);
     if (cached && Date.now() - cached.at < (cached.error ? 60000 : 120000)) return cached;
     type GoogleTime = { dateTime?: string; date?: string };
-    type GoogleItem = { id: string; status?: string; colorId?: string; summary?: string; description?: string; location?: string; hangoutLink?: string; htmlLink?: string; created?: string; updated?: string; start?: GoogleTime; end?: GoogleTime; extendedProperties?: { private?: Record<string, string> } };
+    type GoogleItem = { id: string; status?: string; colorId?: string; summary?: string; description?: string; location?: string; hangoutLink?: string; htmlLink?: string; created?: string; updated?: string; start?: GoogleTime; end?: GoogleTime; extendedProperties?: { private?: Record<string, string> }; attendees?: Array<{ email?: string; responseStatus?: string }> };
     const toIso = (value: GoogleTime | undefined) => value?.dateTime ? new Date(value.dateTime).toISOString() : new Date(`${value?.date}T00:00:00-03:00`).toISOString();
     let result: { at: number; events: CalendarEvent[]; error: string };
     try {
@@ -1520,8 +1520,13 @@ function localApi(
       if (tasksChanged) writeWorkTasksFile();
       // Também envia tarefas pendentes (por exemplo, de quem acabou de conectar o Google).
       scheduleTaskGoogleSync();
-      const events = items.filter((item) => item.status !== "cancelled" && !item.extendedProperties?.private?.pwOsEventId && !item.extendedProperties?.private?.pwOsTaskId && (item.start?.dateTime || item.start?.date)).map((item): CalendarEvent => ({
-        id: `google:${item.id}`, title: item.summary || "(Sem título)", description: item.description || "", ownerId: user.id, ownerName: user.name, participantIds: [],
+      // Convidados que são da equipe entram como participantes, para o evento aparecer na agenda de cada um.
+      // A cópia de um convite do PW OS na agenda do convidado não traz as marcações privadas: fica de fora pelo id.
+      const userIdByEmail = new Map([...users.values()].filter((value) => value.email && !value.clientId).map((value) => [value.email.trim().toLowerCase(), value.id]));
+      const pwOsGoogleIds = new Set([...calendarEvents.values()].map((value) => value.googleEventId).filter(Boolean));
+      const events = items.filter((item) => item.status !== "cancelled" && !item.extendedProperties?.private?.pwOsEventId && !item.extendedProperties?.private?.pwOsTaskId && !pwOsGoogleIds.has(item.id) && (item.start?.dateTime || item.start?.date)).map((item): CalendarEvent => ({
+        id: `google:${item.id}`, title: item.summary || "(Sem título)", description: item.description || "", ownerId: user.id, ownerName: user.name,
+        participantIds: [...new Set((item.attendees || []).filter((attendee) => attendee.responseStatus !== "declined").map((attendee) => userIdByEmail.get(String(attendee.email || "").trim().toLowerCase()) || "").filter((id) => id && id !== user.id))],
         startAt: toIso(item.start), endAt: toIso(item.end || item.start), location: item.hangoutLink || item.location || "", category: "GOOGLE", clientId: "", projectId: "", opportunityId: "", taskId: "",
         recurrence: "NONE", reminderMinutes: 0, createdAt: item.created || "", updatedAt: item.updated || "", source: "GOOGLE", googleHtmlLink: item.htmlLink || "", meetUrl: item.hangoutLink || "",
         colorId: validEventColorId(item.colorId),
@@ -6099,7 +6104,7 @@ function localApi(
             });
           const google = await googleAgendaEvents(currentUser);
           // Quem vê a agenda da equipe também vê o que os colegas marcaram direto no Google
-          // deles. O mesmo convite pode estar em mais de uma agenda: vale o primeiro.
+          // deles. O mesmo convite pode estar em mais de uma agenda: vale o primeiro, somando as pessoas das outras cópias.
           const teamGoogle = hasPermission(currentUser, "calendar.view_team")
             ? await Promise.all(
                 [...users.values()]
@@ -6107,7 +6112,12 @@ function localApi(
                   .map((user) => googleAgendaEvents(user).then((result) => result.events)),
               )
             : [];
-          const googleEvents = [...new Map([...google.events, ...teamGoogle.flat()].reverse().map((event) => [event.id, event])).values()];
+          const googleEvents = [...[...google.events, ...teamGoogle.flat()].reduce((merged, event) => {
+            const kept = merged.get(event.id);
+            if (!kept) merged.set(event.id, event);
+            else merged.set(event.id, { ...kept, participantIds: [...new Set([...kept.participantIds, event.ownerId, ...event.participantIds])].filter((id) => id !== kept.ownerId) });
+            return merged;
+          }, new Map<string, CalendarEvent>()).values()];
           return json(response, 200, {
             events: [...calendarEvents.values()]
               .filter(canSeeEvent)
@@ -9904,7 +9914,8 @@ function localApi(
           return json(response, 200, {
             assignments: [...mediaAssignments.values()],
             canManage: hasPermission(currentUser, "media.edit"),
-            canSync: hasPermission(currentUser, "media.sync"),
+            // Sincronização manual da Meta e do Google: somente o usuário master.
+            canSync: currentUser.profile === "MASTER",
           });
         }
         const mediaAssignmentMatch = url.match(
@@ -10249,7 +10260,7 @@ function localApi(
             forceRefresh = requestUrl.searchParams.get("refresh") === "1",
             comparisonRequest = requestUrl.searchParams.get("comparison") === "1";
           const manualSync = forceRefresh && requestUrl.searchParams.get("manual") === "1";
-          if (!backgroundSync && forceRefresh && !hasPermission(currentUser, "media.sync"))
+          if (!backgroundSync && forceRefresh && currentUser.profile !== "MASTER")
             return json(response, 403, { message: "Você não possui permissão para sincronizar campanhas." });
           if (since > until)
             return json(response, 400, { message: "O início do período deve ser anterior ou igual ao fim." });
@@ -10714,7 +10725,7 @@ function localApi(
             : today;
           const forceRefresh = requestUrl.searchParams.get("refresh") === "1",
             comparisonRequest = requestUrl.searchParams.get("comparison") === "1";
-          if (!backgroundSync && forceRefresh && !hasPermission(currentUser, "media.sync"))
+          if (!backgroundSync && forceRefresh && currentUser.profile !== "MASTER")
             return json(response, 403, { message: "Você não possui permissão para sincronizar campanhas." });
           if (since > until)
             return json(response, 400, { message: "O início do período deve ser anterior ou igual ao fim." });

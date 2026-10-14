@@ -9,7 +9,7 @@ import "./SimpleClientTable.css";
 import { portfolioMetrics } from "./portfolioMetrics";
 import "./PortfolioTotals.css";
 import { MetaLogo, GoogleAdsLogo } from "./PlatformLogos";
-import { Component, Fragment, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ErrorInfo, type FormEvent, type ReactNode } from "react";
+import { Component, Fragment, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ErrorInfo, type FormEvent, type InputHTMLAttributes, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
   Settings2,
@@ -209,6 +209,14 @@ type ClientGroup = {
 };
 
 const iso = (date: Date) => date.toISOString().slice(0, 10);
+// Ao digitar a data à mão o campo passa por valores vazios ou com ano incompleto;
+// só repassamos a data quando ela está completa, para não quebrar os cálculos do período.
+const isCompleteDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) && Number(value.slice(0, 4)) >= 2000 && !Number.isNaN(new Date(`${value}T12:00`).getTime());
+function DateInput({ value, onChange, ...props }: Omit<InputHTMLAttributes<HTMLInputElement>, "type" | "value" | "onChange"> & { value: string; onChange: (value: string) => void }) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+  return <input {...props} type="date" value={draft} onChange={(event) => { setDraft(event.target.value); if (isCompleteDate(event.target.value)) onChange(event.target.value); }} onBlur={(event) => { if (!isCompleteDate(draft)) setDraft(value); props.onBlur?.(event); }} />;
+}
 const initialSince = () => iso(new Date(Date.now() - 6 * 86400000));
 const savedMediaContext = (userId: string) => {
   try { return readMediaPreference(localStorage, userId, "pw-os-media-context", {}) as { platform?: MediaView; since?: string; until?: string; client?: string; responsible?: string }; }
@@ -369,24 +377,30 @@ const simpleTableColumns: { label: string; width: number }[] = [
   { label: "Responsável", width: 120 },
   { label: "Análise", width: 96 },
 ];
-const SimpleTableHead = () => (
-  <>
+// A coluna de landing page fica só nas tabelas do Google; na Meta ela não é exibida.
+// No Google o "objetivo" exibido já é o tipo da campanha: a coluna Tipo só aparece quando há Meta.
+const showsType = (group: ClientGroup) => group.campaigns.some((item) => (item.platform || group.platform) !== "GOOGLE_ADS");
+const showsLandingPage = (group: ClientGroup) => group.campaigns.some((item) => (item.platform || group.platform) === "GOOGLE_ADS");
+// Cada coluna leva a classe da sua posição original, para larguras fixas não dependerem das colunas ocultas.
+const SimpleTableHead = ({ type = true, landingPage = true, score = true }: { type?: boolean; landingPage?: boolean; score?: boolean }) => {
+  const columns = simpleTableColumns.map((column, index) => ({ ...column, className: `simple-col-${index + 2}` })).filter((column) => (type || column.label !== "Tipo") && (landingPage || column.label !== "Landing page") && (score || column.label !== "Score"));
+  return <>
     <colgroup>
       <col className="simple-name-column" />
-      {simpleTableColumns.map((column) => (
-        <col key={column.label} style={{ width: column.width }} />
+      {columns.map((column) => (
+        <col key={column.label} className={column.className} style={{ width: column.width }} />
       ))}
     </colgroup>
     <thead>
       <tr>
         <th>Cliente / campanha</th>
-        {simpleTableColumns.map((column) => (
+        {columns.map((column) => (
           <th key={column.label}>{column.label}</th>
         ))}
       </tr>
     </thead>
-  </>
-);
+  </>;
+};
 type PerformanceTone = "good" | "warning" | "bad" | "neutral";
 const scoreTone = (score: number): PerformanceTone =>
   score < 0 ? "neutral" : score >= 90 ? "good" : score >= 70 ? "warning" : "bad";
@@ -781,11 +795,12 @@ function ClientCampaignGroup({
   const groupPlatforms = [...new Set(group.campaigns.map(item => item.platform || "META_ADS"))];
   const scoredCampaigns = activeScores(group.campaigns);
   const portfolioScore = scoredCampaigns.length ? Math.round(scoredCampaigns.reduce((sum, score) => sum + score, 0) / scoredCampaigns.length) : -1;
+  const type = showsType(group), landingPage = showsLandingPage(group), scored = showsScore(group);
   return (
     <article className={`simple-client-table ${open ? "open" : ""}`}>
       <div className="simple-table-scroll">
         <table>
-          <SimpleTableHead />
+          <SimpleTableHead type={type} landingPage={landingPage} score={scored} />
           <tbody>
           {(portfolioMetrics(group.campaigns)).map((total) => {
             const amount = (value: number | null) => value == null ? "—" : money(value,total.currency);
@@ -795,15 +810,15 @@ function ClientCampaignGroup({
               setOpen(value => !value);
             }}>
               <td><div className="simple-client-name"><button type="button" className="simple-expand" aria-expanded={open} aria-label={`${open ? "Recolher" : "Expandir"} campanhas de ${name}`} onClick={() => setOpen(value => !value)}><ChevronDown/></button><span><b title={name}>{name}</b><small>{group.campaigns.length} campanhas · {total.currency}</small></span>{(canManage || onHide) && <span className="simple-client-actions">{canManage && <button type="button" className="simple-client-icon" title="Editar cliente e responsável" aria-label={`Editar vínculo de ${name}`} onClick={editAssignment}><Settings2/></button>}{onHide && <button type="button" className="simple-client-icon hide" title="Ocultar este cliente das listas e contagens" aria-label={`Ocultar ${name}`} onClick={() => onHide(group)}><EyeOff/></button>}</span>}</div></td>
-              <td><span className="simple-campaign-type">{[...new Set(group.campaigns.map(item => campaignTypeLabel(item)))].join(" · ") || "—"}</span></td>
+              {type && <td><span className="simple-campaign-type">{[...new Set(group.campaigns.map(item => campaignTypeLabel(item)))].join(" · ") || "—"}</span></td>}
               <td><span className="simple-campaign-objective" title="Meta informa o objetivo de criação da campanha; o Google não expõe esse dado pela API, então mostramos o tipo de campanha.">{[...new Set(group.campaigns.map(campaignObjectiveLabel))].join(" · ") || "—"}</span></td>
               <td><span className="portfolio-network-list">{groupPlatforms.map(network => <span key={network} className="portfolio-network-icon" role="img" aria-label={network === "GOOGLE_ADS" ? "Google Ads" : "Meta Ads"} title={network === "GOOGLE_ADS" ? "Google Ads" : "Meta Ads"}>{network === "GOOGLE_ADS" ? <GoogleAdsLogo/> : <MetaLogo/>}</span>)}</span></td>
               <td><span className={`simple-status ${group.active ? "active" : "inactive"}`}>{group.active === group.campaigns.length ? "Ativa" : group.active > 0 ? "Misto" : "Inativa"}</span></td>
-              <td>{(() => { const pages = landingPageGroups(group.campaigns); return pages.length ? pages.map(page => <LandingPageIcon key={page.url} url={page.url} status={page.status}/>) : <LandingPageIcon/>; })()}</td>
+              {landingPage && <td>{(() => { const pages = landingPageGroups(group.campaigns); return pages.length ? pages.map(page => <LandingPageIcon key={page.url} url={page.url} status={page.status}/>) : <LandingPageIcon/>; })()}</td>}
               <td><span className="simple-value simple-money">{amount(total.dailyBudget)}</span></td><td><span className="simple-value simple-volume">{number(total.impressions)}</span></td><td><span className="simple-value simple-clicks">{number(total.clicks)}</span></td>
               <td><span className="simple-value simple-rate">{total.ctr == null ? "—" : `${number(total.ctr,2)}%`}</span></td><td><span className="simple-value simple-rate">{amount(total.cpc)}</span></td><td><span className="simple-value simple-rate">{number(total.leads)}</span></td>
               <td><span className="simple-value simple-money">{amount(total.spend)}</span></td><td><span className="simple-value simple-volume">{amount(total.remainingBudget)}</span></td>
-              <td><ScoreGauge score={portfolioScore} label="Cliente" compact portfolioCampaigns={group.campaigns}/></td>
+              {scored && <td><ScoreGauge score={portfolioScore} label="Cliente" compact portfolioCampaigns={group.campaigns}/></td>}
               <td><span className="simple-responsible" title={selectedResponsible?.name || "Não atribuído"}><ResponsibleAvatar user={selectedResponsible}/><span>{selectedResponsible?.name || "Não atribuído"}</span></span></td>
               <td>{(() => {
                 // Cliente analisado quando todas as campanhas com entrega foram analisadas no ciclo.
@@ -815,22 +830,22 @@ function ClientCampaignGroup({
           {open && (<>{group.campaigns.map(item => <Fragment key={`${item.platform}:${item.id}`}>
                 <tr className={`simple-campaign-row ${scoreTone(campaignScore(item))}`}>
                   <td><span className="simple-child-name"><span aria-hidden="true">↳</span><b title={item.name}>{item.name}</b></span><button type="button" className="campaign-assets-trigger" onClick={() => setOpenCampaignId(current => current === item.id ? "" : item.id)}><Eye/> {openCampaignId === item.id ? "Fechar anúncios" : "Ver anúncios"}</button></td>
-                  <td><span className="simple-campaign-type">{campaignTypeLabel(item)}</span></td>
+                  {type && <td><span className="simple-campaign-type">{campaignTypeLabel(item)}</span></td>}
                   <td><span className="simple-campaign-objective" title={item.platform === "GOOGLE_ADS" ? "O Google não expõe pela API o objetivo selecionado na interface; exibimos o tipo de campanha." : "Objetivo informado pela Meta"}>{campaignObjectiveLabel(item)}</span></td>
                   <td><span className="portfolio-network-icon" role="img" aria-label={item.platform === "GOOGLE_ADS" ? "Google Ads" : "Meta Ads"} title={item.platform === "GOOGLE_ADS" ? "Google Ads" : "Meta Ads"}>{item.platform === "GOOGLE_ADS" ? <GoogleAdsLogo/> : <MetaLogo/>}</span></td>
                   <td><CampaignDeliveryStatus campaign={item}/></td>
-                  <td><LandingPageIcon url={item.landingPageUrl} status={item.landingPageStatus}/></td>
+                  {landingPage && <td><LandingPageIcon url={item.landingPageUrl} status={item.landingPageStatus}/></td>}
                   <td><span className="simple-value simple-money">{item.status === "ACTIVE" && item.dailyBudget > 0 ? money(item.dailyBudget,item.currency) : "—"}</span></td>
                   <td><span className="simple-value simple-volume">{number(item.impressions)}</span></td><td><span className="simple-value simple-clicks">{number(item.clicks)}</span></td>
                   <td><span className="simple-value simple-rate">{item.impressions > 0 ? `${number(item.clicks / item.impressions * 100,2)}%` : "—"}</span></td>
                   <td><span className="simple-value simple-rate">{item.clicks > 0 ? money(item.spend / item.clicks,item.currency) : "—"}</span></td>
                   <td><span className="simple-value simple-rate">{number(item.leads)}</span></td><td><span className="simple-value simple-money">{money(item.spend,item.currency)}</span></td>
                   <td><span className="simple-value simple-volume">{item.accountRemainingBudget != null ? money(Math.max(0,item.accountRemainingBudget),item.currency) : item.remainingBudget == null ? "—" : money(Math.max(0,item.remainingBudget),item.currency)}</span></td>
-                  <td><ScoreGauge score={campaignScore(item)} label="Campanha" compact campaign={item}/></td>
+                  {scored && <td><ScoreGauge score={campaignScore(item)} label="Campanha" compact campaign={item}/></td>}
                   <td><span className="simple-responsible" title={selectedResponsible?.name || "Não atribuído"}><ResponsibleAvatar user={selectedResponsible}/><span>{selectedResponsible?.name || "Não atribuído"}</span></span></td>
                   <td></td>
                 </tr>
-                {openCampaignId === item.id && <tr className="campaign-assets-row"><td colSpan={17}><CampaignAds campaign={item}/></td></tr>}
+                {openCampaignId === item.id && <tr className="campaign-assets-row"><td colSpan={17 - (type ? 0 : 1) - (landingPage ? 0 : 1) - (scored ? 0 : 1)}><CampaignAds campaign={item}/></td></tr>}
               </Fragment>)}</>)}
           </tbody>
         </table>
@@ -1413,8 +1428,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
     [manualSyncing, setManualSyncing] = useState(false),
     [isFullscreen, setIsFullscreen] = useState(false),
     [tvIndex, setTvIndex] = useState(0),
-    [todayPage, setTodayPage] = useState(1),
-    [accountsPage, setAccountsPage] = useState(1);
+    [todayPage, setTodayPage] = useState(1);
   useEffect(() => {
     [
       "pw-os-meta-dashboard-cache",
@@ -1745,7 +1759,6 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
     setLocalQuery(value);
     setSearchParams((current) => { const next = new URLSearchParams(current); if (value) next.set("busca", value); else next.delete("busca"); return next; }, { replace: true });
   };
-  useEffect(() => { setAccountsPage(1); }, [platform, since, until, contextClient, contextResponsible, query, status, delivery]);
   const filtered = useMemo(
     () =>
       (data?.campaigns || []).filter((item) => {
@@ -1917,8 +1930,8 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
     const score = campaignScore(item), balance = item.remainingBudget == null ? null : Math.max(0, item.remainingBudget), group = groups.find((value) => value.accounts.some((account) => account.id === item.accountId));
     const issue = !campaignAnalysisDue(item) ? "" : item.status === "WITH_ISSUES" ? "Problema informado pela plataforma" : item.status === "ACTIVE" && item.spend > Math.max(item.dailyBudget * 2, 200) && item.leads + item.conversations === 0 ? "Investimento sem conversões" : item.status === "ACTIVE" && item.dailyBudget > 0 && balance != null && balance <= item.dailyBudget * 2 ? "Saldo para até dois dias" : score >= 0 && score < 70 ? `Score crítico: ${score}/100` : "Análise semanal pendente";
     return { ...item, score, balance, group, issue };
-  }).filter((item) => item.issue && alertable(item)).sort((a, b) => (a.status === "WITH_ISSUES" ? 0 : a.score < 70 ? 1 : 2) - (b.status === "WITH_ISSUES" ? 0 : b.score < 70 ? 1 : 2));
-  const previousToday = previousFiltered.filter(alertable).map((item) => { const score = campaignScore(item), balance = item.remainingBudget == null ? null : Math.max(0, item.remainingBudget), due = campaignAnalysisDue(item); return { critical: due && (item.status === "WITH_ISSUES" || score < 70), lowBalance: due && item.status === "ACTIVE" && item.dailyBudget > 0 && balance != null && balance <= item.dailyBudget * 2, pending: due }; });
+  }).filter((item) => item.issue && alertable(item)).sort((a, b) => (a.status === "WITH_ISSUES" ? 0 : criticalScore(a.score) ? 1 : 2) - (b.status === "WITH_ISSUES" ? 0 : criticalScore(b.score) ? 1 : 2));
+  const previousToday = previousFiltered.filter(alertable).map((item) => { const score = campaignScore(item), balance = item.remainingBudget == null ? null : Math.max(0, item.remainingBudget), due = campaignAnalysisDue(item); return { critical: due && (item.status === "WITH_ISSUES" || criticalScore(score)), lowBalance: due && item.status === "ACTIVE" && item.dailyBudget > 0 && balance != null && balance <= item.dailyBudget * 2, pending: due }; });
   const recordTodayAnalysis = (item: Campaign) => fetch("/api/media/campaigns/verification", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ platform: item.platform, accountId: item.accountId, campaignId: item.id, action: "ANALYSIS", score: campaignScore(item), spend: item.spend, leads: item.leads, cpl: item.cpl }) });
   const openCampaignAnalysis = (campaign: Campaign) => {
     const params = new URLSearchParams(window.location.search);
@@ -1927,7 +1940,6 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
     setManagementView("CAMPAIGNS");
   };
   const todayTotalPages = Math.max(1, Math.ceil(todayRows.length / 20)), todaySafePage = Math.min(todayPage, todayTotalPages), todayVisible = todayRows.slice((todaySafePage - 1) * 20, todaySafePage * 20);
-  const accountsTotalPages = Math.max(1, Math.ceil(groups.length / 20)), accountsSafePage = Math.min(accountsPage, accountsTotalPages), visibleGroups = groups.slice((accountsSafePage - 1) * 20, accountsSafePage * 20);
   return (
     <div className={`page traffic-page ${loading && !data ? "media-awaiting-period" : ""}`} ref={pageRef}>
       {loading && <div className="media-refresh-status" role="status" aria-live="polite"><RefreshCw className="spin"/><span>{data ? "Atualizando métricas" : "Buscando o período selecionado"}</span><small>{platform === "GOOGLE_ADS" ? "Google Ads" : platform === "META_ADS" ? "Meta Ads" : "Plataformas"}</small></div>}
@@ -1966,19 +1978,17 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
           </div>}
           {section === "REPORTS" && <label>
             <CalendarDays />
-            <input
-              type="date"
+            <DateInput
               value={since}
               max={until < todayIso ? until : todayIso}
-              onChange={(event) => setSince(event.target.value)}
+              onChange={setSince}
             />
             <span>até</span>
-            <input
-              type="date"
+            <DateInput
               value={until}
               min={since}
               max={todayIso}
-              onChange={(event) => setUntil(event.target.value)}
+              onChange={setUntil}
             />
           </label>}
           <button
@@ -2025,7 +2035,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
       {(section === "CLIENTS" || section === "CAMPAIGNS" || section === "TODAY") && <section className="media-context-bar">
         <div className="campaign-standard-filter media-context-select"><SearchableSelect value={contextClient} onChange={setContextClient} placeholder="Todos os clientes" searchPlaceholder="Buscar cliente…" options={[{ value: "ALL", label: "Todos os clientes" }, ...clients.map((client) => ({ value: client.id, label: client.name }))]}/></div>
         <div className="campaign-standard-filter media-context-select"><SearchableSelect value={contextResponsible} onChange={setContextResponsible} placeholder="Todos os responsáveis" searchPlaceholder="Buscar responsável…" options={[{ value: "ALL", label: "Todos os responsáveis" }, ...users.map((user) => ({ value: user.id, label: user.name }))]}/></div>
-        <div className="media-context-period"><span><CalendarDays/> Período</span><div className="media-context-dates"><button onClick={() => { const end = new Date(), start = new Date(); start.setDate(start.getDate() - 6); setSince(iso(start)); setUntil(iso(end)); }}>7 dias</button><button onClick={() => { const end = new Date(), start = new Date(); start.setDate(start.getDate() - 14); setSince(iso(start)); setUntil(iso(end)); }}>15 dias</button><button onClick={() => applyReportPeriod("LAST_30")}>30 dias</button><button onClick={() => applyReportPeriod("FULL_MONTH")}>Mês atual</button></div><details className="media-custom-period"><summary><CalendarDays/><span>{shortDate(since)} – {shortDate(until)}</span><ChevronDown/></summary><div><label><small>Data inicial</small><input aria-label="Data inicial" type="date" value={since} max={until < todayIso ? until : todayIso} onChange={(event) => setSince(event.target.value)}/></label><i>até</i><label><small>Data final</small><input aria-label="Data final" type="date" value={until} min={since} max={todayIso} onChange={(event) => setUntil(event.target.value)}/></label></div></details></div>
+        <div className="media-context-period"><span><CalendarDays/> Período</span><div className="media-context-dates"><button onClick={() => { const end = new Date(), start = new Date(); start.setDate(start.getDate() - 6); setSince(iso(start)); setUntil(iso(end)); }}>7 dias</button><button onClick={() => { const end = new Date(), start = new Date(); start.setDate(start.getDate() - 14); setSince(iso(start)); setUntil(iso(end)); }}>15 dias</button><button onClick={() => applyReportPeriod("LAST_30")}>30 dias</button><button onClick={() => applyReportPeriod("FULL_MONTH")}>Mês atual</button></div><details className="media-custom-period"><summary><CalendarDays/><span>{shortDate(since)} – {shortDate(until)}</span><ChevronDown/></summary><div><label><small>Data inicial</small><DateInput aria-label="Data inicial" value={since} max={until < todayIso ? until : todayIso} onChange={setSince}/></label><i>até</i><label><small>Data final</small><DateInput aria-label="Data final" value={until} min={since} max={todayIso} onChange={setUntil}/></label></div></details></div>
         {(contextClient !== "ALL" || contextResponsible !== "ALL") && <button className="media-context-clear" onClick={() => { setContextClient("ALL"); setContextResponsible("ALL"); }}>Limpar filtros</button>}
         <div className="media-filter-chips">{contextClient !== "ALL" && <button onClick={() => setContextClient("ALL")}>{clients.find((item) => item.id === contextClient)?.name || "Cliente"}<X/></button>}{contextResponsible !== "ALL" && <button onClick={() => setContextResponsible("ALL")}>{users.find((item) => item.id === contextResponsible)?.name || "Responsável"}<X/></button>}</div>
       </section>}
@@ -2038,7 +2048,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
       />}
       <>
         {mediaMode === "CLIENTS" && (
-          <section className="traffic-overview traffic-executive-kpis">
+          <section className={`traffic-overview traffic-executive-kpis${platform === "GOOGLE_ADS" ? " no-reach" : ""}`}>
             <article>
               <WalletCards />
               <span>
@@ -2055,7 +2065,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
                 <em>{comparisonText(overall.spend, previousOverall.spend)} · {periodDays} dia(s)</em>
               </span>
             </article>
-            <article>
+            {platform !== "GOOGLE_ADS" && <article>
               <Users />
               <span>
                 <small>Alcance</small>
@@ -2066,11 +2076,11 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
                 </b>
                 <em>
                   {overall.reachAvailable
-                    ? `Usuários únicos informados ${platform === "GOOGLE_ADS" ? "pelo Google" : platform === "META_ADS" ? "pela Meta" : "pelas plataformas"}`
+                    ? `Usuários únicos informados ${platform === "META_ADS" ? "pela Meta" : "pelas plataformas"}`
                     : "Métrica não fornecida"}
                 </em>
               </span>
-            </article>
+            </article>}
             <article>
               <Eye />
               <span>
@@ -2103,7 +2113,8 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
             <article>
               <Target />
               <span>
-                <small>Leads</small>
+                {/* No Google o número vem da coluna Conversões da plataforma. */}
+                <small>{platform === "GOOGLE_ADS" ? "Conversões" : "Leads"}</small>
                 <b>{number(overall.leads)}</b>
                 <em>{comparisonText(overall.leads, previousOverall.leads)}</em>
               </span>
@@ -2111,9 +2122,9 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
             <article>
               <Gauge />
               <span>
-                <small>CPL médio</small>
+                <small>{platform === "GOOGLE_ADS" ? "Custo por conversão" : "CPL médio"}</small>
                 <b>{averageCpl === null ? "—" : money(averageCpl)}</b>
-                <em>{averageCpl === null ? "Custo por lead" : comparisonText(averageCpl, previousOverall.leads ? previousOverall.spend / previousOverall.leads : 0, true)}</em>
+                <em>{averageCpl === null ? platform === "GOOGLE_ADS" ? "Custo por conversão" : "Custo por lead" : comparisonText(averageCpl, previousOverall.leads ? previousOverall.spend / previousOverall.leads : 0, true)}</em>
               </span>
             </article>
             <article>
@@ -2130,9 +2141,9 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
         )}
         {mediaMode === "TODAY" ? (
           <section className="media-today">
-            <div className="media-today-summary"><article className="critical"><AlertTriangle/><span><b>{todayRows.filter((item) => item.status === "WITH_ISSUES" || item.score < 70).length}</b><small>Críticos</small><em>{previousToday.filter((item) => item.critical).length} no período anterior</em></span></article><article><WalletCards/><span><b>{todayRows.filter((item) => item.issue.includes("Saldo")).length}</b><small>Saldo baixo</small><em>{previousToday.filter((item) => item.lowBalance).length} anteriormente</em></span></article><article><Clock3/><span><b>{todayRows.filter((item) => item.issue.includes("pendente")).length}</b><small>Análises pendentes</small><em>{previousToday.filter((item) => item.pending).length} anteriormente</em></span></article><article><CheckCircle2/><span><b>{Math.max(0, allCampaigns.length - todayRows.length)}</b><small>Sem alerta</small><em>{Math.max(0, previousFiltered.length - previousToday.filter((item) => item.critical || item.lowBalance || item.pending).length)} anteriormente</em></span></article></div>
+            <div className="media-today-summary"><article className="critical"><AlertTriangle/><span><b>{todayRows.filter((item) => item.status === "WITH_ISSUES" || criticalScore(item.score)).length}</b><small>Críticos</small><em>{previousToday.filter((item) => item.critical).length} no período anterior</em></span></article><article><WalletCards/><span><b>{todayRows.filter((item) => item.issue.includes("Saldo")).length}</b><small>Saldo baixo</small><em>{previousToday.filter((item) => item.lowBalance).length} anteriormente</em></span></article><article><Clock3/><span><b>{todayRows.filter((item) => item.issue.includes("pendente")).length}</b><small>Análises pendentes</small><em>{previousToday.filter((item) => item.pending).length} anteriormente</em></span></article><article><CheckCircle2/><span><b>{Math.max(0, allCampaigns.length - todayRows.length)}</b><small>Sem alerta</small><em>{Math.max(0, previousFiltered.length - previousToday.filter((item) => item.critical || item.lowBalance || item.pending).length)} anteriormente</em></span></article></div>
             <header><div><span>FILA PRIORIZADA</span><h2>Decisões recomendadas</h2><p>Problemas críticos aparecem primeiro. Abra a campanha sem perder seus filtros.</p></div><NavLink to="/midia/gestao">Ver todas as campanhas</NavLink></header>
-            <div className="media-today-list">{todayVisible.map((item) => <article key={`${item.platform}:${item.accountId}:${item.id}`}><i className={item.status === "WITH_ISSUES" || item.score < 70 ? "critical" : "warning"}><AlertTriangle/></i><span><b>{item.name}</b><small>{item.group?.client?.name || accountLabel(item.group?.account || { id:item.accountId, name:item.client, currency:item.currency, amountSpent:0, spendCap:0 })} · {item.platform === "META_ADS" ? "Meta Ads" : "Google Ads"}</small></span><strong>{item.issue}</strong><em>{item.spend ? `${money(item.spend, item.currency)} investidos · ${number(item.leads)} conversões` : "Sem investimento no período"}</em><NavLink onClick={() => void recordTodayAnalysis(item)} to={`/midia/gestao?campaign=${encodeURIComponent(`${item.platform}:${item.accountId}:${item.id}`)}`}>Analisar</NavLink></article>)}{!todayRows.length && <div className="media-today-empty"><CheckCircle2/><b>Operação saudável</b><span>Nenhuma prioridade crítica nos filtros atuais.</span></div>}</div>
+            <div className="media-today-list">{todayVisible.map((item) => <article key={`${item.platform}:${item.accountId}:${item.id}`}><i className={item.status === "WITH_ISSUES" || criticalScore(item.score) ? "critical" : "warning"}><AlertTriangle/></i><span><b>{item.name}</b><small>{item.group?.client?.name || accountLabel(item.group?.account || { id:item.accountId, name:item.client, currency:item.currency, amountSpent:0, spendCap:0 })} · {item.platform === "META_ADS" ? "Meta Ads" : "Google Ads"}</small></span><strong>{item.issue}</strong><em>{item.spend ? `${money(item.spend, item.currency)} investidos · ${number(item.leads)} conversões` : "Sem investimento no período"}</em><NavLink onClick={() => void recordTodayAnalysis(item)} to={`/midia/gestao?campaign=${encodeURIComponent(`${item.platform}:${item.accountId}:${item.id}`)}`}>Analisar</NavLink></article>)}{!todayRows.length && <div className="media-today-empty"><CheckCircle2/><b>Operação saudável</b><span>Nenhuma prioridade crítica nos filtros atuais.</span></div>}</div>
             {!!todayRows.length && <footer className="media-list-pagination"><span>Exibindo {(todaySafePage - 1) * 20 + 1}–{Math.min(todaySafePage * 20, todayRows.length)} de <b>{todayRows.length}</b></span><nav><button disabled={todaySafePage === 1} onClick={() => setTodayPage((value) => Math.max(1, value - 1))}>Anterior</button><em>Página {todaySafePage} de {todayTotalPages}</em><button disabled={todaySafePage === todayTotalPages} onClick={() => setTodayPage((value) => Math.min(todayTotalPages, value + 1))}>Próxima</button></nav></footer>}
           </section>
         ) : mediaMode === "REPORTS" || mediaMode === "HISTORY" ? (
@@ -2234,7 +2245,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
               </div>
             ) : (
               <section className="traffic-client-list">
-                {visibleGroups.map((group, index) => (
+                {groups.map((group, index) => (
                   <ClientCampaignGroup
                     key={group.key}
                     group={group}
@@ -2252,7 +2263,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
                 ))}
               </section>
             )}
-            {!!groups.length && <footer className="media-list-pagination"><span>Exibindo {(accountsSafePage - 1) * 20 + 1}–{Math.min(accountsSafePage * 20, groups.length)} de <b>{groups.length}</b></span><nav><button disabled={accountsSafePage === 1} onClick={() => setAccountsPage((value) => Math.max(1, value - 1))}>Anterior</button><em>Página {accountsSafePage} de {accountsTotalPages}</em><button disabled={accountsSafePage === accountsTotalPages} onClick={() => setAccountsPage((value) => Math.min(accountsTotalPages, value + 1))}>Próxima</button></nav></footer>}
+            {!!groups.length && <footer className="media-list-pagination"><span>Exibindo todos os <b>{groups.length}</b> clientes</span></footer>}
             {data && (
               <>
                 <section className="meta-analysis-grid">
@@ -2456,11 +2467,15 @@ function PortfolioReviews({ group, name, periodDays, onReviewed }: { group: Clie
   </section>;
 }
 
-// Notas agregadas (cliente, portfólio, média geral) consideram só campanhas ativas, do Google e da Meta.
+// Notas agregadas (cliente, portfólio, média geral) consideram só campanhas ativas do Google.
 const activeScores = (items: Campaign[]) => items.filter((item) => item.status === "ACTIVE").map(campaignScore).filter((score) => score >= 0);
 
+// O score é usado só no Google; campanhas da Meta ficam sem nota (-1), como as sem entrega.
+const hasCampaignScore = (item: Pick<Campaign, "platform">) => item.platform === "GOOGLE_ADS";
+const showsScore = (group: ClientGroup) => group.campaigns.some((item) => (item.platform || group.platform) === "GOOGLE_ADS");
+const criticalScore = (score: number) => score >= 0 && score < 70;
 function campaignScore(item: Campaign) {
-  if (!hasDelivery(item)) return -1;
+  if (!hasCampaignScore(item) || !hasDelivery(item)) return -1;
   // No Google Ads vale a pontuação de otimização da própria plataforma.
   const optimization = googleOptimizationScore(item);
   if (optimization != null) return optimization;
@@ -2483,9 +2498,9 @@ function campaignScore(item: Campaign) {
 }
 
 function campaignScoreBreakdown(item: Campaign) {
-  if (!hasDelivery(item)) return {
+  if (!hasCampaignScore(item) || !hasDelivery(item)) return {
     score: -1,
-    summary: "Sem entrega suficiente para calcular o score.",
+    summary: hasCampaignScore(item) ? "Sem entrega suficiente para calcular o score." : "Campanhas da Meta não recebem score.",
     factors: [] as Array<{ label: string; value: string; points: number; max: number; tone: "good" | "warning" | "bad" }>,
     strengths: [] as string[],
     improvements: ["Ative ou revise a veiculação para gerar dados avaliáveis."],
@@ -2647,7 +2662,7 @@ function MediaAiInsights({ campaigns, since, until, context, scope = "CAMPAIGNS"
 function ComparisonClientRows({ group, previousCampaigns, previousAvailable, search, onAnalyze }: { group: ClientGroup; previousCampaigns: Campaign[]; previousAvailable: boolean; search: string; onAnalyze: (campaign: Campaign) => void }) {
   const [open,setOpen] = useState(false);
   const name = group.client?.name || accountLabel(group.account);
-  const current = group.campaigns;
+  const current = group.campaigns, type = showsType(group), landingPage = showsLandingPage(group), scored = showsScore(group);
   const accountKeys = new Set(group.accounts.map(account => `${account.platform || group.platform}:${account.id}`));
   // O período anterior segue a mesma regra: só entram campanhas que veicularam nele.
   const previous = previousAvailable ? previousCampaigns.filter(item => accountKeys.has(`${item.platform}:${item.accountId}`) && hasDelivery(item)) : [];
@@ -2664,18 +2679,18 @@ function ComparisonClientRows({ group, previousCampaigns, previousAvailable, sea
     const metric = (key: "dailyBudget"|"impressions"|"clicks"|"ctr"|"cpc"|"leads"|"spend"|"remainingBudget", format: (value:number)=>string, tone:string, inverse=false) => <td><span className={`simple-value ${tone}`}><CompiledMetric current={total[key]} previous={previousAvailable && old ? old[key] : null} format={format} inverse={inverse} neutralTrend={key === "spend" || key === "dailyBudget" || key === "remainingBudget"}/></span></td>;
     return <tr className={campaign ? "simple-campaign-row" : "simple-client-row"} key={campaign ? `${campaign.platform}:${campaign.id}` : currency} onClick={event=>{if(!campaign && !(event.target as HTMLElement).closest('button,a,[role="button"]') && !window.getSelection()?.toString())setOpen(value=>!value)}}>
       <td>{campaign ? <span className="simple-child-name"><span>↳</span><b>{campaign.name}</b></span> : <div className="simple-client-name"><button type="button" className="simple-expand" aria-expanded={open} aria-label={`Campanhas de ${name}`} onClick={()=>setOpen(value=>!value)}><ChevronDown/></button><span><b>{name}</b><small>{items.length} campanhas · {currency}</small></span></div>}</td>
-      <td><span className="simple-campaign-type">{[...new Set(items.map(campaignTypeLabel))].join(" · ")}</span></td>
+      {type && <td><span className="simple-campaign-type">{[...new Set(items.map(campaignTypeLabel))].join(" · ")}</span></td>}
       <td><span className="simple-campaign-objective">{[...new Set(items.map(campaignObjectiveLabel))].join(" · ")}</span></td>
       <td><span className="portfolio-network-list">{networks.map(network=><span key={network} className="portfolio-network-icon" role="img" aria-label={network === "GOOGLE_ADS" ? "Google Ads" : "Meta Ads"}>{network === "GOOGLE_ADS" ? <GoogleAdsLogo/> : <MetaLogo/>}</span>)}</span></td>
       <td><span className={`simple-status ${active ? "active" : "inactive"}`}>{active===items.length ? "Ativa" : active ? "Misto" : "Inativa"}</span></td>
-      <td>{pages.length ? pages.map(page=><LandingPageIcon key={page.url} url={page.url} status={page.status}/>) : <LandingPageIcon/>}</td>
+      {landingPage && <td>{pages.length ? pages.map(page=><LandingPageIcon key={page.url} url={page.url} status={page.status}/>) : <LandingPageIcon/>}</td>}
       {metric("dailyBudget",value=>money(value,currency),"simple-money")}{metric("impressions",number,"simple-volume")}{metric("clicks",number,"simple-clicks")}{metric("ctr",value=>`${number(value,2)}%`,"simple-rate")}{metric("cpc",value=>money(value,currency),"simple-rate",true)}{metric("leads",number,"simple-rate")}{metric("spend",value=>money(value,currency),"simple-money")}{metric("remainingBudget",value=>money(value,currency),"simple-volume")}
-      <td><CompiledMetric current={averageScore(items, !campaign)} previous={old ? averageScore(oldItems, !campaign) : null} format={value=>`${number(value)} / 100`}/></td>
+      {scored && <td><CompiledMetric current={averageScore(items, !campaign)} previous={old ? averageScore(oldItems, !campaign) : null} format={value=>`${number(value)} / 100`}/></td>}
       <td><span className="simple-responsible"><ResponsibleAvatar user={group.responsible}/><span>{group.responsible?.name || "Não atribuído"}</span></span></td>
-      <td>{campaign ? <AnalyzeButton campaign={campaign} onClick={()=>onAnalyze(campaign)} /> : <button type="button" className="campaign-analyze" onClick={()=>setOpen(value=>!value)}>{open ? "Recolher" : "Comparar"}</button>}</td>
+      <td>{campaign && <AnalyzeButton campaign={campaign} onClick={()=>onAnalyze(campaign)} />}</td>
     </tr>;
   };
-  return <article className={`simple-client-table ${open ? "open" : ""}`}><div className="simple-table-scroll"><table><SimpleTableHead /><tbody>{[...new Set(current.map(item=>item.currency))].map(currency=>renderRow(current.filter(item=>item.currency===currency),previous.filter(item=>item.currency===currency),currency))}{open && campaignRows.map(item=>{const old=previousById.get(`${item.platform}:${item.accountId}:${item.id}`);return renderRow([item],old && old.currency===item.currency ? [old] : [],item.currency,item)})}</tbody></table></div></article>;
+  return <article className={`simple-client-table ${open ? "open" : ""}`}><div className="simple-table-scroll"><table><SimpleTableHead type={type} landingPage={landingPage} score={scored} /><tbody>{[...new Set(current.map(item=>item.currency))].map(currency=>renderRow(current.filter(item=>item.currency===currency),previous.filter(item=>item.currency===currency),currency))}{open && campaignRows.map(item=>{const old=previousById.get(`${item.platform}:${item.accountId}:${item.id}`);return renderRow([item],old && old.currency===item.currency ? [old] : [],item.currency,item)})}</tbody></table></div></article>;
 }
 
 function CompiledReport({ campaigns, groups, platform, since, until, onSinceChange, onUntilChange, onPlatformChange, onAnalyze, search, onSearchChange, filters }: {
@@ -2700,8 +2715,6 @@ function CompiledReport({ campaigns, groups, platform, since, until, onSinceChan
     [previousUntil, setPreviousUntil] = useState(previousUntilDefault),
     [previousCampaigns, setPreviousCampaigns] = useState<Campaign[]>([]),
     [portfolioSearch, setPortfolioSearch] = useState(""),
-    [page, setPage] = useState(1),
-    [pageSize, setPageSize] = useState<20 | 40 | 60 | 80 | 100>(20),
     [loadingComparison, setLoadingComparison] = useState(false),
     [comparisonError, setComparisonError] = useState(""),
     [selectedPortfolio, setSelectedPortfolio] = useState("ALL");
@@ -2709,7 +2722,6 @@ function CompiledReport({ campaigns, groups, platform, since, until, onSinceChan
     if (!groups.length) return;
     if (selectedPortfolio !== "ALL" && !groups.some((group) => group.key === selectedPortfolio)) setSelectedPortfolio("ALL");
   }, [groups, selectedPortfolio]);
-  useEffect(() => { setPage(1); }, [search, platform, selectedPortfolio, since, until, previousSince, previousUntil, pageSize]);
   useEffect(() => {
     if (!campaigns.length) { setPreviousCampaigns([]); setLoadingComparison(false); return; }
     let cancelled = false;
@@ -2749,27 +2761,20 @@ function CompiledReport({ campaigns, groups, platform, since, until, onSinceChan
     void loadComparison();
     return () => { cancelled = true; controller.abort(); };
   }, [platform, previousSince, previousUntil, campaigns.length]);
-  const comparisonGroups = groups.filter(group => (selectedPortfolio === "ALL" || group.key === selectedPortfolio) && `${group.client?.name || accountLabel(group.account)} ${group.campaigns.map(item => item.name).join(" ")}`.toLowerCase().includes(search.toLowerCase())).sort((a,b) => (a.client?.name || accountLabel(a.account)).localeCompare(b.client?.name || accountLabel(b.account), "pt-BR", { sensitivity: "base", numeric: true })),
-    totalPages = Math.max(1, Math.ceil(comparisonGroups.length / pageSize)),
-    safePage = Math.min(page,totalPages),
-    paginatedGroups = comparisonGroups.slice((safePage - 1) * pageSize, safePage * pageSize);
+  const comparisonGroups = groups.filter(group => (selectedPortfolio === "ALL" || group.key === selectedPortfolio) && `${group.client?.name || accountLabel(group.account)} ${group.campaigns.map(item => item.name).join(" ")}`.toLowerCase().includes(search.toLowerCase())).sort((a,b) => (a.client?.name || accountLabel(a.account)).localeCompare(b.client?.name || accountLabel(b.account), "pt-BR", { sensitivity: "base", numeric: true }));
   return <section className="compiled-report comparison-by-portfolio simple-comparison">
     <header className="compiled-heading"><div><small>COMPARAÇÃO POR PORTFÓLIO</small><h2>Performance entre períodos</h2><p>Escolha dois intervalos e consulte cada portfólio com a mesma lógica da Gestão de mídia.</p></div><span>{groups.length} portfólios</span></header>
     <MediaPlatformSwitch platform={platform} onPlatformChange={onPlatformChange} metaDetail="Comparar campanhas da Meta" googleDetail="Comparar campanhas do Google" />
     <section className="compiled-periods">
-      <div><small>PERÍODO ATUAL</small><label><CalendarDays /><input type="date" value={since} max={until} onChange={(event) => onSinceChange(event.target.value)} /><span>até</span><input type="date" value={until} min={since} onChange={(event) => onUntilChange(event.target.value)} /></label></div>
+      <div><small>PERÍODO ATUAL</small><label><CalendarDays /><DateInput value={since} max={until} onChange={onSinceChange} /><span>até</span><DateInput value={until} min={since} onChange={onUntilChange} /></label></div>
       <i>comparar com</i>
-      <div><small>PERÍODO ANTERIOR</small><label><CalendarDays /><input type="date" value={previousSince} max={previousUntil} onChange={(event) => setPreviousSince(event.target.value)} /><span>até</span><input type="date" value={previousUntil} min={previousSince} onChange={(event) => setPreviousUntil(event.target.value)} /></label></div>
+      <div><small>PERÍODO ANTERIOR</small><label><CalendarDays /><DateInput value={previousSince} max={previousUntil} onChange={setPreviousSince} /><span>até</span><DateInput value={previousUntil} min={previousSince} onChange={setPreviousUntil} /></label></div>
     </section>
     <div className="comparison-simple-filters"><label><Building2/><select aria-label="Cliente para comparação" value={selectedPortfolio} onChange={event => setSelectedPortfolio(event.target.value)}><option value="ALL">Todos os clientes</option>{groups.map(group => <option key={group.key} value={group.key}>{group.client?.name || accountLabel(group.account)}</option>)}</select></label><label><Search/><input value={search} onChange={event => onSearchChange(event.target.value)} placeholder="Buscar cliente ou campanha…"/></label>{filters}<span role="status">{loadingComparison ? "Atualizando período anterior…" : "Atual · variação · anterior"}</span></div>
     {comparisonError && <div className="traffic-error"><AlertTriangle /><div><b>Comparação indisponível</b><p>{comparisonError}</p></div></div>}
-    {paginatedGroups.map(group => <ComparisonClientRows key={group.key} group={group} previousCampaigns={previousCampaigns} previousAvailable={!loadingComparison && !comparisonError} search={search} onAnalyze={onAnalyze}/>)}
+    {comparisonGroups.map(group => <ComparisonClientRows key={group.key} group={group} previousCampaigns={previousCampaigns} previousAvailable={!loadingComparison && !comparisonError} search={search} onAnalyze={onAnalyze}/>)}
     {!comparisonGroups.length && <div className="panel inline-empty"><Search/><h3>Nenhum cliente encontrado</h3><p>Ajuste os filtros da comparação.</p></div>}
-    <footer className="campaign-pagination compiled-pagination">
-      <span>Exibindo {comparisonGroups.length ? (safePage - 1) * pageSize + 1 : 0}–{Math.min(safePage * pageSize, comparisonGroups.length)} de {comparisonGroups.length} clientes</span>
-      <label>Por página<select value={pageSize} onChange={(event) => setPageSize(Number(event.target.value) as 20 | 40 | 60 | 80 | 100)}>{[20,40,60,80,100].map((size) => <option value={size} key={size}>{size}</option>)}</select></label>
-      <nav aria-label="Paginação do compilado"><button type="button" disabled={safePage === 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>Anterior</button><span>Página <b>{safePage}</b> de {totalPages}</span><button type="button" disabled={safePage === totalPages} onClick={() => setPage((value) => Math.min(totalPages, value + 1))}>Próxima</button></nav>
-    </footer>
+    {!!comparisonGroups.length && <footer className="campaign-pagination compiled-pagination"><span>Exibindo todos os {comparisonGroups.length} clientes</span></footer>}
   </section>;
 }
 
@@ -2827,8 +2832,6 @@ function CampaignReport({
     [selectedCampaigns, setSelectedCampaigns] = useState<string[]>([]),
     [visibleMetrics, setVisibleMetrics] = useState({ balance: true, impressions: true, clicks: true, ctr: true, review: true }),
     [, setVerificationRevision] = useState(0),
-    [page, setPage] = useState(1),
-    [pageSize, setPageSize] = useState<20 | 40 | 60 | 80 | 100>(20),
     [sort, setSort] = useState<"spend" | "lowest_spend" | "leads" | "fewest_leads" | "score" | "worst_score" | "cpl" | "highest_cpl">(() => (persistedFilters.sort as "spend" | "lowest_spend" | "leads" | "fewest_leads" | "score" | "worst_score" | "cpl" | "highest_cpl") || "spend");
   useEffect(() => {
     if (reportsOnly) return;
@@ -2841,7 +2844,6 @@ function CampaignReport({
   }, [campaigns.length, since, until, reportsOnly]);
   useEffect(() => {
     if (tableRef.current) tableRef.current.scrollLeft = 0;
-    setPage(1);
   }, [search, objective, clientId, portfolio, scope, health, review, sort]);
   useEffect(() => {
     if (reportsOnly) return;
@@ -2877,6 +2879,8 @@ function CampaignReport({
         balanceSource: item.remainingBudget != null ? "CAMPAIGN" : group?.account.remainingBudget != null ? "ACCOUNT" : "NONE",
       };
     });
+  // Score só existe no Google: sem campanhas do Google, a tabela e os painéis não mostram nota.
+  const scoreAvailable = campaigns.some(hasCampaignScore);
   const rows = enrichedCampaigns
     .filter(
       (item) =>
@@ -2943,9 +2947,6 @@ function CampaignReport({
   const currentKeys = new Set(rows.map((item) => `${item.platform}:${item.accountId}:${item.id}`)), previousRows = previousCampaigns.filter((item) => currentKeys.has(`${item.platform}:${item.accountId}:${item.id}`)),
     previousTotal = previousRows.reduce((sum, item) => ({ spend: sum.spend + item.spend, leads: sum.leads + item.leads }), { spend: 0, leads: 0 }),
     percentChange = mediaPercentChange;
-  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize)),
-    safePage = Math.min(page, totalPages),
-    paginatedRows = rows.slice((safePage - 1) * pageSize, safePage * pageSize);
   const best = [...scoredRows].sort((a, b) => b.score - a.score).slice(0, 5),
     alerts = rows.filter(
       (item) =>
@@ -2988,7 +2989,8 @@ function CampaignReport({
       reportScore = reportScores.length ? Math.round(reportScores.reduce((sum, score) => sum + score, 0) / reportScores.length) : -1,
       reportCtr = totalImpressions ? totalClicks / totalImpressions * 100 : 0,
       reportConversion = totalClicks ? totalLeads / totalClicks * 100 : 0,
-      health = { good: reportScores.filter((score) => score >= 90).length, warning: reportScores.filter((score) => score >= 70 && score < 90).length, critical: reportScores.filter((score) => score < 70).length },
+      // Campanhas sem nota (Meta) entram em "Em acompanhamento", para o panorama somar todas as ativas.
+      health = { good: reportScores.filter((score) => score >= 90).length, warning: activeClientReportRows.length - reportScores.filter((score) => score >= 90 || score < 70).length, critical: reportScores.filter((score) => score < 70).length },
       portfolioData = portfolioNames.map((name) => {
         const items = activeClientReportRows.filter((item) => item.portfolioName === name), spend = items.reduce((sum, item) => sum + item.spend, 0), leads = items.reduce((sum, item) => sum + item.leads, 0), scores = items.map((item) => item.score).filter((score) => score >= 0);
         return { name, items, spend, leads, cpl: leads ? spend / leads : 0, score: scores.length ? Math.round(scores.reduce((sum, score) => sum + score, 0) / scores.length) : -1 };
@@ -3007,7 +3009,7 @@ function CampaignReport({
 
     doc.addPage(); doc.setFillColor(9,36,58); doc.rect(0,0,210,38,"F"); doc.setTextColor(255,255,255); doc.setFontSize(17); doc.text("Performance por portfólio",14,19); doc.setFontSize(8);doc.setTextColor(190,209,223);doc.text("Investimento, conversões e eficiência organizados por frente de campanha.",14,28);
     let portfolioY=50, maxPortfolioSpend=Math.max(1,...portfolioData.map((item)=>item.spend));
-    portfolioData.forEach((item,index)=>{if(portfolioY>270){doc.addPage();portfolioY=24;}const status=item.score>=90?"Destaque":item.score>=70?"Acompanhando":"Otimizando",tone=item.score>=90?[42,157,108]:item.score>=70?[47,126,202]:[104,122,143];doc.setDrawColor(226,232,238);doc.line(14,portfolioY+31,196,portfolioY+31);doc.setFillColor(tone[0],tone[1],tone[2]);doc.circle(17,portfolioY+7,1.5,"F");doc.setTextColor(24,39,57);doc.setFontSize(9);doc.text(`${index+1}. ${item.name.slice(0,60)}`,21,portfolioY+9);doc.setTextColor(103,119,137);doc.setFontSize(6.5);doc.text(`${item.items.length} campanha(s) ativa(s)`,21,portfolioY+16);doc.setFillColor(233,238,243);doc.roundedRect(21,portfolioY+22,75,3,1.5,1.5,"F");doc.setFillColor(48,126,202);doc.roundedRect(21,portfolioY+22,Math.max(2,75*item.spend/maxPortfolioSpend),3,1.5,1.5,"F");doc.setTextColor(94,110,128);doc.setFontSize(5.5);doc.text("INVESTIMENTO",105,portfolioY+9);doc.text("CONVERSÕES",137,portfolioY+9);doc.text("CPL",169,portfolioY+9,{align:"right"});doc.text("MOMENTO",190,portfolioY+9,{align:"right"});doc.setTextColor(24,39,57);doc.setFontSize(8.5);doc.text(money(item.spend),105,portfolioY+18);doc.text(number(item.leads),137,portfolioY+18);doc.text(item.cpl?money(item.cpl):"—",169,portfolioY+18,{align:"right"});doc.setTextColor(tone[0],tone[1],tone[2]);doc.setFontSize(6);doc.text(status,190,portfolioY+18,{align:"right"});portfolioY+=36;});
+    portfolioData.forEach((item,index)=>{if(portfolioY>270){doc.addPage();portfolioY=24;}const status=item.score>=90?"Destaque":item.score>=70||item.score<0?"Acompanhando":"Otimizando",tone=item.score>=90?[42,157,108]:item.score>=70||item.score<0?[47,126,202]:[104,122,143];doc.setDrawColor(226,232,238);doc.line(14,portfolioY+31,196,portfolioY+31);doc.setFillColor(tone[0],tone[1],tone[2]);doc.circle(17,portfolioY+7,1.5,"F");doc.setTextColor(24,39,57);doc.setFontSize(9);doc.text(`${index+1}. ${item.name.slice(0,60)}`,21,portfolioY+9);doc.setTextColor(103,119,137);doc.setFontSize(6.5);doc.text(`${item.items.length} campanha(s) ativa(s)`,21,portfolioY+16);doc.setFillColor(233,238,243);doc.roundedRect(21,portfolioY+22,75,3,1.5,1.5,"F");doc.setFillColor(48,126,202);doc.roundedRect(21,portfolioY+22,Math.max(2,75*item.spend/maxPortfolioSpend),3,1.5,1.5,"F");doc.setTextColor(94,110,128);doc.setFontSize(5.5);doc.text("INVESTIMENTO",105,portfolioY+9);doc.text("CONVERSÕES",137,portfolioY+9);doc.text("CPL",169,portfolioY+9,{align:"right"});doc.text("MOMENTO",190,portfolioY+9,{align:"right"});doc.setTextColor(24,39,57);doc.setFontSize(8.5);doc.text(money(item.spend),105,portfolioY+18);doc.text(number(item.leads),137,portfolioY+18);doc.text(item.cpl?money(item.cpl):"—",169,portfolioY+18,{align:"right"});doc.setTextColor(tone[0],tone[1],tone[2]);doc.setFontSize(6);doc.text(status,190,portfolioY+18,{align:"right"});portfolioY+=36;});
 
     doc.addPage(); doc.setFillColor(9,36,58); doc.rect(0,0,210,38,"F"); doc.setTextColor(255,255,255); doc.setFontSize(17); doc.text("Detalhamento das campanhas",14,19);doc.setFontSize(8);doc.setTextColor(190,209,223);doc.text("Somente campanhas ativas · valores referentes ao período selecionado",14,28);
     let y = 48;
@@ -3117,7 +3119,7 @@ function CampaignReport({
           <span>campanha{rows.length === 1 ? "" : "s"}<small>nos filtros atuais</small></span>
         </div>
       </header>
-      <section className="portfolio-score-strip">
+      {scoreAvailable && <section className="portfolio-score-strip">
         <header><div><small>SAÚDE DOS PORTFÓLIOS</small><b>Visão rápida</b></div><span><i className="good" /> Bom <i className="warning" /> Atenção <i className="bad" /> Crítico</span></header>
         <div>
           {portfolioScores.slice(0, 6).map((item) => (
@@ -3127,8 +3129,8 @@ function CampaignReport({
             </article>
           ))}
         </div>
-      </section>
-      <section className="campaign-report-kpis">
+      </section>}
+      <section className={`campaign-report-kpis${scoreAvailable ? "" : " no-score"}`}>
         <ReportMetric label="Valor gasto" value={money(total.spend)} trend={percentChange(total.spend, previousTotal.spend)} active={metricFocus === "SPEND"} onClick={() => { setMetricFocus(metricFocus === "SPEND" ? "ALL" : "SPEND"); setSort("spend"); }} />
         <ReportMetric label="Conversões" value={number(total.leads)} tone={scoreTone(averageScore)} trend={percentChange(total.leads, previousTotal.leads)} active={metricFocus === "LEADS"} onClick={() => { setMetricFocus(metricFocus === "LEADS" ? "ALL" : "LEADS"); setSort("leads"); }} />
         <ReportMetric
@@ -3139,7 +3141,7 @@ function CampaignReport({
           active={metricFocus === "CPL"}
           onClick={() => { setMetricFocus(metricFocus === "CPL" ? "ALL" : "CPL"); setSort("cpl"); }}
         />
-        <AverageScoreGauge score={averageScore} />
+        {scoreAvailable && <AverageScoreGauge score={averageScore} />}
       </section>
       <MediaTrendChart campaigns={rows} since={since} until={until} />
       <section className="campaign-report-toolbar">
@@ -3166,10 +3168,10 @@ function CampaignReport({
           />
         </div>
         <div className="campaign-review-filter" role="group" aria-label="Situação da verificação"><button type="button" className={review === "ALL" ? "active" : ""} onClick={() => setReview("ALL")}>Todas</button><button type="button" className={review === "PENDING" ? "active pending" : ""} onClick={() => setReview("PENDING")}><Clock3/> Pendentes <b>{pendingReviewCount}</b></button></div>
-        <details className="campaign-more-filters"><summary>Ajustar filtros {advancedFilterCount > 0 && <b>{advancedFilterCount}</b>}<ChevronDown/></summary><div className="campaign-more-filters-popover"><header><span><b>Filtros da tabela</b><small>Refine somente quando necessário.</small></span>{advancedFilterCount > 0 && <button type="button" onClick={() => { setScope("ACTIVE"); setHealth("ALL"); setObjective("ALL"); setSort("spend"); }}>Limpar</button>}</header><div className="campaign-standard-filter"><SearchableSelect searchable={false} value={scope} onChange={(value) => setScope(value as typeof scope)} options={[{ value: "ACTIVE", label: "Campanhas ativas" }, { value: "INACTIVE", label: "Campanhas inativas" }, { value: "ALL", label: "Todas as campanhas" }]} /></div><div className="campaign-standard-filter campaign-health-filter"><SearchableSelect searchable={false} value={health} onChange={(value) => setHealth(value as typeof health)} options={[{ value: "ALL", label: "Todas as avaliações" }, { value: "NEEDS_ATTENTION", label: "Precisam de atenção" }, { value: "GOOD", label: "Bom (90–100)" }, { value: "WARNING", label: "Atenção (70–89)" }, { value: "CRITICAL", label: "Crítico (0–69)" }]} /></div><div className="campaign-standard-filter"><SearchableSelect searchable={false} value={objective} onChange={setObjective} options={[{ value: "ALL", label: "Todos os objetivos" }, ...objectives.map((item) => ({ value: item, label: objectiveLabel(item) }))]} /></div><div className="campaign-standard-filter"><SearchableSelect searchable={false} value={sort} onChange={(value) => setSort(value as typeof sort)} options={[{ value: "spend", label: "Maior investimento" }, { value: "lowest_spend", label: "Menor investimento" }, { value: "leads", label: "Mais conversões" }, { value: "fewest_leads", label: "Menos conversões" }, { value: "score", label: "Maior score" }, { value: "worst_score", label: "Menor score" }, { value: "cpl", label: "Menor CPL" }, { value: "highest_cpl", label: "Maior CPL" }]} /></div><footer><button type="button" className={`campaign-density ${compactTable ? "active" : ""}`} onClick={() => setCompactTable((value) => !value)}><Gauge/> {compactTable ? "Tabela compacta" : "Tabela confortável"}</button><details className="campaign-columns"><summary><Eye/> Escolher colunas</summary><div className="campaign-columns-popover">{Object.entries({ balance: "Saldo", impressions: "Impressões", clicks: "Cliques", ctr: "CTR", review: "Revisão" }).map(([key,label]) => <label key={key}><input type="checkbox" checked={visibleMetrics[key as keyof typeof visibleMetrics]} onChange={(event) => setVisibleMetrics((current) => ({ ...current, [key]: event.target.checked }))}/><span>{label}</span></label>)}</div></details></footer></div></details>
+        <details className="campaign-more-filters"><summary>Ajustar filtros {advancedFilterCount > 0 && <b>{advancedFilterCount}</b>}<ChevronDown/></summary><div className="campaign-more-filters-popover"><header><span><b>Filtros da tabela</b><small>Refine somente quando necessário.</small></span>{advancedFilterCount > 0 && <button type="button" onClick={() => { setScope("ACTIVE"); setHealth("ALL"); setObjective("ALL"); setSort("spend"); }}>Limpar</button>}</header><div className="campaign-standard-filter"><SearchableSelect searchable={false} value={scope} onChange={(value) => setScope(value as typeof scope)} options={[{ value: "ACTIVE", label: "Campanhas ativas" }, { value: "INACTIVE", label: "Campanhas inativas" }, { value: "ALL", label: "Todas as campanhas" }]} /></div>{scoreAvailable && <div className="campaign-standard-filter campaign-health-filter"><SearchableSelect searchable={false} value={health} onChange={(value) => setHealth(value as typeof health)} options={[{ value: "ALL", label: "Todas as avaliações" }, { value: "NEEDS_ATTENTION", label: "Precisam de atenção" }, { value: "GOOD", label: "Bom (90–100)" }, { value: "WARNING", label: "Atenção (70–89)" }, { value: "CRITICAL", label: "Crítico (0–69)" }]} /></div>}<div className="campaign-standard-filter"><SearchableSelect searchable={false} value={objective} onChange={setObjective} options={[{ value: "ALL", label: "Todos os objetivos" }, ...objectives.map((item) => ({ value: item, label: objectiveLabel(item) }))]} /></div><div className="campaign-standard-filter"><SearchableSelect searchable={false} value={sort} onChange={(value) => setSort(value as typeof sort)} options={[{ value: "spend", label: "Maior investimento" }, { value: "lowest_spend", label: "Menor investimento" }, { value: "leads", label: "Mais conversões" }, { value: "fewest_leads", label: "Menos conversões" },  ...(scoreAvailable ? [{ value: "score", label: "Maior score" }, { value: "worst_score", label: "Menor score" }] : []), { value: "cpl", label: "Menor CPL" }, { value: "highest_cpl", label: "Maior CPL" }]} /></div><footer><button type="button" className={`campaign-density ${compactTable ? "active" : ""}`} onClick={() => setCompactTable((value) => !value)}><Gauge/> {compactTable ? "Tabela compacta" : "Tabela confortável"}</button><details className="campaign-columns"><summary><Eye/> Escolher colunas</summary><div className="campaign-columns-popover">{Object.entries({ balance: "Saldo", impressions: "Impressões", clicks: "Cliques", ctr: "CTR", review: "Revisão" }).map(([key,label]) => <label key={key}><input type="checkbox" checked={visibleMetrics[key as keyof typeof visibleMetrics]} onChange={(event) => setVisibleMetrics((current) => ({ ...current, [key]: event.target.checked }))}/><span>{label}</span></label>)}</div></details></footer></div></details>
       </section>
       {!!selectedCampaigns.length && <div className="campaign-bulk-bar"><b>{selectedCampaigns.length} selecionada(s)</b><button onClick={() => { const first = rows.find((item) => selectedCampaigns.includes(`${item.platform}:${item.accountId}:${item.id}`)); if (first) analyzeCampaign(first, `${first.platform}:${first.accountId}:${first.id}`); }}>Analisar primeira</button><button onClick={() => setSelectedCampaigns([])}>Limpar seleção</button></div>}
-      <div className={`campaign-report-table ${compactTable ? "compact" : ""} ${!visibleMetrics.balance ? "hide-balance" : ""} ${!visibleMetrics.impressions ? "hide-impressions" : ""} ${!visibleMetrics.clicks ? "hide-clicks" : ""} ${!visibleMetrics.ctr ? "hide-ctr" : ""} ${!visibleMetrics.review ? "hide-review" : ""}`} ref={tableRef}>
+      <div className={`campaign-report-table ${compactTable ? "compact" : ""} ${!visibleMetrics.balance ? "hide-balance" : ""} ${!visibleMetrics.impressions ? "hide-impressions" : ""} ${!visibleMetrics.clicks ? "hide-clicks" : ""} ${!visibleMetrics.ctr ? "hide-ctr" : ""} ${!visibleMetrics.review ? "hide-review" : ""} ${!scoreAvailable ? "hide-score" : ""}`} ref={tableRef}>
         <table>
           <colgroup>
             <col className="campaign-column-name" />
@@ -3182,13 +3184,13 @@ function CampaignReport({
             <col className="campaign-column-ctr" />
             <col className="campaign-column-conversions" />
             <col className="campaign-column-cpl" />
-            <col className="campaign-column-score" />
+            {scoreAvailable && <col className="campaign-column-score" />}
             <col className="campaign-column-review" />
             <col className="campaign-column-actions" />
           </colgroup>
           <thead>
             <tr>
-              <th><label className="campaign-row-select campaign-row-select-all"><input type="checkbox" aria-label="Selecionar campanhas desta página" checked={!!paginatedRows.length && paginatedRows.every((item) => selectedCampaigns.includes(`${item.platform}:${item.accountId}:${item.id}`))} onChange={(event) => { const pageKeys = paginatedRows.map((item) => `${item.platform}:${item.accountId}:${item.id}`); setSelectedCampaigns((current) => event.target.checked ? [...new Set([...current, ...pageKeys])] : current.filter((key) => !pageKeys.includes(key))); }}/><span>Cliente / campanha</span></label></th>
+              <th><label className="campaign-row-select campaign-row-select-all"><input type="checkbox" aria-label="Selecionar todas as campanhas exibidas" checked={!!rows.length && rows.every((item) => selectedCampaigns.includes(`${item.platform}:${item.accountId}:${item.id}`))} onChange={(event) => { const pageKeys = rows.map((item) => `${item.platform}:${item.accountId}:${item.id}`); setSelectedCampaigns((current) => event.target.checked ? [...new Set([...current, ...pageKeys])] : current.filter((key) => !pageKeys.includes(key))); }}/><span>Cliente / campanha</span></label></th>
               <th>Plataforma</th>
               <th>Status</th>
               <th><button className="campaign-sort-head" onClick={() => setSort(sort === "spend" ? "lowest_spend" : "spend")}>Valor gasto <ChevronDown/></button></th>
@@ -3204,7 +3206,7 @@ function CampaignReport({
             </tr>
           </thead>
           <tbody>
-            {paginatedRows.map((item) => {
+            {rows.map((item) => {
               const ctr = item.impressions
                   ? (item.clicks / item.impressions) * 100
                   : 0,
@@ -3247,15 +3249,13 @@ function CampaignReport({
         </table>
       </div>
       <footer className="campaign-pagination">
-        <span>Exibindo {rows.length ? (safePage - 1) * pageSize + 1 : 0}–{Math.min(safePage * pageSize, rows.length)} de {rows.length} campanhas</span>
-        <label>Por página<select value={pageSize} onChange={(event) => { setPageSize(Number(event.target.value) as 20 | 40 | 60 | 80 | 100); setPage(1); }}>{[20,40,60,80,100].map((size) => <option value={size} key={size}>{size}</option>)}</select></label>
-        <nav aria-label="Paginação das campanhas"><button type="button" disabled={safePage === 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>Anterior</button><span>Página <b>{safePage}</b> de {totalPages}</span><button type="button" disabled={safePage === totalPages} onClick={() => setPage((value) => Math.min(totalPages, value + 1))}>Próxima</button></nav>
+        <span>Exibindo todas as {rows.length} campanhas</span>
       </footer>
       <button type="button" className="campaign-insights-toggle" onClick={() => setShowInsights((value) => !value)} aria-expanded={showInsights}>
         <BarChart3 /> {showInsights ? "Ocultar análises complementares" : "Ver rankings, alertas e oportunidades"}<ChevronDown />
       </button>
       {showInsights && <section className="campaign-report-insights">
-        <article>
+        {scoreAvailable && <><article>
           <h3>Score dos portfólios</h3>
           {portfolioScores.slice(0, 6).map((item, index) => (
             <p key={item.name}>
@@ -3282,7 +3282,7 @@ function CampaignReport({
               <b>{item.score}</b>
             </p>
           ))}
-        </article>
+        </article></>}
         <article>
           <h3>Alertas e oportunidades</h3>
           {alerts.slice(0, 6).map((item) => (
@@ -3404,7 +3404,7 @@ function CampaignAnalysisDrawer({ campaign, periodDays, since, until, onClose, o
     showGeography = campaign.platform === "GOOGLE_ADS" || rawGeography.some((item) => (item.level === "CITY" || item.level === "NEIGHBORHOOD") && item.leads > 0),
     opportunitySpend = campaign.score >= 90 ? 0 : campaign.spend * Math.max(.05, (90 - Math.max(0, campaign.score)) / 100),
     opportunityLeads = campaign.cpl && campaign.cpl > 0 ? Math.round(opportunitySpend / campaign.cpl) : 0;
-  const scoreDetails = campaignScoreBreakdown(campaign);
+  const scoreDetails = campaignScoreBreakdown(campaign), scored = hasCampaignScore(campaign);
   const exportPdf = async () => {
     if (!campaignIsActive) { setReportNotice("Relatórios só podem ser gerados para campanhas ativas."); return; }
     if (reportAction) return;
@@ -3428,9 +3428,9 @@ function CampaignAnalysisDrawer({ campaign, periodDays, since, until, onClose, o
       doc.setTextColor(23, 38, 56); doc.setFontSize(12); doc.text(value, x + 4, y + 16);
     });
     doc.setTextColor(23, 38, 56); doc.setFontSize(11); doc.text("Leitura executiva", 14, 177);
-    [["Saúde da campanha", Math.max(0, campaign.score), campaign.score >= 90 ? [45,166,111] : campaign.score >= 70 ? [224,158,31] : [210,69,78]], ["Uso do orçamento", budgetUse, [48,126,202]], ["Conversão clique → lead", Math.min(100, conversionRate * 5), [61,146,117]]].forEach(([label, rawValue, color], index) => {
+    [...(scored ? [["Saúde da campanha", Math.max(0, campaign.score), campaign.score >= 90 ? [45,166,111] : campaign.score >= 70 ? [224,158,31] : [210,69,78]]] : []), ["Uso do orçamento", budgetUse, [48,126,202]], ["Conversão clique → lead", Math.min(100, conversionRate * 5), [61,146,117]]].forEach(([label, rawValue, color], index) => {
       const y = 188 + index * 18, value = Number(rawValue), rgb = color as number[];
-      doc.setFontSize(8); doc.setTextColor(77, 94, 114); doc.text(String(label), 14, y); doc.setTextColor(23, 38, 56); doc.text(`${number(index === 2 ? conversionRate : value, 1)}%`, 196, y, { align: "right" });
+      doc.setFontSize(8); doc.setTextColor(77, 94, 114); doc.text(String(label), 14, y); doc.setTextColor(23, 38, 56); doc.text(`${number(label === "Conversão clique → lead" ? conversionRate : value, 1)}%`, 196, y, { align: "right" });
       doc.setFillColor(231, 236, 241); doc.roundedRect(14, y + 4, 182, 5, 2.5, 2.5, "F"); doc.setFillColor(rgb[0], rgb[1], rgb[2]); doc.roundedRect(14, y + 4, Math.max(2, 182 * Math.min(100, value) / 100), 5, 2.5, 2.5, "F");
     });
     doc.setDrawColor(220, 228, 235); doc.line(14, 252, 196, 252); doc.setFontSize(8); doc.setTextColor(105, 122, 142);
@@ -3439,8 +3439,8 @@ function CampaignAnalysisDrawer({ campaign, periodDays, since, until, onClose, o
     doc.setTextColor(23,38,56); doc.setFontSize(11); doc.text("Funil de conversão", 14, 50);
     [["Impressões", campaign.impressions, 182], ["Cliques", campaign.clicks, 135], ["Conversões", campaign.leads, 88]].forEach(([label, value, width], index) => { const y = 58 + index * 15, w = Number(width); doc.setFillColor(49 + index * 18, 91, 193 - index * 18); doc.roundedRect(14 + (182-w)/2, y, w, 10, 2, 2, "F"); doc.setTextColor(255,255,255); doc.setFontSize(7); doc.text(String(label), 18 + (182-w)/2, y+6.5); doc.text(number(Number(value)), 192-(182-w)/2, y+6.5, { align:"right" }); });
     let detailY = 116; doc.setTextColor(23,38,56); doc.setFontSize(11); doc.text("Diagnóstico", 14, detailY); detailY += 10;
-    const diagnostics = [campaign.score < 70 ? "Campanha abaixo do esperado: priorizar revisão de segmentação, criativos e conversão." : campaign.score < 90 ? "Campanha requer acompanhamento: há espaço para otimizar eficiência e escala." : "Campanha saudável: manter monitoramento e testar expansão controlada.", ctr < 1 ? "CTR abaixo de 1%: revisar mensagem, criativo e aderência do público." : `CTR de ${number(ctr,2)}% com boa capacidade de geração de tráfego.`, campaign.cpl == null ? "Ainda não há CPL calculável no período." : `CPL atual de ${money(campaign.cpl,campaign.currency)} para ${number(campaign.leads)} conversões.`];
-    diagnostics.forEach((text, index) => { doc.setFillColor(247,249,251); doc.setDrawColor(224,230,236); doc.roundedRect(14, detailY, 182, 18, 2, 2, "FD"); doc.setFillColor(index === 0 && campaign.score < 70 ? 210 : 48, index === 0 && campaign.score < 70 ? 69 : 126, index === 0 && campaign.score < 70 ? 78 : 202); doc.circle(20, detailY+9, 2, "F"); doc.setTextColor(61,78,98); doc.setFontSize(8); doc.text(doc.splitTextToSize(text, 165), 26, detailY+7); detailY += 23; });
+    const diagnostics = [...(scored ? [campaign.score < 70 ? "Campanha abaixo do esperado: priorizar revisão de segmentação, criativos e conversão." : campaign.score < 90 ? "Campanha requer acompanhamento: há espaço para otimizar eficiência e escala." : "Campanha saudável: manter monitoramento e testar expansão controlada."] : []), ctr < 1 ? "CTR abaixo de 1%: revisar mensagem, criativo e aderência do público." : `CTR de ${number(ctr,2)}% com boa capacidade de geração de tráfego.`, campaign.cpl == null ? "Ainda não há CPL calculável no período." : `CPL atual de ${money(campaign.cpl,campaign.currency)} para ${number(campaign.leads)} conversões.`];
+    diagnostics.forEach((text, index) => { doc.setFillColor(247,249,251); doc.setDrawColor(224,230,236); doc.roundedRect(14, detailY, 182, 18, 2, 2, "FD"); doc.setFillColor(index === 0 && scored && campaign.score < 70 ? 210 : 48, index === 0 && scored && campaign.score < 70 ? 69 : 126, index === 0 && scored && campaign.score < 70 ? 78 : 202); doc.circle(20, detailY+9, 2, "F"); doc.setTextColor(61,78,98); doc.setFontSize(8); doc.text(doc.splitTextToSize(text, 165), 26, detailY+7); detailY += 23; });
     doc.setTextColor(23,38,56); doc.setFontSize(11); doc.text("Dados complementares", 14, detailY + 5); doc.setFontSize(8); doc.setTextColor(90,106,124); doc.text(`Landing page: ${campaign.landingPageStatus === "ACTIVE" ? "Online" : campaign.landingPageStatus === "INACTIVE" ? "Offline" : "Validação inconclusiva"}`, 14, detailY + 16); doc.text(`Otimização: ${campaign.optimizationStatus || "Não disponibilizada"}`, 14, detailY + 24); doc.text(`Última revisão: ${campaign.verifiedAt ? new Date(campaign.verifiedAt).toLocaleString("pt-BR") : "Pendente"}`, 14, detailY + 32);
     doc.addPage();
     doc.setFillColor(247, 250, 252); doc.rect(0, 0, 210, 297, "F");
@@ -3537,7 +3537,7 @@ function CampaignAnalysisDrawer({ campaign, periodDays, since, until, onClose, o
     <aside className="campaign-analysis" role="dialog" aria-modal="true" aria-label={`Análise da campanha ${campaign.name}`}>
       <header>
         <div><span>ANÁLISE DA CAMPANHA</span><h2>{campaign.name}</h2><p>{campaign.groupName} · {objectiveLabel(campaign.objective)} · Responsável: {campaign.responsible}</p></div>
-        <ScoreGauge score={campaign.score} label="Score da campanha" campaign={campaign} />
+        {scored && <ScoreGauge score={campaign.score} label="Score da campanha" campaign={campaign} />}
         <span className={`campaign-analysis-review-state ${verificationDue(campaign) ? "pending" : "current"}`}>{verificationDue(campaign) ? <Clock3 /> : <CheckCircle2 />}<span><b>{verificationDue(campaign) ? "Revisão pendente" : "Revisão em dia"}</b><small>{campaign.verifiedAt ? `Última em ${new Date(campaign.verifiedAt).toLocaleDateString("pt-BR")}` : "Ainda não verificada"}</small></span></span>
         <button type="button" onClick={onClose} aria-label="Fechar análise"><X /></button>
       </header>
@@ -3554,7 +3554,7 @@ function CampaignAnalysisDrawer({ campaign, periodDays, since, until, onClose, o
           <ReportMetric label="CPL" value={campaign.cpl == null ? "—" : money(campaign.cpl, campaign.currency)} tone={campaign.cpl == null ? "neutral" : scoreTone(campaign.score)} />
         </section>
         {analysisView === "ANALYSIS" && <section className={`campaign-ai-on-demand ${campaignAi ? `ready ${campaignAi.verdict.toLowerCase()}` : ""}`}><header><span><BrainCircuit/></span><div><small>ANÁLISE INDIVIDUAL COM OPENAI</small><h3>{campaignAi?.headline || "Diagnóstico estratégico desta campanha"}</h3><p>{campaignAi ? `Gerado agora com ${campaignAi.model}` : "A análise é produzida somente quando você solicitar."}</p></div><button type="button" onClick={() => void generateCampaignAi()} disabled={campaignAiLoading}>{campaignAiLoading ? <RefreshCw className="spin"/> : <BrainCircuit/>}{campaignAiLoading ? "Analisando…" : campaignAi ? "Analisar novamente" : "Analisar agora"}</button></header>{campaignAiError && <div className="campaign-ai-error"><AlertTriangle/>{campaignAiError}</div>}{campaignAi && <div className="campaign-ai-result"><p>{campaignAi.summary}</p><div><article><b>Prioridades</b>{campaignAi.priorities.map((item,index)=><span key={item}><i>{index+1}</i>{item}</span>)}</article><article><b>Riscos</b>{campaignAi.risks.map((item)=><span key={item}><AlertTriangle/>{item}</span>)}</article><article><b>Testes recomendados</b>{campaignAi.experiments.map((item)=><span key={item}><Activity/>{item}</span>)}</article></div></div>}</section>}
-        {analysisView === "ANALYSIS" && (
+        {analysisView === "ANALYSIS" && scored && (
           <section className={`campaign-score-explanation ${scoreTone(campaign.score)}`}>
             <header>
               <div><small>COMO A NOTA FOI CALCULADA</small><h3>Por que o score é {campaign.score}</h3><p>{scoreDetails.summary}</p></div>
@@ -3573,8 +3573,8 @@ function CampaignAnalysisDrawer({ campaign, periodDays, since, until, onClose, o
             </div>
           </section>
         )}
-        <section className="campaign-visual-summary">
-          <article style={{"--progress":`${Math.min(100,Math.max(0,campaign.score))}%`} as CSSProperties}><div><span><b>{campaign.score >= 0 ? campaign.score : "—"}</b><small>/100</small></span></div><h3>Saúde da campanha</h3><p>{campaign.score >= 90 ? "Operação saudável" : campaign.score >= 70 ? "Requer acompanhamento" : "Ação prioritária"}</p></article>
+        <section className={`campaign-visual-summary${scored ? "" : " no-score"}`}>
+          {scored && <article style={{"--progress":`${Math.min(100,Math.max(0,campaign.score))}%`} as CSSProperties}><div><span><b>{campaign.score >= 0 ? campaign.score : "—"}</b><small>/100</small></span></div><h3>Saúde da campanha</h3><p>{campaign.score >= 90 ? "Operação saudável" : campaign.score >= 70 ? "Requer acompanhamento" : "Ação prioritária"}</p></article>}
           <article style={{"--progress":`${Math.min(100,budgetUse)}%`} as CSSProperties}><div><span><b>{number(budgetUse,0)}%</b></span></div><h3>Uso do orçamento</h3><p>{campaign.balanceAvailable ? `${money(campaign.balance,campaign.currency)} de saldo restante` : "Saldo não informado pela plataforma"}</p></article>
           <article className="campaign-visual-bars"><h3>Eficiência de mídia</h3><p><span>CTR <b>{number(ctr,2)}%</b></span><i><u style={{width:`${Math.min(100,ctr/3*100)}%`}}/></i></p><p><span>Conversão <b>{number(conversionRate,2)}%</b></span><i><u style={{width:`${Math.min(100,conversionRate/10*100)}%`}}/></i></p><small>{number(campaign.clicks)} cliques geraram {number(campaign.leads)} conversões</small></article>
           <article className="campaign-visual-result"><Target/><span><small>RESULTADO PRINCIPAL</small><b>{number(campaign.leads)}</b><em>conversões no período</em></span><footer><b>{campaign.cpl == null ? "—" : money(campaign.cpl,campaign.currency)}</b><small>CPL atual</small></footer></article>
@@ -3584,7 +3584,7 @@ function CampaignAnalysisDrawer({ campaign, periodDays, since, until, onClose, o
           <article className="campaign-funnel-card"><h3>Funil de conversão</h3><div><span style={{ width: "100%" }}>Impressões <b>{number(campaign.impressions)}</b></span><span style={{ width: "72%" }}>Cliques <b>{number(campaign.clicks)}</b></span><span style={{ width: "44%" }}>Conversões <b>{number(campaign.leads)}</b></span></div></article>
           <article className="campaign-health-card"><h3>Saúde operacional</h3><p><span>Status</span><b>{statusLabel[campaign.status] || campaign.status}</b></p><p><span>Posição no leilão</span><b>{campaign.auctionPosition || "Não disponibilizado"}</b></p><p><span>Otimização</span><b>{campaign.optimizationStatus || "Não disponibilizado"}</b></p><p><span>Landing page</span><b className={`lp-text-${(campaign.landingPageStatus || "UNKNOWN").toLowerCase()}`}>{campaign.landingPageStatus === "ACTIVE" ? "Online" : campaign.landingPageStatus === "INACTIVE" ? "Offline" : "Validação inconclusiva"}</b></p><p><span>Última verificação</span><b>{campaign.verifiedAt ? new Date(campaign.verifiedAt).toLocaleDateString("pt-BR") : "Pendente"}</b></p></article>
         </section>
-        <section className={`campaign-impact ${campaign.score < 70 ? "critical" : campaign.score < 90 ? "warning" : "good"}`}><AlertTriangle/><div><small>DIAGNÓSTICO EXPLICÁVEL</small><h3>{campaign.score < 70 ? "Eficiência abaixo da referência" : campaign.score < 90 ? "Existe margem de otimização" : "Campanha dentro da faixa saudável"}</h3><p>{campaign.score < 70 ? `O score baixo combina eficiência, entrega e conversão. Priorize criativo, público e landing page.` : campaign.score < 90 ? "A campanha entrega resultados, mas ainda pode melhorar a relação entre investimento e conversões." : "Mantenha o acompanhamento e teste expansão controlada sem alterar várias variáveis ao mesmo tempo."}</p></div><span><small>IMPACTO ESTIMADO</small><b>{opportunitySpend ? `${money(opportunitySpend, campaign.currency)} em eficiência` : "Baixo risco atual"}</b><em>{opportunityLeads ? `potencial equivalente a ~${opportunityLeads} conversão(ões) no CPL atual` : "sem perda material estimada"}</em></span></section>
+        {scored && <section className={`campaign-impact ${campaign.score < 70 ? "critical" : campaign.score < 90 ? "warning" : "good"}`}><AlertTriangle/><div><small>DIAGNÓSTICO EXPLICÁVEL</small><h3>{campaign.score < 70 ? "Eficiência abaixo da referência" : campaign.score < 90 ? "Existe margem de otimização" : "Campanha dentro da faixa saudável"}</h3><p>{campaign.score < 70 ? `O score baixo combina eficiência, entrega e conversão. Priorize criativo, público e landing page.` : campaign.score < 90 ? "A campanha entrega resultados, mas ainda pode melhorar a relação entre investimento e conversões." : "Mantenha o acompanhamento e teste expansão controlada sem alterar várias variáveis ao mesmo tempo."}</p></div><span><small>IMPACTO ESTIMADO</small><b>{opportunitySpend ? `${money(opportunitySpend, campaign.currency)} em eficiência` : "Baixo risco atual"}</b><em>{opportunityLeads ? `potencial equivalente a ~${opportunityLeads} conversão(ões) no CPL atual` : "sem perda material estimada"}</em></span></section>}
         {showGeography && <section className="campaign-geo-card"><header><div><small>DESEMPENHO GEOGRÁFICO</small><h3>Conversões por localização</h3></div><div className="campaign-geo-switch" role="group" aria-label="Nível geográfico"><button type="button" className={geoLevel === "CITY" ? "active" : ""} onClick={() => setGeoLevel("CITY")}>Cidade</button><button type="button" className={geoLevel === "NEIGHBORHOOD" ? "active" : ""} onClick={() => setGeoLevel("NEIGHBORHOOD")}>Bairro</button></div></header>{geography.length ? <div className="campaign-geo-list">{geography.slice(0, 12).map((item) => <p key={`${geoLevel}:${item.name}`}><span><b>{item.name}</b><small>{item.level === "REGION" ? "Região" : geoLevel === "CITY" ? "Cidade" : "Bairro"}</small></span><i><u style={{ width: `${(item.leads / maxGeoLeads) * 100}%` }} /></i><strong>{number(item.leads)}<small> leads</small></strong></p>)}</div> : <div className="campaign-geo-empty"><Target /><b>Sem dados por {geoLevel === "CITY" ? "cidade" : "bairro"}</b><p>A plataforma não retornou granularidade suficiente para esta campanha e período.</p></div>}</section>}
         <section className="campaign-detail-extras">
           <article><header><Search /><h3>Termos de pesquisa</h3></header>{campaign.searchTerms?.length ? <div className="campaign-term-list">{campaign.searchTerms.slice(0, 8).map((item) => <p key={item.term}><b>{item.term}</b><span>{number(item.clicks)} cliques</span><strong>{number(item.leads)} conv.</strong></p>)}</div> : <div className="campaign-extra-empty">{campaign.platform === "GOOGLE_ADS" ? "Sem termos retornados para esta campanha e período." : "Termos de pesquisa são disponibilizados pelo Google Ads."}</div>}</article>

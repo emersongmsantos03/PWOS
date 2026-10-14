@@ -630,6 +630,7 @@ html[data-theme="dark"] .executive-board .board-kpi>b,html[data-theme="dark"] .e
 /* Agenda: cada pessoa na sua cor (inclusive eventos do Google, tarefas, chamados e CRM) */
 .calendar-workspace .calendar-item,.calendar-workspace .calendar-item.google,.calendar-workspace .calendar-item.ticket,.calendar-workspace .calendar-item.crm,.calendar-workspace .calendar-item.meeting,.calendar-workspace .calendar-item.unavailable{border-left-color:var(--owner-color)!important;background:color-mix(in srgb,var(--owner-color) 14%,var(--surface))!important}
 .calendar-workspace .calendar-item>span svg{color:var(--owner-color)!important}
+.calendar-item.shared,.calendar-workspace .calendar-item.shared{border-left-color:transparent!important;background:var(--shared-bar) left top/3px 100% no-repeat border-box,var(--shared-fill) padding-box!important}
 .calendar-color-swatch{cursor:pointer;transition:transform .12s}
 .calendar-color-swatch:hover{transform:scale(1.15)}
 .calendar-color-swatch:focus-visible{outline:2px solid var(--accent);outline-offset:2px}

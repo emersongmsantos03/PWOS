@@ -92,8 +92,12 @@ type CalendarItem = {
   category: string;
   editable: boolean;
   color: string;
+  // Evento com mais de uma pessoa das agendas abertas: uma cor para cada uma.
+  colors?: string[];
 };
 
+// Dono e convidados que não recusaram: o evento aparece na agenda de cada um.
+const eventPeople = (event: CalendarEvent) => [...new Set([event.ownerId, ...(event.participantIds || []).filter((id) => event.participantResponses?.[id] !== "DECLINED")])];
 const pad = (value: number) => String(value).padStart(2, "0");
 const localInput = (date: Date) =>
   `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
@@ -227,14 +231,9 @@ export function CalendarManagement() {
 
   const items = useMemo<CalendarItem[]>(() => {
     const eventItems = events
-      .filter((event) =>
-        ownerIds.some(
-          (ownerId) =>
-            event.ownerId === ownerId ||
-            event.participantIds?.includes(ownerId),
-        ),
-      )
-      .map((event) => ({
+      .map((event) => ({ event, people: eventPeople(event).filter((id) => ownerIds.includes(id)) }))
+      .filter(({ people }) => people.length)
+      .map(({ event, people }) => ({
         kind: "event" as const,
         id: event.id,
         title: event.title,
@@ -244,8 +243,9 @@ export function CalendarManagement() {
         end: new Date(event.endAt),
         location: event.location,
         category: event.category,
-        // Cor própria do evento (como no Google Agenda) ou a cor da agenda do dono.
-        color: eventColorHex(event.colorId) || colorFor(event.ownerId),
+        // Cor própria do evento (como no Google Agenda) ou a cor da agenda de quem está nele.
+        color: eventColorHex(event.colorId) || colorFor(people[0]),
+        colors: people.length > 1 ? people.map(colorFor) : undefined,
         // Eventos do Google Agenda são editados pelo próprio dono; a alteração volta para o Google.
         editable: event.source === "GOOGLE" ? event.ownerId === currentUserId && google.connected : event.ownerId === currentUserId || canEditAllEvents,
       }));
@@ -636,7 +636,7 @@ export function CalendarManagement() {
                         </b>
                         <small>
                           {
-                            events.filter((event) => event.ownerId === user.id)
+                            events.filter((event) => eventPeople(event).includes(user.id))
                               .length
                           }{" "}
                           eventos
@@ -779,6 +779,10 @@ function ItemCard({
   durationHours?: number;
 }) {
   const color = item.color;
+  const shared: Record<string, string> = item.colors && item.colors.length > 1 ? {
+    "--shared-bar": `linear-gradient(180deg, ${item.colors.map((value, index, all) => `${value} ${(index / all.length) * 100}% ${((index + 1) / all.length) * 100}%`).join(", ")})`,
+    "--shared-fill": `linear-gradient(90deg, ${item.colors.map((value) => `color-mix(in srgb, ${value} 16%, var(--surface))`).join(", ")})`,
+  } : {};
   return (
     <article
       draggable={item.editable}
@@ -787,8 +791,8 @@ function ItemCard({
         event.stopPropagation();
         onOpen(item);
       }}
-      className={`calendar-item ${item.kind} ${item.category.toLowerCase()} ${item.editable ? "editable" : "read-only"}${durationHours ? " calendar-duration" : ""}`}
-      style={{ "--owner-color": color, ...(durationHours ? { "--calendar-duration-height": `${Math.max(30, durationHours * 58 - 6)}px` } : {}) } as React.CSSProperties}
+      className={`calendar-item ${item.kind} ${item.category.toLowerCase()} ${item.editable ? "editable" : "read-only"}${durationHours ? " calendar-duration" : ""}${item.colors ? " shared" : ""}`}
+      style={{ "--owner-color": color, ...shared, ...(durationHours ? { "--calendar-duration-height": `${Math.max(30, durationHours * 58 - 6)}px` } : {}) } as React.CSSProperties}
       title={
         item.kind === "ticket"
           ? `${item.ownerName} · prazo do chamado — clique para abrir`

@@ -15,10 +15,14 @@
 .simple-child-name{display:flex;align-items:center;gap:9px;padding-left:24px}.simple-child-name>span{color:var(--subtle)}
 .simple-client-table .campaign-assets-trigger{margin:5px 0 0 42px;font-size:9px;padding:0;border:0;background:none;color:var(--accent)}
 .simple-client-table .campaign-assets-trigger svg{width:12px;height:12px}
-.simple-client-table .simple-money{color:#a55824;background-color:color-mix(in srgb,#edac60 12%,var(--surface))}
-.simple-client-table .simple-volume{color:#2871b5;background-color:color-mix(in srgb,#65b6f7 12%,var(--surface))}
-.simple-client-table .simple-clicks{color:#8a721b;background-color:color-mix(in srgb,#edd46c 15%,var(--surface))}
-.simple-client-table .simple-rate{color:#258250;background-color:color-mix(in srgb,#6cc999 12%,var(--surface))}
+.simple-client-table .simple-money{color:#8f4310;background-color:color-mix(in srgb,#edac60 26%,var(--surface));box-shadow:inset 0 0 0 1px color-mix(in srgb,#d98a3a 35%,transparent)}
+.simple-client-table .simple-volume{color:#195d9e;background-color:color-mix(in srgb,#65b6f7 26%,var(--surface));box-shadow:inset 0 0 0 1px color-mix(in srgb,#3d93dc 35%,transparent)}
+.simple-client-table .simple-clicks{color:#735c08;background-color:color-mix(in srgb,#edd46c 32%,var(--surface));box-shadow:inset 0 0 0 1px color-mix(in srgb,#c9a92a 38%,transparent)}
+.simple-client-table .simple-rate{color:#156b3c;background-color:color-mix(in srgb,#6cc999 26%,var(--surface));box-shadow:inset 0 0 0 1px color-mix(in srgb,#36a86b 35%,transparent)}
+html[data-theme="dark"] .simple-client-table .simple-money{color:#ffbe82;background-color:color-mix(in srgb,#edac60 22%,var(--surface))}
+html[data-theme="dark"] .simple-client-table .simple-volume{color:#93ccff;background-color:color-mix(in srgb,#65b6f7 22%,var(--surface))}
+html[data-theme="dark"] .simple-client-table .simple-clicks{color:#f3dc7a;background-color:color-mix(in srgb,#edd46c 20%,var(--surface))}
+html[data-theme="dark"] .simple-client-table .simple-rate{color:#86e0b0;background-color:color-mix(in srgb,#6cc999 22%,var(--surface))}
 .simple-status{display:inline-block;padding:6px;border-radius:6px;font-size:9px;background:var(--surface-soft)}.simple-status.active{color:#258250;background:#e8f6ed}
 .simple-client-table .portfolio-network-icon{border:0;background:none;width:25px;height:25px}.simple-client-table .portfolio-network-icon img{width:24px;height:24px}
 .simple-client-table .simple-landing{display:inline-flex;align-items:center;gap:3px;margin:2px;color:var(--accent)}.simple-landing svg,.simple-client-table td>a>svg{width:13px;height:13px}
@@ -28,7 +32,6 @@
 .simple-client-table .campaign-assets-row td{padding:16px;background:var(--surface);height:auto}
 
 .simple-client-table .simple-value{display:inline-block;padding:6px 5px;border-radius:6px;white-space:nowrap;font-weight:600;font-variant-numeric:tabular-nums}
-.simple-client-table .simple-campaign-row .simple-value{box-shadow:0 0 0 1px #ffffff30}
 .simple-client-table td .score-gauge>small,.simple-client-table td .score-gauge>strong{display:none}
 .simple-client-table .score-gauge.compact .score-gauge-number{display:flex;align-items:baseline;gap:2px;min-width:0!important;min-height:0!important;margin:0!important;padding:6px 5px!important;border-radius:6px!important}
 .simple-client-table .score-gauge.compact .score-gauge-number b{font-size:10px!important}.simple-client-table .score-gauge.compact .score-gauge-number em{font-size:7px!important}
@@ -97,22 +100,22 @@ body .score-reason-popover.score-reason-floating{left:var(--score-left,12px)!imp
 .tv-board .simple-table-scroll{overflow:visible}
 .tv-board .simple-client-table col{width:auto!important}
 .tv-board .simple-client-table col:nth-child(1){width:195px!important}
-.tv-board .simple-client-table col:nth-child(2){width:120px!important}
-.tv-board .simple-client-table col:nth-child(3){width:114px!important}
-.tv-board .simple-client-table col:nth-child(4){width:58px!important}
-.tv-board .simple-client-table col:nth-child(5){width:95px!important}
-.tv-board .simple-client-table col:nth-child(6){width:125px!important}
-.tv-board .simple-client-table col:nth-child(7){width:115px!important}
-.tv-board .simple-client-table col:nth-child(8){width:108px!important}
-.tv-board .simple-client-table col:nth-child(9){width:78px!important}
-.tv-board .simple-client-table col:nth-child(10){width:87px!important}
-.tv-board .simple-client-table col:nth-child(11){width:95px!important}
-.tv-board .simple-client-table col:nth-child(12){width:112px!important}
-.tv-board .simple-client-table col:nth-child(13){width:125px!important}
-.tv-board .simple-client-table col:nth-child(14){width:122px!important}
-.tv-board .simple-client-table col:nth-child(15){width:100px!important}
-.tv-board .simple-client-table col:nth-child(16){width:118px!important}
-.tv-board .simple-client-table col:nth-child(17){width:78px!important}
+.tv-board .simple-client-table col.simple-col-2{width:120px!important}
+.tv-board .simple-client-table col.simple-col-3{width:114px!important}
+.tv-board .simple-client-table col.simple-col-4{width:58px!important}
+.tv-board .simple-client-table col.simple-col-5{width:95px!important}
+.tv-board .simple-client-table col.simple-col-6{width:125px!important}
+.tv-board .simple-client-table col.simple-col-7{width:115px!important}
+.tv-board .simple-client-table col.simple-col-8{width:108px!important}
+.tv-board .simple-client-table col.simple-col-9{width:78px!important}
+.tv-board .simple-client-table col.simple-col-10{width:87px!important}
+.tv-board .simple-client-table col.simple-col-11{width:95px!important}
+.tv-board .simple-client-table col.simple-col-12{width:112px!important}
+.tv-board .simple-client-table col.simple-col-13{width:125px!important}
+.tv-board .simple-client-table col.simple-col-14{width:122px!important}
+.tv-board .simple-client-table col.simple-col-15{width:100px!important}
+.tv-board .simple-client-table col.simple-col-16{width:118px!important}
+.tv-board .simple-client-table col.simple-col-17{width:78px!important}
 .tv-board .simple-client-table table{min-width:0;width:100%}
 .tv-board .simple-client-table td,.tv-board .simple-client-table th{overflow:hidden;text-overflow:ellipsis}
 .tv-board .simple-client-table .simple-client-name b,.tv-board .simple-client-table .simple-child-name b,.tv-board .simple-client-table .simple-campaign-objective,.tv-board .simple-client-table .simple-responsible span:last-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
