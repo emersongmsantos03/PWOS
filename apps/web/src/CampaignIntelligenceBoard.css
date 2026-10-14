@@ -37,7 +37,9 @@
 .ci-hidden-dialog>header>button{display:grid;place-items:center;width:28px;height:28px;padding:0;border:0;border-radius:7px;background:none;color:#7a8aa0;cursor:pointer}
 .ci-hidden-dialog>header>button:hover{background:#f1f4f8}
 .ci-hidden-dialog>header>button svg{width:16px}
-.ci-hidden-dialog ul{display:grid;gap:0;margin:0;padding:0;overflow-y:auto;list-style:none}
+/* A lista ocupa o espaço que sobra abaixo do cabeçalho e rola quando há muitos clientes. */
+.ci-hidden-dialog{grid-template-rows:auto minmax(0,1fr)}
+.ci-hidden-dialog ul{display:grid;align-content:start;gap:0;min-height:0;margin:0;padding:0;overflow-y:auto;overscroll-behavior:contain;list-style:none}
 .ci-hidden-dialog li{display:flex;align-items:center;gap:10px;padding:10px 2px;border-bottom:1px solid #edf0f5}
 .ci-hidden-dialog li:last-child{border-bottom:0}
 .ci-hidden-dialog li>div{display:grid;flex:1;gap:2px;min-width:0}

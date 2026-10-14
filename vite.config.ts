@@ -1912,6 +1912,21 @@ function localApi(
       console.error("Não foi possível persistir as contas ocultas do pedido de crédito.", error);
     }
   };
+  // Contas ocultas pelo botão da Gestão de mídia: saem da gestão e também do pedido de crédito.
+  // Ficam separadas das ocultas só no pedido de crédito, que continuam aparecendo na gestão.
+  const localMediaHiddenPath = "data/media-hidden.local.json";
+  const mediaHidden: Record<string, CreditHiddenMark> = existsSync(localMediaHiddenPath)
+    ? JSON.parse(readFileSync(localMediaHiddenPath, "utf8"))
+    : {};
+  const persistMediaHidden = () => {
+    try {
+      mkdirSync("data", { recursive: true });
+      writeFileSync(localMediaHiddenPath, JSON.stringify(mediaHidden, null, 2), { mode: 0o600 });
+    } catch (error) {
+      console.error("Não foi possível persistir as contas ocultas da gestão de mídia.", error);
+    }
+  };
+  const accountHidden = (key: string) => !!creditHidden[key] || !!mediaHidden[key];
   let portfolioReviewsPersistTimer: ReturnType<typeof setTimeout> | undefined;
   let portfolioReviewsMtime = fileMtime(localPortfolioReviewsPath);
   const syncPortfolioReviewsFromDisk = () => {
@@ -9639,7 +9654,7 @@ function localApi(
                 if (!isMaster && assignment?.responsibleId !== currentUser.id)
                   return;
                 // Conta oculta no pedido de crédito (cliente pausado) não gera alerta.
-                if (creditHidden[`META_ADS:${input.accountId}`]) return;
+                if (accountHidden(`META_ADS:${input.accountId}`)) return;
                 const readKey = `${currentUser.id}:${input.id}`;
                 alerts.push({
                   ...input,
@@ -9707,7 +9722,7 @@ function localApi(
               isMaster = currentUser.profile === "MASTER";
             campaigns.forEach((campaign) => {
               if (campaign.status !== "ACTIVE" || (Number(campaign.dailyBudget || 0) <= 0 && Number(campaign.lifetimeBudget || 0) <= 0) || Number(campaign.spend || 0) <= 0) return;
-              if (campaign.remainingBudget == null || creditHidden[`${platform}:${campaign.accountId}`]) return;
+              if (campaign.remainingBudget == null || accountHidden(`${platform}:${campaign.accountId}`)) return;
               const dailyBudget = Number(campaign.dailyBudget || 0), lifetimeBudget = Number(campaign.lifetimeBudget || 0), totalBudget = lifetimeBudget > 0 ? lifetimeBudget : dailyBudget * days,
                 balance = Math.max(0, Number(campaign.remainingBudget)), lowThreshold = lifetimeBudget > 0 ? lifetimeBudget * .3 : dailyBudget * 2;
               if (balance > lowThreshold) return;
@@ -10028,7 +10043,7 @@ function localApi(
           if (!hasPermission(currentUser, "media.view"))
             return json(response, 403, { message: "Você não possui acesso às campanhas." });
           detectCreditPayments();
-          return json(response, 200, { requests: creditRequests, hidden: creditHidden });
+          return json(response, 200, { requests: creditRequests, hidden: creditHidden, mediaHidden });
         }
         // Marca (ou desmarca) que o crédito da conta foi solicitado / recebido.
         if (url === "/media/credit-requests" && request.method === "POST") {
@@ -10068,8 +10083,9 @@ function localApi(
           persistCreditRequests();
           return json(response, 200, { key, request: creditRequests[key] || null });
         }
-        // Oculta (ou volta a mostrar) uma conta na lista de pedido de crédito.
-        if (url === "/media/credit-hidden" && request.method === "POST") {
+        // Oculta (ou volta a mostrar) uma conta na lista de pedido de crédito (credit-hidden)
+        // ou na gestão de mídia (media-hidden).
+        if ((url === "/media/credit-hidden" || url === "/media/media-hidden") && request.method === "POST") {
           if (!hasPermission(currentUser, "media.view"))
             return json(response, 403, { message: "Você não possui acesso às campanhas." });
           const input = await body(request),
@@ -10077,16 +10093,16 @@ function localApi(
             accountId = String(input.accountId || "").trim().slice(0, 64);
           if (!["META_ADS", "GOOGLE_ADS"].includes(platform) || !accountId)
             return json(response, 400, { message: "Conta inválida." });
-          const key = `${platform}:${accountId}`;
-          if (input.hidden === false) delete creditHidden[key];
-          else creditHidden[key] = {
+          const key = `${platform}:${accountId}`, media = url === "/media/media-hidden", marks = media ? mediaHidden : creditHidden;
+          if (input.hidden === false) delete marks[key];
+          else marks[key] = {
             hiddenAt: new Date().toISOString(),
             hiddenBy: currentUser.name,
             client: String(input.client || "").trim().slice(0, 120),
             accountName: String(input.accountName || "").trim().slice(0, 120),
           };
-          persistCreditHidden();
-          return json(response, 200, { key, hidden: creditHidden[key] || null });
+          if (media) persistMediaHidden(); else persistCreditHidden();
+          return json(response, 200, { key, hidden: marks[key] || null });
         }
         // Revisões do portfólio e das campanhas das contas dele, inclusive das que já saíram da conta.
         if (url.startsWith("/media/portfolio/reviews")) syncPortfolioReviewsFromDisk();

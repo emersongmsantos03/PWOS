@@ -1368,29 +1368,30 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
       : "PORTFOLIOS",
   );
   const [reportClientSelection, setReportClientSelection] = useState(reportClientFromUrl);
-  // Contas ocultas no pedido de crédito (cliente pausado) saem de todas as listas de alerta.
-  // Mesma lista do pedido de crédito: ocultar aqui ou lá tira o cliente das listas e contagens.
-  const [creditHidden, setCreditHidden] = useState<Record<string, { hiddenAt: string; hiddenBy: string; client: string; accountName: string }>>({}),
+  // Ocultos da gestão (botão daqui) saem da lista, das contagens, dos alertas e do pedido de crédito.
+  // Ocultos só no pedido de crédito continuam na lista, mas não geram alertas.
+  const [mediaHidden, setMediaHidden] = useState<Record<string, { hiddenAt: string; hiddenBy: string; client: string; accountName: string }>>({}),
+    [creditHidden, setCreditHidden] = useState<Record<string, unknown>>({}),
     [hiddenOpen, setHiddenOpen] = useState(false), [hideError, setHideError] = useState("");
   const setAccountHidden = async (platform: string, accountId: string, hidden: boolean, names: { client?: string; accountName?: string } = {}) => {
-    const response = await fetch("/api/media/credit-hidden", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ platform, accountId, hidden, ...names }) }).catch(() => null);
+    const response = await fetch("/api/media/media-hidden", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ platform, accountId, hidden, ...names }) }).catch(() => null);
     const payload = response?.ok ? await response.json().catch(() => null) : null;
     if (!payload?.key) { setHideError("Não foi possível atualizar os clientes ocultos. Tente de novo."); return; }
     setHideError("");
-    setCreditHidden((current) => { const next = { ...current }; if (payload.hidden) next[payload.key] = payload.hidden; else delete next[payload.key]; return next; });
+    setMediaHidden((current) => { const next = { ...current }; if (payload.hidden) next[payload.key] = payload.hidden; else delete next[payload.key]; return next; });
   };
   const hideGroup = async (group: ClientGroup) => {
     const name = group.client?.name || accountLabel(group.account);
     if (!await systemConfirm({ title: `Ocultar ${name}?`, message: "O cliente sai da Gestão de mídia, das contagens das campanhas, dos alertas e do pedido de crédito até alguém mostrar de novo em “Ocultos”. Use para clientes pausados.", confirmLabel: "Ocultar" })) return;
     for (const account of group.accounts) await setAccountHidden(account.platform || group.platform, account.id, true, { client: name, accountName: account.name });
   };
-  const isHiddenCampaign = (item: Campaign) => !!creditHidden[`${item.platform || "META_ADS"}:${item.accountId}`];
+  const isHiddenCampaign = (item: Campaign) => !!mediaHidden[`${item.platform || "META_ADS"}:${item.accountId}`];
   // Relatórios e histórico seguem completos; a operação (hoje, gestão) esconde os ocultos.
   const hidesHidden = !["REPORTS", "HISTORY", "COMPILED"].includes(section);
   useEffect(() => {
-    fetch("/api/media/credit-requests").then((response) => response.ok ? response.json() : null).then((payload) => { if (payload?.hidden) setCreditHidden(payload.hidden); }).catch(() => {});
+    fetch("/api/media/credit-requests").then((response) => response.ok ? response.json() : null).then((payload) => { if (payload?.hidden) setCreditHidden(payload.hidden); if (payload?.mediaHidden) setMediaHidden(payload.mediaHidden); }).catch(() => {});
   }, [userId]);
-  const alertable = (item: Campaign) => !creditHidden[`${item.platform || "META_ADS"}:${item.accountId}`];
+  const alertable = (item: Campaign) => { const key = `${item.platform || "META_ADS"}:${item.accountId}`; return !mediaHidden[key] && !creditHidden[key]; };
   const [reportIncludeThirtyDays, setReportIncludeThirtyDays] = useState(false);
   const [reportWindows, setReportWindows] = useState<{ primary: { since: string; until: string }; thirty?: { since: string; until: string } } | null>(null);
   const [automaticReportPreview, setAutomaticReportPreview] = useState<{ id: number; clientId: string; target: Window } | null>(null);
@@ -1780,7 +1781,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
           matchesSearch(query, item.client, item.name, clients.find((client) => client.id === assignment?.clientId)?.name, portfolioId, item.accountId.replace(/^(act_|google_)/, ""))
         );
       }),
-    [data, status, delivery, showBoosted, query, assignments, clients, contextClient, contextResponsible, creditHidden, hidesHidden],
+    [data, status, delivery, showBoosted, query, assignments, clients, contextClient, contextResponsible, mediaHidden, hidesHidden],
   );
   const groups = useMemo<ClientGroup[]>(() => {
     const accountsById = new Map(
@@ -2223,13 +2224,13 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
                   />
                 </label>
                 <CampaignFilterControls status={status} statuses={statuses} onStatusChange={setStatus} delivery={delivery} onDeliveryChange={setDelivery} showBoosted={showBoosted} onShowBoostedChange={setShowBoosted} />
-                <button type="button" className="media-hidden-toggle" onClick={() => setHiddenOpen(true)} title="Clientes ocultos das listas e contagens"><EyeOff />Ocultos{Object.keys(creditHidden).length ? ` (${Object.keys(creditHidden).length})` : ""}</button>
+                <button type="button" className="media-hidden-toggle" onClick={() => setHiddenOpen(true)} title="Clientes ocultos das listas e contagens"><EyeOff />Ocultos{Object.keys(mediaHidden).length ? ` (${Object.keys(mediaHidden).length})` : ""}</button>
               </div>
             </section>
             {hideError && <p className="media-hidden-error" role="alert">{hideError}</p>}
             {hiddenOpen && createPortal(<div className="ci-hidden-backdrop" onMouseDown={(event) => event.target === event.currentTarget && setHiddenOpen(false)}><div className="ci-hidden-dialog" role="dialog" aria-label="Clientes ocultos">
               <header><EyeOff /><div><b>Clientes ocultos</b><small>Não aparecem na gestão, nas contagens, nos alertas nem no pedido de crédito. Mostre de novo quando o cliente voltar.</small></div><button type="button" onClick={() => setHiddenOpen(false)} aria-label="Fechar"><X /></button></header>
-              {Object.keys(creditHidden).length ? <ul>{Object.entries(creditHidden).sort((a, b) => (a[1].client || "").localeCompare(b[1].client || "", "pt-BR")).map(([key, item]) => <li key={key}>
+              {Object.keys(mediaHidden).length ? <ul>{Object.entries(mediaHidden).sort((a, b) => (a[1].client || "").localeCompare(b[1].client || "", "pt-BR")).map(([key, item]) => <li key={key}>
                 <span className="portfolio-network-icon">{key.startsWith("GOOGLE_ADS") ? <GoogleAdsLogo /> : <MetaLogo />}</span>
                 <div><b>{item.client || item.accountName || key}</b><small>{item.accountName && item.accountName !== item.client ? `${item.accountName} · ` : ""}ocultado por {item.hiddenBy || "—"} em {new Date(item.hiddenAt).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</small></div>
                 <button type="button" onClick={() => { const [platformKey, ...id] = key.split(":"); void setAccountHidden(platformKey, id.join(":"), false); }}>Mostrar</button>
