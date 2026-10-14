@@ -164,3 +164,7 @@ html[data-theme="dark"] .campaign-analyze.analyzed{border-color:#2fb36d!importan
 .campaign-analyze.analyzed svg{width:11px!important;height:11px!important;flex:0 0 auto}
 .campaign-analyze.partial{border-color:#d9a21b!important;color:#a26a05!important}
 html[data-theme="dark"] .campaign-analyze.partial{color:#f0c050!important}
+/* Linha do cliente e das campanhas com o mesmo alinhamento: tudo centralizado na coluna. */
+.simple-client-table td .portfolio-network-list{justify-content:center}
+.simple-client-table td .campaign-delivery-status{min-width:0;align-items:center;justify-content:center}
+.simple-client-table td .campaign-delivery-status .campaign-state{display:inline-block;padding:6px;border-radius:6px;font-size:9px;line-height:normal}
