@@ -1161,9 +1161,20 @@ function CreateModal({
               {googleConnected && (eventItem?.meetUrl ? <p className="full calendar-google-meet">Google Meet: <a href={eventItem.meetUrl} target="_blank" rel="noreferrer">{eventItem.meetUrl}</a></p> : <label className="full calendar-google-meet"><input type="checkbox" name="googleMeet" defaultChecked={category === "MEETING"} /> Criar link do Google Meet e enviar convite pelo Google Agenda</label>)}
               {eventItem?.source === "GOOGLE" && <p className="full calendar-google-meet">Evento do seu Google Agenda: título, horário, local e descrição são salvos direto no Google. Participantes e vínculos com cliente não se aplicam.</p>}
               <label className="full calendar-private-toggle">
-                <input type="checkbox" name="isPrivate" defaultChecked={!!eventItem?.isPrivate} />
-                <Lock />
-                <span><b>Agendamento particular</b><small>Só você e os convidados veem os detalhes. Para o restante da equipe, o horário aparece apenas como “Ocupado”.</small></span>
+                <input type="checkbox" role="switch" name="isPrivate" defaultChecked={!!eventItem?.isPrivate} />
+                {/* Chave com cadeado: desligada, o cadeado fica aberto; ligada, ele fecha. */}
+                <span className="calendar-private-switch" aria-hidden="true">
+                  <span className="calendar-private-knob">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                      <path className="calendar-private-shackle" d="M8 11V7.5a4 4 0 0 1 8 0V11" />
+                      <rect className="calendar-private-body" x="5" y="11" width="14" height="10" rx="2.5" />
+                    </svg>
+                  </span>
+                </span>
+                <span className="calendar-private-text">
+                  <b>Agendamento particular <em className="off">Visível para a equipe</em><em className="on">Aparece como “Ocupado”</em></b>
+                  <small>Só você e os convidados veem os detalhes. Para o restante da equipe, o horário aparece apenas como “Ocupado”.</small>
+                </span>
               </label>
               {eventItem?.googleSyncError && <p className="full calendar-google-error">Não sincronizado com o Google Agenda: {eventItem.googleSyncError}</p>}
               {category === "MEETING" && rooms.length > 0 && <label className="full">Sala de reunião<select name="roomId"><option value="">Sem sala reservada</option>{rooms.map(room=><option value={room.id} key={room.id}>{room.name}{room.location?` · ${room.location}`:""}{room.capacity?` · ${room.capacity} pessoas`:""}</option>)}</select></label>}
