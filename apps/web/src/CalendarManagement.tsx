@@ -17,6 +17,7 @@ import {
   Eye,
   EyeOff,
   Handshake,
+  Lock,
   MapPin,
   MessagesSquare,
   Plus,
@@ -52,6 +53,10 @@ type CalendarEvent = {
   googleSyncError?: string;
   colorId?: string;
   meetUrl?: string;
+  // Particular: só o dono e os convidados veem os detalhes.
+  isPrivate?: boolean;
+  // Particular de outra pessoa: chega só como "Ocupado", sem detalhes.
+  busy?: boolean;
 };
 type Task = {
   id: string;
@@ -95,6 +100,8 @@ type CalendarItem = {
   category: string;
   editable: boolean;
   color: string;
+  isPrivate?: boolean;
+  busy?: boolean;
   // Como no Google Agenda, o evento aparece uma vez na agenda de cada pessoa: identifica cada cópia.
   instanceKey?: string;
 };
@@ -248,8 +255,11 @@ export function CalendarManagement() {
         category: event.category,
         // A cor própria do evento vale só na agenda do dono; os convidados veem a cor da agenda deles.
         color: (personId === event.ownerId && eventColorHex(event.colorId)) || colorFor(personId),
+        isPrivate: event.isPrivate,
+        busy: event.busy,
         // Eventos do Google Agenda são editados pelo próprio dono; a alteração volta para o Google.
-        editable: event.source === "GOOGLE" ? event.ownerId === currentUserId && google.connected : event.ownerId === currentUserId || canEditAllEvents,
+        // Particular de outra pessoa nunca é editável, nem por quem edita todas as agendas.
+        editable: event.busy ? false : event.source === "GOOGLE" ? event.ownerId === currentUserId && google.connected : event.ownerId === currentUserId || (!event.isPrivate && canEditAllEvents),
       })));
     const taskItems = tasks
       .filter(
@@ -358,6 +368,10 @@ export function CalendarManagement() {
       navigate(`/crm?opportunity=${encodeURIComponent(item.id)}`);
       return;
     }
+    if (item.busy) {
+      setError(`${item.ownerName} está ocupado(a) neste horário (agendamento particular).`);
+      return;
+    }
     if (!item.editable) {
       // Eventos criados direto no Google Agenda são abertos lá.
       const googleEvent = item.kind === "event" ? events.find((event) => event.id === item.id && event.source === "GOOGLE") : undefined;
@@ -454,6 +468,8 @@ export function CalendarManagement() {
       ...raw,
       location:room?[room.name,room.location].filter(Boolean).join(" · "):raw.location,
       participantIds: form.getAll("participantIds").map(String),
+      // Checkbox desmarcado não vai no formulário: envia sempre o valor para poder desmarcar.
+      ...(createType === "EVENT" ? { isPrivate: form.has("isPrivate") } : {}),
     };
     const basePath = createType === "EVENT" ? "/api/calendar/events" : "/api/tasks";
     const response = await fetch(
@@ -792,10 +808,12 @@ function ItemCard({
         event.stopPropagation();
         onOpen(item);
       }}
-      className={`calendar-item ${item.kind} ${item.category.toLowerCase()} ${item.editable ? "editable" : "read-only"}${durationHours ? " calendar-duration" : ""}${column && column.count > 1 ? " calendar-overlap" : ""}`}
+      className={`calendar-item ${item.kind} ${item.category.toLowerCase()} ${item.editable ? "editable" : "read-only"}${item.busy ? " busy" : ""}${durationHours ? " calendar-duration" : ""}${column && column.count > 1 ? " calendar-overlap" : ""}`}
       style={{ "--owner-color": color, ...columnStyle, ...(durationHours ? { "--calendar-duration-height": `${Math.max(30, durationHours * 58 - 6)}px` } : {}) } as React.CSSProperties}
       title={
-        item.kind === "ticket"
+        item.busy
+          ? `${item.ownerName} · ocupado (agendamento particular)`
+          : item.kind === "ticket"
           ? `${item.ownerName} · prazo do chamado — clique para abrir`
           : item.kind === "crm"
           ? `${item.ownerName} · próxima ação do CRM — clique para abrir o lead`
@@ -804,7 +822,7 @@ function ItemCard({
           : `${item.ownerName} · ${item.editable ? "clique para editar ou arraste para alterar o horário" : "somente visualização"}`
       }
     >
-      <span>{item.kind === "task" ? <CheckSquare2 /> : item.kind === "ticket" ? <MessagesSquare /> : item.kind === "crm" ? <Handshake /> : <Clock3 />}</span>
+      <span>{item.busy || item.isPrivate ? <Lock /> : item.kind === "task" ? <CheckSquare2 /> : item.kind === "ticket" ? <MessagesSquare /> : item.kind === "crm" ? <Handshake /> : <Clock3 />}</span>
       <div>
         <b>{item.title}</b>
         <small>
@@ -818,9 +836,10 @@ function ItemCard({
           {item.kind === "task" && " · Creative Ops"}
           {item.kind === "ticket" && " · Chamado"}
           {item.kind === "crm" && " · CRM"}
+          {item.isPrivate && !item.busy && " · Particular"}
         </small>
       </div>
-      {!item.editable && <Eye />}
+      {!item.editable && !item.busy && <Eye />}
     </article>
   );
 }
@@ -1141,6 +1160,11 @@ function CreateModal({
               </label>
               {googleConnected && (eventItem?.meetUrl ? <p className="full calendar-google-meet">Google Meet: <a href={eventItem.meetUrl} target="_blank" rel="noreferrer">{eventItem.meetUrl}</a></p> : <label className="full calendar-google-meet"><input type="checkbox" name="googleMeet" defaultChecked={category === "MEETING"} /> Criar link do Google Meet e enviar convite pelo Google Agenda</label>)}
               {eventItem?.source === "GOOGLE" && <p className="full calendar-google-meet">Evento do seu Google Agenda: título, horário, local e descrição são salvos direto no Google. Participantes e vínculos com cliente não se aplicam.</p>}
+              <label className="full calendar-private-toggle">
+                <input type="checkbox" name="isPrivate" defaultChecked={!!eventItem?.isPrivate} />
+                <Lock />
+                <span><b>Agendamento particular</b><small>Só você e os convidados veem os detalhes. Para o restante da equipe, o horário aparece apenas como “Ocupado”.</small></span>
+              </label>
               {eventItem?.googleSyncError && <p className="full calendar-google-error">Não sincronizado com o Google Agenda: {eventItem.googleSyncError}</p>}
               {category === "MEETING" && rooms.length > 0 && <label className="full">Sala de reunião<select name="roomId"><option value="">Sem sala reservada</option>{rooms.map(room=><option value={room.id} key={room.id}>{room.name}{room.location?` · ${room.location}`:""}{room.capacity?` · ${room.capacity} pessoas`:""}</option>)}</select></label>}
             </>

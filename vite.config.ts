@@ -721,7 +721,25 @@ type CalendarEvent = {
   // o evento foi alterado no Google e a mudança volta para o PW OS.
   googleUpdated?: string;
   meetUrl?: string;
+  // Agendamento particular: só o dono e os convidados veem os detalhes; os demais veem "Ocupado".
+  isPrivate?: boolean;
+  // Cópia mascarada entregue a quem não pode ver os detalhes do agendamento particular.
+  busy?: boolean;
 };
+// Agendamento particular de outra pessoa (sem convite): fica escondido de quem está vendo.
+const privateEventHidden = (event: CalendarEvent, viewerId: string) =>
+  !!event.isPrivate && event.ownerId !== viewerId && !event.participantIds.includes(viewerId);
+// Para quem não pode ver o particular, sobra só o horário ocupado na agenda das pessoas.
+const calendarEventFor = (event: CalendarEvent, viewerId: string): CalendarEvent =>
+  privateEventHidden(event, viewerId)
+    ? {
+        id: event.id, title: "Ocupado", description: "", ownerId: event.ownerId, ownerName: event.ownerName,
+        participantIds: event.participantIds, participantResponses: event.participantResponses,
+        startAt: event.startAt, endAt: event.endAt, location: "", category: "BUSY", clientId: "", projectId: "",
+        opportunityId: "", taskId: "", recurrence: "NONE", reminderMinutes: 0, createdAt: event.createdAt, updatedAt: event.updatedAt,
+        source: event.source, isPrivate: true, busy: true,
+      }
+    : event;
 type MeetingAction = {
   id: string;
   title: string;
@@ -1376,6 +1394,7 @@ function localApi(
       attendees: attendees.map((email) => ({ email })),
       reminders: { useDefault: false, overrides: [{ method: "popup", minutes: Math.max(0, Math.min(40320, Number(event.reminderMinutes) || 15)) }] },
       extendedProperties: { private: { pwOsEventId: event.id } },
+      visibility: event.isPrivate ? "private" : "default",
       // Sem cor própria, volta para a cor padrão da agenda no Google.
       colorId: event.colorId || null,
     };
@@ -1477,7 +1496,7 @@ function localApi(
     const cached = googleAgendaCache.get(user.id);
     if (cached && Date.now() - cached.at < (cached.error ? 60000 : 120000)) return cached;
     type GoogleTime = { dateTime?: string; date?: string };
-    type GoogleItem = { id: string; status?: string; colorId?: string; summary?: string; description?: string; location?: string; hangoutLink?: string; htmlLink?: string; created?: string; updated?: string; start?: GoogleTime; end?: GoogleTime; extendedProperties?: { private?: Record<string, string> }; attendees?: Array<{ email?: string; responseStatus?: string }> };
+    type GoogleItem = { id: string; status?: string; visibility?: string; colorId?: string; summary?: string; description?: string; location?: string; hangoutLink?: string; htmlLink?: string; created?: string; updated?: string; start?: GoogleTime; end?: GoogleTime; extendedProperties?: { private?: Record<string, string> }; attendees?: Array<{ email?: string; responseStatus?: string }> };
     const toIso = (value: GoogleTime | undefined) => value?.dateTime ? new Date(value.dateTime).toISOString() : new Date(`${value?.date}T00:00:00-03:00`).toISOString();
     let result: { at: number; events: CalendarEvent[]; error: string };
     try {
@@ -1514,7 +1533,7 @@ function localApi(
               meetingsChanged = true;
             }
           } else if ((item.start?.dateTime || item.start?.date) && changedInGoogle(item.updated, event.updatedAt, event.googleUpdated)) {
-            const next = { title: item.summary || event.title, description: item.description || "", location: item.location || "", startAt: toIso(item.start), endAt: toIso(item.end || item.start), colorId: validEventColorId(item.colorId) };
+            const next = { title: item.summary || event.title, description: item.description || "", location: item.location || "", startAt: toIso(item.start), endAt: toIso(item.end || item.start), colorId: validEventColorId(item.colorId), isPrivate: item.visibility === "private" || item.visibility === "confidential" };
             const moved = next.startAt !== event.startAt || next.endAt !== event.endAt;
             Object.assign(event, next, { updatedAt: item.updated, googleUpdated: item.updated, googleHtmlLink: item.htmlLink || event.googleHtmlLink });
             eventsChanged = true;
@@ -1563,6 +1582,8 @@ function localApi(
         startAt: toIso(item.start), endAt: toIso(item.end || item.start), location: item.hangoutLink || item.location || "", category: "GOOGLE", clientId: "", projectId: "", opportunityId: "", taskId: "",
         recurrence: "NONE", reminderMinutes: 0, createdAt: item.created || "", updatedAt: item.updated || "", source: "GOOGLE", googleHtmlLink: item.htmlLink || "", meetUrl: item.hangoutLink || "",
         colorId: validEventColorId(item.colorId),
+        // Evento marcado como particular no próprio Google também aparece só como "Ocupado" para a equipe.
+        isPrivate: item.visibility === "private" || item.visibility === "confidential",
       }));
       result = { at: Date.now(), events, error: "" };
     } catch (error) {
@@ -6189,6 +6210,7 @@ function localApi(
             events: [...calendarEvents.values()]
               .filter(canSeeEvent)
               .concat(googleEvents)
+              .map((event) => calendarEventFor(event, currentUser.id))
               .sort((a, b) => a.startAt.localeCompare(b.startAt)),
             google: { connected: googleCalendarConnected(currentUser.id), error: google.error },
             canViewTeam: hasPermission(currentUser, "calendar.view_team"),
@@ -6251,6 +6273,7 @@ function localApi(
               recurrence: String(input.recurrence || "NONE"),
               reminderMinutes: Number(input.reminderMinutes || 15),
               colorId: validEventColorId(input.colorId),
+              isPrivate: input.isPrivate === true || input.isPrivate === "on",
               createdAt: now,
               updatedAt: now,
             };
@@ -6284,6 +6307,7 @@ function localApi(
           if (input.description !== undefined) patch.description = String(input.description).trim();
           if (input.location !== undefined) patch.location = String(input.location).trim();
           if (input.colorId !== undefined) patch.colorId = validEventColorId(input.colorId) || null;
+          if (input.isPrivate !== undefined) patch.visibility = input.isPrivate === true || input.isPrivate === "on" ? "private" : "default";
           if (input.startAt !== undefined || input.endAt !== undefined) {
             const startAt = new Date(String(input.startAt || "")), endAt = new Date(String(input.endAt || ""));
             if (Number.isNaN(startAt.getTime()) || Number.isNaN(endAt.getTime()) || endAt <= startAt)
@@ -6316,6 +6340,9 @@ function localApi(
           const event = calendarEvents.get(calendarMatch[1]);
           if (!event || !canSeeEvent(event))
             return json(response, 404, { message: "Evento não encontrado." });
+          // Agendamento particular só é alterado pelo próprio dono.
+          if (event.isPrivate && event.ownerId !== currentUser.id)
+            return json(response, 403, { message: "Este é um agendamento particular: só quem o criou pode alterá-lo." });
           if (
             !hasPermission(currentUser, "calendar.edit") ||
             (event.ownerId !== currentUser.id &&
@@ -6371,6 +6398,7 @@ function localApi(
               ? input.participantIds.map(String).filter((id) => users.has(id))
               : event.participantIds,
             colorId: input.colorId !== undefined ? validEventColorId(input.colorId) : event.colorId,
+            isPrivate: input.isPrivate !== undefined ? input.isPrivate === true || input.isPrivate === "on" : event.isPrivate,
             updatedAt: new Date().toISOString(),
           });
           calendarEvents.set(event.id, event);
@@ -6391,10 +6419,10 @@ function localApi(
           if (!event || !canSeeEvent(event))
             return json(response, 404, { message: "Evento não encontrado." });
           // O próprio usuário exclui os seus agendamentos; os de outras pessoas só quem
-          // pode editar todas as agendas (gestão, Diretoria com permissão geral).
+          // pode editar todas as agendas (gestão, Diretoria com permissão geral), exceto os particulares.
           if (
             event.ownerId !== currentUser.id &&
-            !hasPermission(currentUser, "calendar.edit_all")
+            (event.isPrivate || !hasPermission(currentUser, "calendar.edit_all"))
           )
             return json(response, 403, {
               message: "Você só pode excluir seus próprios agendamentos.",
@@ -7366,7 +7394,7 @@ function localApi(
               (item) => item.clientId === client.id,
             ),
             relatedEvents = [...calendarEvents.values()].filter(
-              (item) => item.clientId === client.id,
+              (item) => item.clientId === client.id && !privateEventHidden(item, currentUser.id),
             ),
             canViewFinance = hasPermission(currentUser, "finance.view_values");
           const financeBalance = canViewFinance
