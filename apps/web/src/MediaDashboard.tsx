@@ -1446,6 +1446,11 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
     [showBoosted, setShowBoosted] = useState(false),
     [contextClient, setContextClient] = useState(() => contextClientFromUrl || savedMediaContext(userId).client || "ALL"),
     [contextResponsible, setContextResponsible] = useState(() => savedMediaContext(userId).responsible || "ALL");
+  // O filtro de cliente e responsável só aparece (e só vale) em Hoje, Clientes e Campanhas. Nas
+  // demais telas (Relatórios, Histórico, Comparação) ele ficava escondido e esvaziava a lista.
+  const contextFiltersVisible = section === "CLIENTS" || section === "CAMPAIGNS" || section === "TODAY",
+    filterClient = contextFiltersVisible ? contextClient : "ALL",
+    filterResponsible = contextFiltersVisible ? contextResponsible : "ALL";
   const [loading, setLoading] = useState(!data),
     [error, setError] = useState(""),
     [manualSyncing, setManualSyncing] = useState(false),
@@ -1792,8 +1797,8 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
             ?.businessPortfolioId || "",
           assignment = assignments.find((value) => value.platform === (item.platform || "META_ADS") && value.accountId === item.accountId);
         return (
-          (contextClient === "ALL" || assignment?.clientId === contextClient) &&
-          (contextResponsible === "ALL" || assignment?.responsibleId === contextResponsible) &&
+          (filterClient === "ALL" || assignment?.clientId === filterClient) &&
+          (filterResponsible === "ALL" || assignment?.responsibleId === filterResponsible) &&
           matchesStatusFilter(item, status) &&
           (delivery === "ALL" ||
             (delivery === "WITH_DATA"
@@ -1805,7 +1810,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
           matchesSearch(query, item.client, item.name, clients.find((client) => client.id === assignment?.clientId)?.name, portfolioId, item.accountId.replace(/^(act_|google_)/, ""))
         );
       }),
-    [data, status, delivery, showBoosted, query, assignments, clients, contextClient, contextResponsible, mediaHidden, hidesHidden],
+    [data, status, delivery, showBoosted, query, assignments, clients, filterClient, filterResponsible, mediaHidden, hidesHidden],
   );
   const groups = useMemo<ClientGroup[]>(() => {
     const accountsById = new Map(
@@ -1926,7 +1931,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
       overall.reachAvailable && overall.reach
         ? overall.impressions / overall.reach
         : null;
-  const previousFiltered = comparisonCampaigns.filter((item) => !(hidesHidden && isHiddenCampaign(item))).filter((item) => { const assignment = assignments.find((value) => value.platform === (item.platform || "META_ADS") && value.accountId === item.accountId); return (contextClient === "ALL" || assignment?.clientId === contextClient) && (contextResponsible === "ALL" || assignment?.responsibleId === contextResponsible) && matchesStatusFilter(item, status); }),
+  const previousFiltered = comparisonCampaigns.filter((item) => !(hidesHidden && isHiddenCampaign(item))).filter((item) => { const assignment = assignments.find((value) => value.platform === (item.platform || "META_ADS") && value.accountId === item.accountId); return (filterClient === "ALL" || assignment?.clientId === filterClient) && (filterResponsible === "ALL" || assignment?.responsibleId === filterResponsible) && matchesStatusFilter(item, status); }),
     previousOverall = previousFiltered.reduce(add, emptyTotals()),
     comparisonText = (current: number, previous: number, inverse = false) => { if (!previous) return "Sem base anterior"; const delta = (current - previous) / previous * 100 * (inverse ? -1 : 1); return `${delta > 0 ? "↑" : delta < 0 ? "↓" : "—"} ${number(Math.abs(delta), 1)}% vs. anterior`; };
   const allCampaigns = groups.flatMap((group) =>
@@ -2060,7 +2065,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
           <button onClick={() => void load()}>Tentar novamente</button>
         </div>
       )}
-      {(section === "CLIENTS" || section === "CAMPAIGNS" || section === "TODAY") && <section className="media-context-bar">
+      {contextFiltersVisible && <section className="media-context-bar">
         <div className="campaign-standard-filter media-context-select"><SearchableSelect value={contextClient} onChange={setContextClient} placeholder="Todos os clientes" searchPlaceholder="Buscar cliente…" options={[{ value: "ALL", label: "Todos os clientes" }, ...clients.map((client) => ({ value: client.id, label: client.name }))]}/></div>
         <div className="campaign-standard-filter media-context-select"><SearchableSelect value={contextResponsible} onChange={setContextResponsible} placeholder="Todos os responsáveis" searchPlaceholder="Buscar responsável…" options={[{ value: "ALL", label: "Todos os responsáveis" }, ...users.map((user) => ({ value: user.id, label: user.name }))]}/></div>
         <div className="media-context-period"><span><CalendarDays/> Período</span><div className="media-context-dates"><button onClick={() => { const end = new Date(), start = new Date(); start.setDate(start.getDate() - 6); setSince(iso(start)); setUntil(iso(end)); }}>7 dias</button><button onClick={() => { const end = new Date(), start = new Date(); start.setDate(start.getDate() - 14); setSince(iso(start)); setUntil(iso(end)); }}>15 dias</button><button onClick={() => applyReportPeriod("LAST_30")}>30 dias</button><button onClick={() => applyReportPeriod("FULL_MONTH")}>Mês atual</button></div><details className="media-custom-period"><summary><CalendarDays/><span>{shortDate(since)} – {shortDate(until)}</span><ChevronDown/></summary><div><label><small>Data inicial</small><DateInput aria-label="Data inicial" value={since} max={until < todayIso ? until : todayIso} onChange={setSince}/></label><i>até</i><label><small>Data final</small><DateInput aria-label="Data final" value={until} min={since} max={todayIso} onChange={setUntil}/></label></div></details></div>
