@@ -13,6 +13,7 @@ import { MetaLogo, GoogleAdsLogo } from "./PlatformLogos";
 import { Component, Fragment, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ErrorInfo, type FormEvent, type InputHTMLAttributes, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
+  ArrowLeftRight,
   Settings2,
   ArrowUpRight,
   Activity,
@@ -1814,9 +1815,8 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
   const filtered = useMemo(
     () =>
       (data?.campaigns || []).filter((item) => {
-        const portfolioId =
-          data?.accounts.find((account) => account.id === item.accountId)
-            ?.businessPortfolioId || "",
+        const account = data?.accounts.find((value) => value.id === item.accountId),
+          portfolioId = account?.businessPortfolioId || "",
           assignment = assignments.find((value) => value.platform === (item.platform || "META_ADS") && value.accountId === item.accountId);
         return (
           (filterClient === "ALL" || assignment?.clientId === filterClient) &&
@@ -1829,7 +1829,7 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
           (showBoosted || !isBoostedPost(item)) &&
           !(hidesHidden && isHiddenCampaign(item)) &&
           // Nome da conta, da campanha, do cliente vinculado e ids — sem diferenciar acentos.
-          matchesSearch(query, item.client, item.name, clients.find((client) => client.id === assignment?.clientId)?.name, portfolioId, item.accountId.replace(/^(act_|google_)/, ""))
+          matchesSearch(query, item.client, item.name, account?.name, account?.pageName, clients.find((client) => client.id === assignment?.clientId)?.name, portfolioId, item.accountId.replace(/^(act_|google_)/, ""))
         );
       }),
     [data, status, delivery, showBoosted, query, assignments, clients, filterClient, filterResponsible, mediaHidden, hidesHidden],
@@ -2713,7 +2713,7 @@ function MediaAiInsights({ campaigns, since, until, context, scope = "CAMPAIGNS"
   </>;
 }
 
-function ComparisonClientRows({ group, previousCampaigns, previousAvailable, search }: { group: ClientGroup; previousCampaigns: Campaign[]; previousAvailable: boolean; search: string }) {
+function ComparisonClientRows({ group, previousCampaigns, previousAvailable }: { group: ClientGroup; previousCampaigns: Campaign[]; previousAvailable: boolean }) {
   const [open,setOpen] = useState(false);
   const name = group.client?.name || accountLabel(group.account);
   const current = group.campaigns, type = showsType(group), landingPage = showsLandingPage(group), scored = showsScore(group);
@@ -2723,7 +2723,7 @@ function ComparisonClientRows({ group, previousCampaigns, previousAvailable, sea
   const previousById = new Map(previous.map(item => [`${item.platform}:${item.accountId}:${item.id}`, item]));
   // Na linha do cliente a média usa só campanhas ativas; na linha da campanha vale a nota dela.
   const averageScore = (items: Campaign[], aggregate: boolean) => { const values = aggregate ? activeScores(items) : items.map(campaignScore).filter(value => value >= 0); return values.length ? Math.round(values.reduce((sum,value)=>sum+value,0)/values.length) : null; };
-  const campaignRows = current.filter(item => name.toLowerCase().includes(search.toLowerCase()) || item.name.toLowerCase().includes(search.toLowerCase())).slice().sort((a,b)=>a.name.localeCompare(b.name,"pt-BR",{sensitivity:"base",numeric:true}));
+  const campaignRows = current.slice().sort((a,b)=>a.name.localeCompare(b.name,"pt-BR",{sensitivity:"base",numeric:true}));
   const renderRow = (items: Campaign[], oldItems: Campaign[], currency: string, campaign?: Campaign) => {
     const total = portfolioMetrics(items)[0], old = portfolioMetrics(oldItems)[0];
     if (!total) return null;
@@ -2813,18 +2813,25 @@ function CompiledReport({ campaigns, groups, platform, since, until, onSinceChan
     void loadComparison();
     return () => { cancelled = true; controller.abort(); };
   }, [platform, previousSince, previousUntil, campaigns.length]);
-  const comparisonGroups = groups.filter(group => (selectedPortfolio === "ALL" || group.key === selectedPortfolio) && `${group.client?.name || accountLabel(group.account)} ${group.campaigns.map(item => item.name).join(" ")}`.toLowerCase().includes(search.toLowerCase())).sort((a,b) => (a.client?.name || accountLabel(a.account)).localeCompare(b.client?.name || accountLabel(b.account), "pt-BR", { sensitivity: "base", numeric: true }));
+  // A busca já filtrou as campanhas (sem acento, palavra por palavra) antes de montar os grupos.
+  // Troca os lados: o período anterior vira o atual e vice-versa.
+  const swapPeriods = () => {
+    const current = { since, until };
+    onSinceChange(previousSince); onUntilChange(previousUntil);
+    setPreviousSince(current.since); setPreviousUntil(current.until);
+  };
+  const comparisonGroups = groups.filter(group => selectedPortfolio === "ALL" || group.key === selectedPortfolio).sort((a,b) => (a.client?.name || accountLabel(a.account)).localeCompare(b.client?.name || accountLabel(b.account), "pt-BR", { sensitivity: "base", numeric: true }));
   return <section className="compiled-report comparison-by-portfolio simple-comparison">
     <header className="compiled-heading"><div><small>COMPARAÇÃO POR PORTFÓLIO</small><h2>Performance entre períodos</h2><p>Escolha dois intervalos e consulte cada portfólio com a mesma lógica da Gestão de mídia.</p></div><span>{groups.length} portfólios</span></header>
     <MediaPlatformSwitch platform={platform} onPlatformChange={onPlatformChange} metaDetail="Comparar campanhas da Meta" googleDetail="Comparar campanhas do Google" />
     <section className="compiled-periods">
       <div><small>PERÍODO ATUAL</small><label><CalendarDays /><DateInput value={since} max={until} onChange={onSinceChange} /><span>até</span><DateInput value={until} min={since} onChange={onUntilChange} /></label></div>
-      <i>comparar com</i>
+      <div className="compiled-swap"><i>comparar com</i><button type="button" onClick={swapPeriods} title="Trocar o período atual com o anterior" aria-label="Inverter os períodos"><ArrowLeftRight />Inverter</button></div>
       <div><small>PERÍODO ANTERIOR</small><label><CalendarDays /><DateInput value={previousSince} max={previousUntil} onChange={setPreviousSince} /><span>até</span><DateInput value={previousUntil} min={previousSince} onChange={setPreviousUntil} /></label></div>
     </section>
     <div className="comparison-simple-filters"><label><Building2/><select aria-label="Cliente para comparação" value={selectedPortfolio} onChange={event => setSelectedPortfolio(event.target.value)}><option value="ALL">Todos os clientes</option>{groups.map(group => <option key={group.key} value={group.key}>{group.client?.name || accountLabel(group.account)}</option>)}</select></label><label><Search/><input value={search} onChange={event => onSearchChange(event.target.value)} placeholder="Buscar cliente ou campanha…"/></label>{filters}<span role="status">{loadingComparison ? "Atualizando período anterior…" : "Atual · variação · anterior"}</span></div>
     {comparisonError && <div className="traffic-error"><AlertTriangle /><div><b>Comparação indisponível</b><p>{comparisonError}</p></div></div>}
-    {comparisonGroups.map(group => <ComparisonClientRows key={group.key} group={group} previousCampaigns={previousCampaigns} previousAvailable={!loadingComparison && !comparisonError} search={search}/>)}
+    {comparisonGroups.map(group => <ComparisonClientRows key={group.key} group={group} previousCampaigns={previousCampaigns} previousAvailable={!loadingComparison && !comparisonError}/>)}
     {!comparisonGroups.length && <div className="panel inline-empty"><Search/><h3>Nenhum cliente encontrado</h3><p>Ajuste os filtros da comparação.</p></div>}
     {!!comparisonGroups.length && <footer className="campaign-pagination compiled-pagination"><span>Exibindo todos os {comparisonGroups.length} clientes</span></footer>}
   </section>;

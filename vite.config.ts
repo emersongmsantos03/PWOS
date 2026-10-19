@@ -1755,23 +1755,27 @@ function localApi(
     });
     pruneMediaSnapshots();
   };
+  // Meta 12: o resultado passou a seguir a meta de otimização (conversas, leads…). Períodos
+  // salvos antes disso contavam só leads (ex.: 4 no lugar de 62 conversas) e, como períodos
+  // encerrados não expiram, apareciam para sempre no "anterior" dos comparativos. Snapshot da
+  // Meta de outra versão é tratado como não salvo e volta a ser coletado.
+  const metaMediaSchemaVersion = 12,
+    mediaSchemaVersion = (platform: string) => platform === "META_ADS" ? metaMediaSchemaVersion : 11;
   const readMediaMetricSnapshot = (platform: string, since: string, until: string): Record<string, any> | undefined => {
     try {
-      return JSON.parse(readFileSync(mediaSnapshotFile(platform, since, until), "utf8")) as Record<string, any>;
+      const snapshot = JSON.parse(readFileSync(mediaSnapshotFile(platform, since, until), "utf8")) as Record<string, any>;
+      // Google segue como antes, para não recoletar (e gastar cota) períodos antigos.
+      return platform !== "META_ADS" || snapshot.schemaVersion === metaMediaSchemaVersion ? snapshot : undefined;
     } catch {
       return undefined;
     }
   };
   // Cache entries belong to an exact platform/period, never to a user session.
-  // Meta 12: o resultado passou a seguir a meta de otimização (conversas, leads…). Períodos
-  // salvos antes disso contavam só leads (ex.: 4 no lugar de 62 conversas) e, como períodos
-  // encerrados não expiram, apareciam para sempre no "anterior" dos comparativos.
-  const metaMediaSchemaVersion = 12;
   const readStoredMediaPeriod = (platform: "META_ADS" | "GOOGLE_ADS", since: string, until: string) => {
     // Alterar a versão quando a semântica do saldo mudar. Assim, um snapshot
     // antigo (que usava o orçamento da campanha da Meta) nunca é exibido como
     // se fosse o saldo disponível da conta.
-    const schemaVersion = platform === "META_ADS" ? metaMediaSchemaVersion : 11;
+    const schemaVersion = mediaSchemaVersion(platform);
     let latest: Record<string, any> | undefined;
     try {
       const cached = JSON.parse(readFileSync(platform === "META_ADS" ? localMetaDashboardCachePath : localGoogleDashboardCachePath, "utf8"));
