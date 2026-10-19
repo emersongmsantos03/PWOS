@@ -1759,7 +1759,10 @@ function localApi(
   // salvos antes disso contavam só leads (ex.: 4 no lugar de 62 conversas) e, como períodos
   // encerrados não expiram, apareciam para sempre no "anterior" dos comparativos. Snapshot da
   // Meta de outra versão é tratado como não salvo e volta a ser coletado.
-  const metaMediaSchemaVersion = 12,
+  // Meta 13: atribuição igual à do Gerenciador de Anúncios (a de cada conjunto, com ações
+  // dentro da Meta, como conversas, contadas na data da impressão). Antes valia a atribuição
+  // da conta e a data da conversão, e as conversas ficavam abaixo do Gerenciador.
+  const metaMediaSchemaVersion = 13,
     mediaSchemaVersion = (platform: string) => platform === "META_ADS" ? metaMediaSchemaVersion : 11;
   const readMediaMetricSnapshot = (platform: string, since: string, until: string): Record<string, any> | undefined => {
     try {
@@ -3430,7 +3433,7 @@ function localApi(
             : undefined,
         });
         const insights = await listAll<MetaInsight>(
-            `${ref.id}/insights?fields=campaign_id,spend,reach,impressions,clicks,ctr,frequency,actions,cost_per_action_type&level=campaign&time_range=${encodeURIComponent(JSON.stringify({ since, until }))}&action_report_time=conversion&use_account_attribution_setting=true&limit=500`,
+            `${ref.id}/insights?fields=campaign_id,spend,reach,impressions,clicks,ctr,frequency,actions,cost_per_action_type&level=campaign&time_range=${encodeURIComponent(JSON.stringify({ since, until }))}&action_report_time=mixed&use_unified_attribution_setting=true&limit=500`,
           ),
           byCampaign = new Map(
             insights
@@ -11251,8 +11254,8 @@ function localApi(
                 return [];
               }));
               const adInsightRows = await listAll<MetaInsight & { ad_id?: string }>(
-                `${item.id}/insights?fields=ad_id,spend,impressions,clicks,actions&level=ad&time_range=${encodeURIComponent(JSON.stringify({ since, until }))}&action_report_time=conversion&use_account_attribution_setting=true&limit=100`,
-              ).catch(() => listAllWithRetry<MetaInsight & { ad_id?: string }>(`${item.id}/insights?fields=ad_id,spend,impressions,clicks,actions&level=ad&time_range=${encodeURIComponent(JSON.stringify({ since, until }))}&action_report_time=conversion&use_account_attribution_setting=true&limit=100`).catch((cause) => {
+                `${item.id}/insights?fields=ad_id,spend,impressions,clicks,actions&level=ad&time_range=${encodeURIComponent(JSON.stringify({ since, until }))}&action_report_time=mixed&use_unified_attribution_setting=true&limit=100`,
+              ).catch(() => listAllWithRetry<MetaInsight & { ad_id?: string }>(`${item.id}/insights?fields=ad_id,spend,impressions,clicks,actions&level=ad&time_range=${encodeURIComponent(JSON.stringify({ since, until }))}&action_report_time=mixed&use_unified_attribution_setting=true&limit=100`).catch((cause) => {
                 console.warn(`[Meta Ads] Métricas por anúncio indisponíveis para a conta ${item.id} mesmo após nova tentativa:`, cause instanceof Error ? cause.message : cause);
                 return [];
               }));
@@ -11419,13 +11422,13 @@ function localApi(
                   : undefined,
               });
               const insightRows = await listAll<MetaInsight>(
-                `${item.id}/insights?fields=campaign_id,spend,reach,impressions,clicks,ctr,frequency,actions,cost_per_action_type&level=campaign&time_range=${encodeURIComponent(JSON.stringify({ since, until }))}&action_report_time=conversion&use_account_attribution_setting=true&limit=500`,
+                `${item.id}/insights?fields=campaign_id,spend,reach,impressions,clicks,ctr,frequency,actions,cost_per_action_type&level=campaign&time_range=${encodeURIComponent(JSON.stringify({ since, until }))}&action_report_time=mixed&use_unified_attribution_setting=true&limit=500`,
               );
               const locationInsights = async (breakdown: "region" | "zip") => {
                 const base = `${item.id}/insights?level=campaign&breakdowns=${breakdown}&time_range=${encodeURIComponent(JSON.stringify({ since, until }))}&limit=500`;
                 try {
                   return await listAll<MetaInsight>(
-                    `${base}&fields=campaign_id,spend,clicks,actions&action_report_time=conversion&use_account_attribution_setting=true`,
+                    `${base}&fields=campaign_id,spend,clicks,actions&action_report_time=mixed&use_unified_attribution_setting=true`,
                   );
                 } catch {
                   try {
