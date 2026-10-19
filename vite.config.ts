@@ -994,6 +994,8 @@ const hasPermission = (user: User | undefined, permission: string) => {
   if (permission === "meetings.view_team") return isDirectorsMember(user);
   // Criar tipos de chamado e editar as suas etapas também é exclusivo da Diretoria.
   if (permission === "tickets.manage_flows") return isDirectorsMember(user);
+  // Excluir chamados e editar/apagar mensagens deles também: os demais só reenviam a mensagem.
+  if (permission === "tickets.delete") return isDirectorsMember(user);
   // Escolher a cor de cada pessoa da equipe também é da Diretoria.
   if (permission === "users.manage_colors") return isDirectorsMember(user);
   const override = user.permissionOverrides?.[permission];
@@ -5132,8 +5134,8 @@ function localApi(
           persistTickets();
           return json(response, 201, { comment, ticket });
         }
-        // Editar (só quem escreveu) ou apagar (quem escreveu ou quem pode excluir chamados) um
-        // comentário. Registros automáticos e pedidos de ajuste fazem parte do fluxo e não mudam.
+        // Mensagens do chamado não mudam: só o Master e a Diretoria podem editar (as próprias) ou
+        // apagar. Registros automáticos e pedidos de ajuste fazem parte do fluxo e nunca mudam.
         const ticketCommentItemMatch = url.split("?")[0].match(/^\/tickets\/([^/]+)\/comments\/([^/]+)$/);
         if (ticketCommentItemMatch && (request.method === "PATCH" || request.method === "DELETE")) {
           const ticket = tickets.get(ticketCommentItemMatch[1]);
@@ -5143,6 +5145,8 @@ function localApi(
           if (!comment || comment.kind === "SYSTEM" || comment.action === "RETURN")
             return json(response, 404, { message: "Comentário não encontrado." });
           const mine = comment.authorId === currentUser.id;
+          if (!hasPermission(currentUser, "tickets.delete"))
+            return json(response, 403, { message: "As mensagens do chamado não podem ser alteradas nem apagadas. Envie uma nova mensagem." });
           if (request.method === "PATCH") {
             if (!mine) return json(response, 403, { message: "Só quem escreveu pode editar o comentário." });
             const message = String((await body(request)).message || "").trim();
@@ -5154,8 +5158,6 @@ function localApi(
             Object.assign(comment, { message, mentions: mentioned.map((user) => user.id), editedAt: new Date().toISOString() });
             ticket.participantIds = [...new Set([...ticket.participantIds, ...comment.mentions])];
           } else {
-            if (!mine && !hasPermission(currentUser, "tickets.delete"))
-              return json(response, 403, { message: "Só quem escreveu pode apagar o comentário." });
             ticket.comments = ticket.comments.filter((item) => item.id !== comment.id);
           }
           tickets.set(ticket.id, ticket);
@@ -5355,8 +5357,9 @@ function localApi(
             return createReadStream(attachment.storagePath).pipe(response);
           }
           if (request.method === "DELETE" && !ticketAttachmentItemMatch[3]) {
-            if (attachment.uploadedById !== currentUser.id && !hasPermission(currentUser, "tickets.edit"))
-              return json(response, 403, { message: "Somente quem enviou o arquivo pode removê-lo." });
+            // Anexos ficam no histórico do chamado: só o Master e a Diretoria removem.
+            if (!hasPermission(currentUser, "tickets.delete"))
+              return json(response, 403, { message: "Somente o Master e a Diretoria podem remover anexos do chamado." });
             removeTicketAttachmentFile(attachment);
             ticket.attachments = (ticket.attachments || []).filter((item) => item.id !== attachment.id);
             ticket.updatedAt = new Date().toISOString();
@@ -5466,7 +5469,7 @@ function localApi(
             return json(response, 404, { message: "Chamado não encontrado." });
           if (!hasPermission(currentUser, "tickets.delete"))
             return json(response, 403, {
-              message: "Você não possui permissão para excluir chamados.",
+              message: "Somente o Master e a Diretoria podem excluir chamados.",
             });
           (ticket.attachments || []).forEach(removeTicketAttachmentFile);
           syncTicketTasks(ticket, { deleted: true });

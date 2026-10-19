@@ -107,7 +107,7 @@ function TicketView({ ticket, data, user, tab, setTab, reload, back }: { ticket:
         <nav className="tp-tabs" role="tablist" aria-label="Seções do chamado">{tabs.map((item) => <button type="button" role="tab" key={item.key} aria-selected={tab === item.key} className={tab === item.key ? "active" : ""} onClick={() => setTab(item.key)}><item.icon />{item.label}{item.count ? <em>{item.count}</em> : null}</button>)}</nav>
         {error && <p className="mc-alert" role="alert">{error}</p>}
         {tab === "overview" && <Overview ticket={ticket} data={data} user={user} busy={busy} mine={mine} canAct={canAct} next={next} work={work} flow={flow} run={run} reload={reload} avatar={avatar} onHistory={() => setTab("history")} />}
-        {tab === "files" && <FilesTab ticket={ticket} canEdit={data.canEdit} userId={user.id} canUpload={data.canCreate || data.canEdit || data.canComment} reload={reload} />}
+        {tab === "files" && <FilesTab ticket={ticket} canDelete={data.canDelete} canUpload={data.canCreate || data.canEdit || data.canComment} reload={reload} />}
         {tab === "comments" && <CommentsTab ticket={ticket} data={data} canComment={data.canComment} run={run} avatar={avatar} userId={user.id} reload={reload} />}
         {tab === "history" && <HistoryTab ticket={ticket} avatar={avatar} />}
         {tab === "checklist" && <ChecklistTab ticket={ticket} run={run} busy={busy} />}
@@ -271,7 +271,7 @@ const Meta = ({ icon, label, value, tone = "" }: { icon: ReactNode; label: strin
   <div className={`tp-meta ${tone}`}><span>{icon}</span><div><small>{label}</small><b>{value}</b></div></div>;
 
 /* Quem executa a etapa ativa: briefing, cronômetro, andamento, anexos e envio. */
-function ExecutorView({ ticket, user, busy, next, work, flow, run, reload, step, avatar }: OverviewProps & { step: TicketStep }) {
+function ExecutorView({ ticket, data, user, busy, next, work, flow, run, reload, step, avatar }: OverviewProps & { step: TicketStep }) {
   const steps = ticket.steps || [], position = steps.indexOf(step), state = step.work?.state || "NOT_STARTED";
   const [text, setText] = useState(step.work?.draft || ""), [savedAt, setSavedAt] = useState(""), [uploading, setUploading] = useState(""), [uploadError, setUploadError] = useState("");
   const previous = steps[position - 1];
@@ -337,7 +337,7 @@ function ExecutorView({ ticket, user, busy, next, work, flow, run, reload, step,
           <div className="tp-thumbs">{stepFiles.map((file) => <div key={file.id} className="tp-thumb">
             <a href={fileUrl(ticket, file)} target="_blank" rel="noreferrer">{isImage(file) ? <img src={fileUrl(ticket, file)} alt="" /> : <span>{extension(file.name)}</span>}</a>
             <b title={file.name}>{file.name}</b><small>{fileSize(file.sizeBytes)}</small>
-            <button type="button" aria-label={`Remover ${file.name}`} onClick={async () => { if (await systemConfirm({ title: "Remover anexo?", message: `“${file.name}” será apagado do chamado.`, confirmLabel: "Remover", tone: "danger" })) void run(() => ticketApi(`/tickets/${ticket.id}/attachments/${file.id}`, { method: "DELETE" })); }}><X /></button>
+            {data.canDelete && <button type="button" aria-label={`Remover ${file.name}`} onClick={async () => { if (await systemConfirm({ title: "Remover anexo?", message: `“${file.name}” será apagado do chamado.`, confirmLabel: "Remover", tone: "danger" })) void run(() => ticketApi(`/tickets/${ticket.id}/attachments/${file.id}`, { method: "DELETE" })); }}><X /></button>}
           </div>)}
             <DropZone compact={stepFiles.length > 0} busy={uploading} onFiles={(files) => void upload(files)} />
           </div>
@@ -478,7 +478,7 @@ function ExtraInfo({ ticket, client, canEdit, run }: { ticket: Ticket; client?: 
 
 /* ---------- Abas ---------- */
 
-function FilesTab({ ticket, canEdit, userId, canUpload, reload }: { ticket: Ticket; canEdit: boolean; userId: string; canUpload: boolean; reload: () => Promise<void> }) {
+function FilesTab({ ticket, canDelete, canUpload, reload }: { ticket: Ticket; canDelete: boolean; canUpload: boolean; reload: () => Promise<void> }) {
   const [busy, setBusy] = useState(""), [error, setError] = useState("");
   const steps = ticket.steps || [], files = ticket.attachments || [];
   const groups = [{ id: "", name: "Abertura do chamado" }, ...steps.map((step) => ({ id: step.id, name: step.name }))]
@@ -495,7 +495,7 @@ function FilesTab({ ticket, canEdit, userId, canUpload, reload }: { ticket: Tick
   return <section className="tp-card">
     <header className="tp-card-head"><span className="mc-card-icon dark"><Paperclip /></span><div><h2>Arquivos</h2><p>{files.length} de 20 anexos · agrupados pela etapa em que foram enviados</p></div></header>
     {error && <p className="mc-alert" role="alert">{error}</p>}
-    {groups.length ? groups.map((group) => <div key={group.id || "start"} className="tp-file-group"><h3>{group.name}</h3><FileList ticket={ticket} files={group.files} onRemove={(file) => void remove(file)} canRemove={(file) => canEdit || file.uploadedById === userId} /></div>) : <p className="mc-empty">Nenhum arquivo anexado.</p>}
+    {groups.length ? groups.map((group) => <div key={group.id || "start"} className="tp-file-group"><h3>{group.name}</h3><FileList ticket={ticket} files={group.files} onRemove={(file) => void remove(file)} canRemove={() => canDelete} /></div>) : <p className="mc-empty">Nenhum arquivo anexado.</p>}
     {canUpload && <DropZone busy={busy} onFiles={(list) => void upload(list)} />}
   </section>;
 }

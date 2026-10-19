@@ -301,7 +301,7 @@ function TicketDetails({ ticket, data, currentUser, onClose, onEdit, onChange, o
         {steps.length > 0 && <section><h3>Fluxo</h3><StepRail vertical steps={steps} users={users} /></section>}
         <section><h3>Descrição</h3><p className="tk-text">{ticket.description || "Nenhuma descrição informada."}</p>{ticket.notes && <p className="tk-text muted"><b>Observações:</b> {ticket.notes}</p>}</section>
         <section><h3>Pessoas no chamado</h3><div className="tk-people">{involved.map((person) => <span key={person.id} className="tk-person-chip"><PersonAvatar size="sm" name={person.name} src={person.avatarDataUrl} /><b>{person.id === currentUser.id ? "Você" : person.name}</b></span>)}</div></section>
-        <TicketAttachments ticket={ticket} currentUserId={currentUser.id} canEdit={data.canEdit} canUpload={data.canCreate || data.canEdit || data.canComment} onChange={onChange} />
+        <TicketAttachments ticket={ticket} canDelete={data.canDelete} canUpload={data.canCreate || data.canEdit || data.canComment} onChange={onChange} />
         <section ref={conversationRef}>
           <div className="tk-section-title"><h3>Conversa e histórico</h3><span>{ticket.comments.filter((item) => item.kind !== "SYSTEM").length}</span></div>
           <div className="tk-comments">
@@ -332,7 +332,8 @@ function TicketDetails({ ticket, data, currentUser, onClose, onEdit, onChange, o
 export function EditableComment({ ticketId, comment, userId, canDelete, onChange, children }: { ticketId: string; comment: TicketComment; userId: string; canDelete: boolean; onChange: () => unknown; children: ReactNode }) {
   const [draft, setDraft] = useState<string | null>(null), [busy, setBusy] = useState(false), [error, setError] = useState("");
   const fixed = comment.kind === "SYSTEM" || comment.action === "RETURN", mine = comment.authorId === userId;
-  const canEdit = !fixed && mine, canRemove = !fixed && (mine || canDelete);
+  // Só o Master e a Diretoria (canDelete) mexem em mensagens; os demais reenviam.
+  const canEdit = !fixed && mine && canDelete, canRemove = !fixed && canDelete;
   const send = async (method: "PATCH" | "DELETE") => {
     if (method === "DELETE" && !await systemConfirm({ title: "Apagar comentário?", message: "O comentário sai da conversa do chamado.", confirmLabel: "Apagar", tone: "danger" })) return;
     setBusy(true); setError("");
@@ -357,7 +358,7 @@ export function EditableComment({ ticketId, comment, userId, canDelete, onChange
   </>;
 }
 
-function TicketAttachments({ ticket, currentUserId, canEdit, canUpload, onChange }: { ticket: Ticket; currentUserId: string; canEdit: boolean; canUpload: boolean; onChange: () => void }) {
+function TicketAttachments({ ticket, canDelete, canUpload, onChange }: { ticket: Ticket; canDelete: boolean; canUpload: boolean; onChange: () => void }) {
   const [busy, setBusy] = useState(""), [error, setError] = useState("");
   const files = ticket.attachments || [];
   const upload = async (list: FileList | null) => {
@@ -381,7 +382,7 @@ function TicketAttachments({ ticket, currentUserId, canEdit, canUpload, onChange
       <span className="tk-file-icon">{file.name.split(".").pop()?.slice(0, 4).toUpperCase()}</span>
       <a href={`/api/tickets/${ticket.id}/attachments/${file.id}/content`} target="_blank" rel="noreferrer"><b>{file.name}</b><small>{fileSize(file.sizeBytes)} · {file.uploadedByName}</small></a>
       <a className="mt-icon-button" href={`/api/tickets/${ticket.id}/attachments/${file.id}/content`} download={file.name} aria-label={`Baixar ${file.name}`}><Download /></a>
-      {(canEdit || file.uploadedById === currentUserId) && <button type="button" className="mt-icon-button" onClick={() => void remove(file)} aria-label={`Remover ${file.name}`}><Trash2 /></button>}
+      {canDelete && <button type="button" className="mt-icon-button" onClick={() => void remove(file)} aria-label={`Remover ${file.name}`}><Trash2 /></button>}
     </div>)}</div> : <p className="tk-hint">Nenhum arquivo anexado.</p>}
   </section>;
 }
