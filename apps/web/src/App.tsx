@@ -137,7 +137,9 @@ type SideEntry =
 const sideMenu: SideEntry[] = [
   { kind: "link", to: "/" },
   { kind: "link", to: "/agenda" },
-  { kind: "link", to: "/tarefas" },
+  { kind: "group", key: "marketing", label: "Marketing", icon: Sparkles, paths: ["/tarefas"], children: [
+    { to: "/tarefas", label: "Creative Ops" },
+  ] },
   { kind: "group", key: "cadastros", label: "Cadastros", icon: FolderOpen, paths: ["/clientes", "/equipe", "/configuracoes/integracoes"], children: [
     { to: "/clientes", label: "Clientes" },
     { to: "/equipe", label: "Equipe & Acesso" },
