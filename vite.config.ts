@@ -19,6 +19,7 @@ import {
   type GoogleDayRow,
 } from "./googleDailyStore";
 import { googleOAuthReturnPage } from "./oauthCallback";
+import { canReassignStep, canReassignTicket, quotedList, reassignRights, reassignSteps } from "./apps/web/src/ticketReassign";
 import { applyFlowAction, canReturnStep, flowStatus, mergeFlows, reopenFlow, sanitizeFlow, scheduleSteps, ticketFlows, type TicketFlow, type TicketStep } from "./apps/web/src/ticketFlows";
 import { applyWorkAction, workElapsed, type TicketChecklistItem, type TicketWorkAction } from "./apps/web/src/ticketWork";
 import { linkedTaskStatus, ticketTaskDepartments, ticketTaskType, workActionsForTaskStatus } from "./apps/web/src/ticketTasks";
@@ -401,6 +402,8 @@ type Ticket = {
   attachments?: TicketAttachment[];
   checklist?: TicketChecklistItem[];
   projectValue?: number;
+  // Chamado sem etapas repassado para outra pessoa (com etapas, fica em cada etapa).
+  handoff?: TicketStep["handoff"];
 };
 type TicketOriginType = "INTERNAL" | "MEETING" | "WHATSAPP" | "EMAIL" | "PHONE";
 type TicketAttachment = { id: string; name: string; contentType: string; sizeBytes: number; storagePath: string; uploadedById: string; uploadedByName: string; createdAt: string; stepId?: string };
@@ -1760,11 +1763,15 @@ function localApi(
     }
   };
   // Cache entries belong to an exact platform/period, never to a user session.
+  // Meta 12: o resultado passou a seguir a meta de otimização (conversas, leads…). Períodos
+  // salvos antes disso contavam só leads (ex.: 4 no lugar de 62 conversas) e, como períodos
+  // encerrados não expiram, apareciam para sempre no "anterior" dos comparativos.
+  const metaMediaSchemaVersion = 12;
   const readStoredMediaPeriod = (platform: "META_ADS" | "GOOGLE_ADS", since: string, until: string) => {
     // Alterar a versão quando a semântica do saldo mudar. Assim, um snapshot
     // antigo (que usava o orçamento da campanha da Meta) nunca é exibido como
     // se fosse o saldo disponível da conta.
-    const schemaVersion = 11;
+    const schemaVersion = platform === "META_ADS" ? metaMediaSchemaVersion : 11;
     let latest: Record<string, any> | undefined;
     try {
       const cached = JSON.parse(readFileSync(platform === "META_ADS" ? localMetaDashboardCachePath : localGoogleDashboardCachePath, "utf8"));
@@ -4983,6 +4990,7 @@ function localApi(
                       name: user.name,
                       email: user.email,
                       avatarDataUrl: user.avatarDataUrl,
+                      departmentId: user.departmentId,
                       departmentName: user.departmentName,
                     }))
                 : [],
@@ -5225,6 +5233,54 @@ function localApi(
             if (action === "COMPLETE" && note)
               ticket.comments.push({ id: randomUUID(), authorId: currentUser.id, authorName: currentUser.name, message: note, mentions: [], createdAt: ticket.updatedAt, stepId: active.id, delivery: true });
           } else return json(response, 400, { message: "Ação inválida." });
+          tickets.set(ticket.id, ticket);
+          syncTicketTasks(ticket);
+          persistTickets();
+          return json(response, 200, { ticket });
+        }
+        // Reatribuir: o líder do setor repassa as partes que estão com ele (ou com o time dele) para
+        // alguém do setor; quem pode atribuir chamados repassa qualquer parte para qualquer pessoa.
+        const ticketReassignMatch = url.match(/^\/tickets\/([^/]+)\/reassign$/);
+        if (ticketReassignMatch && request.method === "POST") {
+          const ticket = tickets.get(ticketReassignMatch[1]);
+          if (!ticket || !canSeeTicket(ticket))
+            return json(response, 404, { message: "Chamado não encontrado." });
+          if (["RESOLVED", "CLOSED"].includes(ticket.status))
+            return json(response, 409, { message: "Este chamado já está encerrado." });
+          const input = await body(request);
+          const to = staffUser(input.toUserId), note = String(input.note || "").trim().slice(0, 500);
+          if (!to) return json(response, 400, { message: "Escolha para quem repassar." });
+          const rights = reassignRights(
+            currentUser.id,
+            hasPermission(currentUser, "tickets.edit") && hasPermission(currentUser, "tickets.assign"),
+            [...departments.values()],
+            [...users.values()].filter((user) => user.profile !== "CLIENT"),
+          );
+          if (!canReassignTicket(ticket, currentUser.id, rights))
+            return json(response, 403, { message: "Só o líder do setor pode repassar as partes deste chamado." });
+          if (!rights.teamIds.has(to.id))
+            return json(response, 403, { message: "Você só pode repassar para alguém do seu setor." });
+          const now = new Date(), suffix = note ? ` — “${note}”` : "";
+          ticket.updatedAt = now.toISOString();
+          if (ticket.steps?.length) {
+            const stepIds: string[] = Array.isArray(input.stepIds) ? input.stepIds.map(String) : [];
+            const chosen = ticket.steps.filter((item) => stepIds.includes(item.id));
+            if (!chosen.length) return json(response, 400, { message: "Escolha ao menos uma parte do chamado." });
+            if (chosen.some((item) => !canReassignStep(item, currentUser.id, rights)))
+              return json(response, 403, { message: "Alguma das partes escolhidas já foi concluída ou não está com o seu setor." });
+            const result = reassignSteps(ticket.steps, stepIds, to, currentUser, now, note);
+            if (!result.moved.length) return json(response, 409, { message: `Essas partes já estão com ${to.name}.` });
+            ticket.steps = result.steps;
+            syncTicketFlow(ticket);
+            systemTicketComment(ticket, `repassou ${quotedList(result.moved.map((item) => item.name))} para ${to.name}${suffix}`);
+          } else {
+            if (ticket.assigneeId === to.id) return json(response, 409, { message: `O chamado já está com ${to.name}.` });
+            ticket.handoff = { fromName: ticket.assigneeName, byId: currentUser.id, byName: currentUser.name, at: ticket.updatedAt, ...(note ? { note } : {}) };
+            ticket.assigneeId = to.id;
+            ticket.assigneeName = to.name;
+            ticket.participantIds = [...new Set([...ticket.participantIds, to.id])];
+            systemTicketComment(ticket, `repassou o chamado para ${to.name}${suffix}`);
+          }
           tickets.set(ticket.id, ticket);
           syncTicketTasks(ticket);
           persistTickets();
@@ -9954,14 +10010,23 @@ function localApi(
               // Com fluxo, cada etapa que chega gera um aviso próprio para o responsável dela.
               const activeStep = openTicket ? ticket.steps?.find((item) => item.status === "ACTIVE") : undefined;
               const lastMover = [...ticket.comments].reverse().find((comment) => comment.kind === "SYSTEM")?.authorId ?? ticket.requesterId;
-              const stepArrived = !!activeStep && activeStep.assigneeId === currentUser.id && lastMover !== currentUser.id;
+              // Etapa repassada para mim depois de começar: o aviso de repasse já cobre a chegada.
+              const handedToMe = (step: TicketStep) => step.status !== "DONE" && step.assigneeId === currentUser.id && !!step.handoff && step.handoff.byId !== currentUser.id;
+              const stepArrived = !!activeStep && activeStep.assigneeId === currentUser.id && lastMover !== currentUser.id &&
+                !(handedToMe(activeStep) && (activeStep.handoff?.at || "") >= (activeStep.startedAt || ""));
+              if (openTicket)
+                for (const step of ticket.steps || [])
+                  if (handedToMe(step))
+                    add(`ticket-handoff:${step.id}:${step.handoff!.at}`, { type: "TICKET_ASSIGNED", severity: ["HIGH", "URGENT"].includes(ticket.priority) ? "WARNING" : "INFO", title: `${step.handoff!.byName} repassou uma etapa para você`, message: `${step.name}${step.status === "ACTIVE" ? " (em andamento)" : " (próximas etapas)"}${step.handoff!.note ? ` — “${step.handoff!.note.slice(0, 160)}”` : ""}`, createdAt: step.handoff!.at });
               if (activeStep && stepArrived)
                 add(`ticket-step:${ticket.id}:${activeStep.id}:${activeStep.startedAt}`, activeStep.adjustment
                   ? { type: "TICKET_ASSIGNED", severity: "WARNING", title: `${activeStep.adjustment.byName} pediu ajustes`, message: `${activeStep.name}: “${activeStep.adjustment.note.slice(0, 160)}”`, createdAt: activeStep.startedAt || ticket.updatedAt }
                   : { type: "TICKET_ASSIGNED", severity: ["HIGH", "URGENT"].includes(ticket.priority) ? "WARNING" : "INFO", title: activeStep.role === "CLIENT" ? "Aprovação do cliente para acompanhar" : activeStep.role === "APPROVER" ? "Aprovação aguardando você" : "Etapa chegou para você", message: `${activeStep.name}${ticket.clientName ? ` · ${ticket.clientName}` : ""}`, createdAt: activeStep.startedAt || ticket.updatedAt });
               if (activeStep && activeStep.assigneeId === currentUser.id && activeStep.dueAt && new Date(activeStep.dueAt).getTime() < Date.now())
                 add(`ticket-step-late:${activeStep.id}:${activeStep.dueAt}`, { type: "TICKET_LATE", severity: "CRITICAL", title: "Etapa atrasada", message: `O prazo de “${activeStep.name}” já passou.`, createdAt: activeStep.dueAt });
-              if (!ticket.steps?.length && openTicket && ticket.assigneeId === currentUser.id && ticket.requesterId !== currentUser.id)
+              if (!ticket.steps?.length && openTicket && ticket.assigneeId === currentUser.id && ticket.handoff && ticket.handoff.byId !== currentUser.id)
+                add(`ticket-handoff:${ticket.id}:${ticket.handoff.at}`, { type: "TICKET_ASSIGNED", severity: ["HIGH", "URGENT"].includes(ticket.priority) ? "WARNING" : "INFO", title: `${ticket.handoff.byName} repassou um chamado para você`, message: ticket.handoff.note ? `“${ticket.handoff.note.slice(0, 160)}”` : `Antes estava com ${ticket.handoff.fromName}.`, createdAt: ticket.handoff.at });
+              else if (!ticket.steps?.length && openTicket && ticket.assigneeId === currentUser.id && ticket.requesterId !== currentUser.id)
                 add(`ticket-assigned:${ticket.id}:${ticket.assigneeId}`, { type: "TICKET_ASSIGNED", severity: ["HIGH", "URGENT"].includes(ticket.priority) ? "WARNING" : "INFO", title: "Novo chamado para você", message: `${ticket.requesterName} abriu este chamado.`, createdAt: ticket.createdAt });
               if (!ticket.steps?.length && openTicket && ticket.assigneeId === currentUser.id && ticket.dueAt && new Date(ticket.dueAt).getTime() < Date.now())
                 add(`ticket-late:${ticket.id}:${ticket.dueAt}`, { type: "TICKET_LATE", severity: "CRITICAL", title: "Chamado atrasado", message: "O prazo deste chamado já passou.", createdAt: ticket.dueAt });
@@ -9972,7 +10037,10 @@ function localApi(
               }
               // Só a última atualização de outra pessoa, para não repetir a conversa inteira no sino.
               const latest = [...ticket.comments].reverse().find((comment) => comment.authorId !== currentUser.id);
-              if (involved && latest && !latest.mentions.includes(currentUser.id) && !(stepArrived && latest.kind === "SYSTEM" && latest.createdAt === activeStep?.startedAt))
+              // O repasse para mim já tem aviso próprio; o registro dele no histórico não repete.
+              const handoffTimes = [ticket.assigneeId === currentUser.id ? ticket.handoff : undefined, ...(ticket.steps || []).filter(handedToMe).map((step) => step.handoff)]
+                .filter((item) => item && item.byId !== currentUser.id).map((item) => item!.at);
+              if (involved && latest && !latest.mentions.includes(currentUser.id) && !(stepArrived && latest.kind === "SYSTEM" && latest.createdAt === activeStep?.startedAt) && !(latest.kind === "SYSTEM" && handoffTimes.includes(latest.createdAt)))
                 add(`ticket-update:${latest.id}`, { type: "TICKET_UPDATE", severity: "INFO", title: latest.kind === "SYSTEM" ? "Chamado atualizado" : `${latest.authorName} respondeu`, message: latest.kind === "SYSTEM" ? `${latest.authorName} ${latest.message}` : latest.message.slice(0, 180), createdAt: latest.createdAt });
             }
           }
@@ -10206,14 +10274,23 @@ function localApi(
           const params = new URL(url, "http://localhost").searchParams;
           const prefixes = (params.get("accounts") || "")
             .split(",").map((value) => value.trim()).filter((value) => /^(META_ADS|GOOGLE_ADS):[^:]+$/.test(value)).slice(0, 200).map((value) => `${value}:`);
+          // Revisão feita no cartão de outro cliente fica com ele: quando uma conta muda de
+          // cliente, as anotações antigas (gravadas também em cada campanha) não a acompanham.
+          // As feitas antes da conta ser vinculada (cartão "unlinked:") continuam aparecendo.
+          const requestedKey = params.get("key") || "", reviewOwner = new Map<string, string>();
+          Object.entries(portfolioReviews).forEach(([key, list]) => list.forEach((item) => reviewOwner.set(item.id, key)));
+          const belongsHere = (portfolioReviewId?: string) => {
+            const owner = portfolioReviewId ? reviewOwner.get(portfolioReviewId) : undefined;
+            return !owner || owner === requestedKey || !owner.startsWith("client:");
+          };
           const campaigns = Object.entries(campaignVerifications).flatMap(([key, value]) => {
             const prefix = prefixes.find((candidate) => key.startsWith(candidate)),
-              reviews = (value.history || []).filter((entry) => entry.action === "REVIEW");
+              reviews = (value.history || []).filter((entry) => entry.action === "REVIEW" && belongsHere(entry.portfolioReviewId));
             if (!prefix || !reviews.length) return [];
             const [platform, accountId] = prefix.split(":"), campaignId = key.slice(prefix.length);
             return [{ platform, accountId, campaignId, name: [...reviews].reverse().find((entry) => entry.snapshot?.name)?.snapshot?.name || null, reviews }];
           });
-          return json(response, 200, { reviews: portfolioReviews[params.get("key") || ""] || [], campaigns, canModerate: hasPermission(currentUser, "media.edit") });
+          return json(response, 200, { reviews: portfolioReviews[requestedKey] || [], campaigns, canModerate: hasPermission(currentUser, "media.edit") });
         }
         // Editar ou apagar uma revisão do portfólio (quem escreveu ou quem gerencia a mídia). A cópia
         // replicada no histórico de cada campanha acompanha; ao apagar, a campanha volta a ficar
@@ -11475,7 +11552,7 @@ function localApi(
             const syncedAt = new Date().toISOString(),
               campaignsWithHistory = withOptimizationHistory(campaigns, "META_ADS", syncedAt),
               payload = {
-                schemaVersion: 11,
+                schemaVersion: metaMediaSchemaVersion,
                 since,
                 until,
                 syncedAt,
@@ -11509,7 +11586,7 @@ function localApi(
                 localMetaDashboardCachePath,
                 JSON.stringify(
                   {
-                    schemaVersion: 11,
+                    schemaVersion: metaMediaSchemaVersion,
                     since,
                     until,
                     cachedAt: syncedAt,

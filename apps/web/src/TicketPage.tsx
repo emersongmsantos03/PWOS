@@ -3,13 +3,14 @@ import { NavLink, useNavigate, useParams } from "react-router-dom";
 import {
   AlertTriangle, ArrowLeft, ArrowRight, Bold, Calendar, CalendarCheck, Check, CheckCircle2, ChevronDown, ClipboardList, Clock3, Download, Edit3,
   FileText, Flag, Forward, History, Info, Italic, Link2, List, ListOrdered, MessageSquare, MoreVertical, Paperclip, Pause, Pencil, Play, Plus,
-  RotateCcw, Send, ShieldCheck, Square, Trash2, Undo2, Upload, UserRound, X, XCircle,
+  RotateCcw, Search, Send, ShieldCheck, Square, Trash2, Undo2, Upload, UserRound, Users, X, XCircle,
 } from "lucide-react";
 import { systemConfirm } from "./SystemDialog";
 import { EditableComment, PersonAvatar, dateTime, fileSize, ticketApi, uploadTicketFile, type Ticket, type TicketAttachment, type TicketComment, type TicketsData } from "./TicketsManagement";
 import { activeStep, clientJustApproved, isOpenTicket, sentForApproval } from "./marketingTickets";
 import { ClientMark, PriorityTag } from "./MarketingBoard";
 import { stepRoleLabels, type TicketStep } from "./ticketFlows";
+import { canReassignStep, canReassignTicket, quotedList, reassignRights, type ReassignRights } from "./ticketReassign";
 import { formatWorkTime, workElapsed, workStateLabels, type TicketWorkAction } from "./ticketWork";
 import "./MarketingBoard.css";
 import "./TicketPage.css";
@@ -59,6 +60,11 @@ function TicketView({ ticket, data, user, tab, setTab, reload, back }: { ticket:
   const manager = data.canEdit && (!!data.canManageFlows || data.departments.some((item) => item.id === ticket.departmentId && item.managerUserId === user.id));
   const canAct = !!step && ticket.status !== "CLOSED" && (mine || manager);
   const canManage = data.canEdit || ticket.requesterId === user.id;
+  // Reatribuir: o líder do setor repassa as partes dele (ou do time) para alguém do setor.
+  const rights = useMemo(() => reassignRights(user.id, data.canEdit && data.canAssign, data.departments, data.availableUsers), [user.id, data.canEdit, data.canAssign, data.departments, data.availableUsers]);
+  const canReassign = canReassignTicket(ticket, user.id, rights);
+  const [reassigning, setReassigning] = useState<string[] | null>(null);
+  const openReassign = (stepIds?: string[]) => setReassigning(stepIds || steps.filter((item) => item.assigneeId === user.id && canReassignStep(item, user.id, rights)).map((item) => item.id));
   const avatar = (userId?: string) => data.availableUsers.find((item) => item.id === userId)?.avatarDataUrl;
   const requester = data.availableUsers.find((item) => item.id === ticket.requesterId);
   const client = data.clients.find((item) => item.id === ticket.clientId);
@@ -115,9 +121,14 @@ function TicketView({ ticket, data, user, tab, setTab, reload, back }: { ticket:
       </main>
 
       <aside className="tp-side">
+        {mine && step && canReassignStep(step, user.id, rights) && rights.teamIds.size > 1 && <div className="tp-handoff-tip">
+          <span><Users /></span>
+          <div><b>Sem tempo para esta etapa?</b><small>Repasse para alguém {rights.any ? "da equipe" : "do seu setor"}. O histórico e os arquivos vão junto.</small></div>
+          <button type="button" className="mc-link-button" onClick={() => openReassign([step.id])}><Forward />Repassar</button>
+        </div>}
         {mine && step?.work?.state === "PAUSED" && <div className="tp-paused" role="status"><span><Pause /></span><div><b>Projeto pausado</b><small>O cronômetro está parado e o chamado continua com você. Retome quando puder.</small></div></div>}
         <section className="tp-card">
-          <header className="tp-card-head"><span className="mc-card-icon dark"><List /></span><div><h2>Etapas do processo</h2><p>{ticket.flowName || "Chamado"} ({steps.length} {steps.length === 1 ? "etapa" : "etapas"})</p></div></header>
+          <header className="tp-card-head"><span className="mc-card-icon dark"><List /></span><div><h2>Etapas do processo</h2><p>{ticket.flowName || "Chamado"} ({steps.length} {steps.length === 1 ? "etapa" : "etapas"})</p></div>{canReassign && <button type="button" className="mc-link-button" onClick={() => openReassign()}><Users />Reatribuir</button>}</header>
           {steps.length ? <ol className="tp-steps">{steps.map((item, position) => {
             const current = item.status === "ACTIVE" && ticket.status !== "CLOSED";
             const tag = item.status === "DONE" ? "" : current ? (item.role !== "EXECUTOR" ? "Aguardando" : item.work?.state === "RUNNING" ? "Em produção" : item.work?.state === "PAUSED" ? "Pausada" : "Atual") : "Aguardando";
@@ -128,14 +139,21 @@ function TicketView({ ticket, data, user, tab, setTab, reload, back }: { ticket:
                 {item.taskId && <NavLink className="tp-step-task" to={`/tarefas?task=${encodeURIComponent(item.taskId)}`}>Creative Ops</NavLink>}
                 {item.status === "DONE" && <small>Concluído em {full(item.completedAt)}</small>}
                 {current && item.startedAt && <small>Início em {full(item.startedAt)}</small>}
-                <small>Responsável: {item.role === "CLIENT" ? `Cliente (registra ${item.assigneeName})` : item.assigneeName}</small>
+                <small className="tp-step-owner">Responsável: {item.role === "CLIENT" ? `Cliente (registra ${item.assigneeName})` : item.assigneeName}
+                  {canReassignStep(item, user.id, rights) && <button type="button" onClick={() => openReassign([item.id])} aria-label={`Repassar “${item.name}”`} title="Repassar esta etapa"><Forward /></button>}</small>
+                {item.status !== "DONE" && item.handoff && <small className="tp-step-handoff" title={item.handoff.note ? `“${item.handoff.note}”` : undefined}>Repassada por {item.handoff.byName} · antes com {item.handoff.fromName}</small>}
                 {current && item.work && item.work.state !== "NOT_STARTED" && <small className="tp-step-time">Tempo: {formatWorkTime(workElapsed(item.work))}</small>}
                 {current && item.adjustment && <small className="tp-step-adjust"><Undo2 />Ajuste solicitado</small>}
               </div>
               {tag && <em className={current ? "current" : ""}>{tag}</em>}
             </li>;
-          })}</ol> : <p className="mc-empty">Chamado sem etapas: {ticket.assigneeName || "o responsável"} resolve e conclui.</p>}
+          })}</ol> : <>
+            <p className="mc-empty">Chamado sem etapas: {ticket.assigneeName || "o responsável"} resolve e conclui.</p>
+            {ticket.handoff && <small className="tp-step-handoff" title={ticket.handoff.note ? `“${ticket.handoff.note}”` : undefined}>Repassado por {ticket.handoff.byName} · antes com {ticket.handoff.fromName}</small>}
+          </>}
         </section>
+        {reassigning && <ReassignDialog ticket={ticket} data={data} user={user} rights={rights} initial={reassigning} avatar={avatar} error={error} onClose={() => setReassigning(null)}
+          onSave={async (input) => { if (await run(() => ticketApi(`/tickets/${ticket.id}/reassign`, { method: "POST", json: input }))) setReassigning(null); }} />}
         <ExtraInfo ticket={ticket} client={client} canEdit={data.canEdit} run={run} />
         {mine && step?.role === "EXECUTOR" && <p className="tp-tip"><Info /><span><b>Dica:</b> finalize a etapa, anexe o que foi produzido e envie{next ? ` para ${next.role === "CLIENT" ? "aprovação do cliente" : next.assigneeName}` : ""}. O chamado segue automaticamente para a próxima etapa.</span></p>}
       </aside>
@@ -581,4 +599,102 @@ function ApprovalsTab({ ticket }: { ticket: Ticket }) {
     <h3 className="tp-subtitle">Pedidos de ajuste ({returns.length})</h3>
     {returns.length ? <ul className="tp-comments">{returns.map((item) => <li key={item.id} className="adjust"><span className="tp-history-dot"><AlertTriangle /></span><div><header><b>{item.authorName}</b><time>{full(item.createdAt)}</time></header><p>{item.note || item.message.match(/ — “([\s\S]*)”$/)?.[1] || item.message}</p></div></li>)}</ul> : <p className="mc-empty">Nenhum ajuste solicitado até agora.</p>}
   </section>;
+}
+
+// Janela de reatribuição em três passos: o que repassar, para quem e um recado opcional.
+// A lista de pessoas mostra quantas partes cada uma já tem em aberto, para escolher quem está livre.
+function ReassignDialog({ ticket, data, user, rights, initial, avatar, error, onClose, onSave }: {
+  ticket: Ticket; data: TicketsData; user: SessionUser; rights: ReassignRights; initial: string[]; avatar: (id?: string) => string | undefined; error: string;
+  onClose: () => void; onSave: (input: { stepIds: string[]; toUserId: string; note: string }) => Promise<void>;
+}) {
+  const steps = (ticket.steps || []).filter((item) => canReassignStep(item, user.id, rights));
+  const [chosen, setChosen] = useState<string[]>(() => initial.length ? initial : steps.map((item) => item.id));
+  const [to, setTo] = useState(""), [note, setNote] = useState(""), [query, setQuery] = useState(""), [saving, setSaving] = useState(false);
+  useEffect(() => {
+    const close = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    document.addEventListener("keydown", close);
+    return () => document.removeEventListener("keydown", close);
+  }, [onClose]);
+  // Partes em aberto de cada pessoa, em todos os chamados que eu vejo.
+  const load = useMemo(() => {
+    const count = new Map<string, number>();
+    for (const item of data.tickets) {
+      if (!isOpenTicket(item)) continue;
+      const owners = item.steps?.length ? item.steps.filter((part) => part.status !== "DONE").map((part) => part.assigneeId) : [item.assigneeId];
+      owners.forEach((id) => count.set(id, (count.get(id) || 0) + 1));
+    }
+    return count;
+  }, [data.tickets]);
+  const people = data.availableUsers
+    .filter((person) => rights.teamIds.has(person.id))
+    .filter((person) => !query.trim() || `${person.name} ${person.departmentName || ""}`.toLowerCase().includes(query.trim().toLowerCase()))
+    .sort((a, b) => Number(b.departmentId === ticket.departmentId) - Number(a.departmentId === ticket.departmentId) || (load.get(a.id) || 0) - (load.get(b.id) || 0) || a.name.localeCompare(b.name, "pt-BR"));
+  const mineIds = steps.filter((item) => item.assigneeId === user.id).map((item) => item.id);
+  const target = data.availableUsers.find((person) => person.id === to);
+  const selected = steps.filter((item) => chosen.includes(item.id));
+  const already = !!target && (steps.length ? selected.every((item) => item.assigneeId === target.id) : ticket.assigneeId === target.id);
+  const ready = !!target && !already && (!steps.length || selected.length > 0);
+  const toggle = (id: string) => setChosen((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id]);
+  const save = async () => { setSaving(true); await onSave({ stepIds: chosen, toUserId: to, note }); setSaving(false); };
+  const firstName = (name: string) => name.split(" ")[0];
+
+  return <div className="tp-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <section className="tp-modal" role="dialog" aria-modal="true" aria-labelledby="tp-reassign-title">
+      <header className="tp-modal-head">
+        <span className="tp-modal-icon"><Users /></span>
+        <div><h2 id="tp-reassign-title">Reatribuir chamado</h2><p>{ticket.code} · {ticket.title}</p></div>
+        <button type="button" className="tp-modal-close" onClick={onClose} aria-label="Fechar"><X /></button>
+      </header>
+      <div className="tp-modal-body">
+        <section className="tp-reassign-section">
+          <h3><em>1</em>O que você quer repassar?</h3>
+          {steps.length ? <>
+            {mineIds.length > 0 && mineIds.length < steps.length && <div className="tp-reassign-quick">
+              <button type="button" className={chosen.length === mineIds.length && mineIds.every((id) => chosen.includes(id)) ? "active" : ""} onClick={() => setChosen(mineIds)}>Só as minhas ({mineIds.length})</button>
+              <button type="button" className={chosen.length === steps.length ? "active" : ""} onClick={() => setChosen(steps.map((item) => item.id))}>Todas ({steps.length})</button>
+            </div>}
+            <ul className="tp-reassign-steps">{steps.map((item) => {
+              const position = (ticket.steps || []).indexOf(item) + 1, on = chosen.includes(item.id);
+              return <li key={item.id}><label className={on ? "on" : ""}>
+                <input type="checkbox" checked={on} onChange={() => toggle(item.id)} />
+                <span className="tp-step-number">{two(position)}</span>
+                <span className="tp-reassign-step"><b>{item.name}</b><small>{stepRoleLabels[item.role]} · prazo {day(item.dueAt)}</small></span>
+                <span className="tp-reassign-owner"><PersonAvatar size="sm" name={item.assigneeName} src={avatar(item.assigneeId)} />{item.assigneeId === user.id ? "Você" : firstName(item.assigneeName)}</span>
+                <em className={item.status === "ACTIVE" ? "current" : ""}>{item.status === "ACTIVE" ? "Agora" : "Depois"}</em>
+              </label></li>;
+            })}</ul>
+          </> : <p className="tp-reassign-whole"><PersonAvatar size="sm" name={ticket.assigneeName} src={avatar(ticket.assigneeId)} /><span>O chamado inteiro, que hoje está com <b>{ticket.assigneeId === user.id ? "você" : ticket.assigneeName}</b>.</span></p>}
+        </section>
+
+        <section className="tp-reassign-section">
+          <h3><em>2</em>Para quem?<small>{rights.any ? "Qualquer pessoa da equipe" : "Pessoas do seu setor"}</small></h3>
+          {rights.teamIds.size > 6 && <label className="tp-reassign-search"><Search /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar pessoa ou setor" aria-label="Buscar pessoa" /></label>}
+          <div className="tp-reassign-people" role="radiogroup" aria-label="Para quem repassar">
+            {people.map((person) => {
+              const open = load.get(person.id) || 0;
+              return <button type="button" role="radio" aria-checked={to === person.id} key={person.id} className={to === person.id ? "on" : ""} onClick={() => setTo(person.id)}>
+                <PersonAvatar name={person.name} src={person.avatarDataUrl} />
+                <span><b>{person.name}{person.id === user.id && " (você)"}</b><small>{person.departmentName || "—"}</small></span>
+                <em className={open === 0 ? "free" : open >= 5 ? "busy" : ""}>{open === 0 ? "Livre" : `${open} em aberto`}</em>
+              </button>;
+            })}
+            {!people.length && <p className="mc-empty">Ninguém encontrado.</p>}
+          </div>
+        </section>
+
+        <section className="tp-reassign-section">
+          <h3><em>3</em>Recado<small>Opcional</small></h3>
+          <textarea rows={2} maxLength={500} value={note} onChange={(event) => setNote(event.target.value)} placeholder={target ? `Ex.: ${firstName(target.name)}, estou com a agenda cheia hoje. Consegue assumir?` : "Ex.: Estou com a agenda cheia hoje. Consegue assumir?"} aria-label="Recado para quem vai assumir" />
+        </section>
+        {error && <p className="mc-alert" role="alert">{error}</p>}
+      </div>
+      <footer className="tp-modal-foot">
+        <p className="tp-reassign-summary" aria-live="polite">{!target ? "Escolha quem vai assumir."
+          : already ? `Isso já está com ${firstName(target.name)}.`
+          : steps.length && !selected.length ? "Marque ao menos uma parte do chamado."
+          : <><Forward /><span>{steps.length ? quotedList(selected.map((item) => item.name)) : "O chamado"} {steps.length && selected.length > 1 ? "vão" : "vai"} para <b>{target.name}</b>. A pessoa recebe um aviso e o histórico registra a troca.</span></>}</p>
+        <div><button type="button" className="tp-draft" onClick={onClose}>Cancelar</button><button type="button" className="tp-send-button" disabled={!ready || saving} onClick={() => void save()}><Check />{saving ? "Repassando…" : "Reatribuir"}</button></div>
+      </footer>
+    </section>
+  </div>;
 }

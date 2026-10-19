@@ -14,7 +14,7 @@ import { isMarketingUser } from "./marketingTickets";
 import "./Meetings.css";
 import "./Tickets.css";
 
-export type TicketUser = { id: string; name: string; email: string; avatarDataUrl?: string; departmentName?: string };
+export type TicketUser = { id: string; name: string; email: string; avatarDataUrl?: string; departmentId?: string; departmentName?: string };
 export type Department = { id: string; name: string; description: string; active: boolean; managerUserId?: string; managerName?: string };
 export type TicketComment = { id: string; authorId: string; authorName: string; message: string; mentions: string[]; createdAt: string; kind?: "SYSTEM"; action?: "RETURN"; note?: string; stepId?: string; delivery?: boolean; editedAt?: string };
 type Comment = TicketComment;
@@ -30,6 +30,8 @@ export type Ticket = {
   origin?: { type: TicketOriginType; meetingId?: string; label: string };
   flowId?: string; flowName?: string; steps?: TicketStep[]; notes?: string; attachments?: TicketAttachment[];
   checklist?: TicketChecklistItem[]; projectValue?: number;
+  // Chamado sem etapas repassado para outra pessoa (com etapas, fica em cada etapa).
+  handoff?: TicketStep["handoff"];
 };
 export type TicketsData = {
   tickets: Ticket[]; departments: Department[]; availableUsers: TicketUser[]; flows: TicketFlow[];

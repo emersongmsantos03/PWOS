@@ -30,6 +30,8 @@ export type TicketStep = {
   work?: TicketWork;
   // Demanda do Creative Ops que acompanha esta etapa (ver ticketTasks.ts).
   taskId?: string;
+  // Última vez que a etapa foi repassada para outra pessoa (ver ticketReassign.ts).
+  handoff?: { fromName: string; byId: string; byName: string; note?: string; at: string };
 };
 export type TicketFlowStatus = "OPEN" | "IN_PROGRESS" | "WAITING" | "RESOLVED";
 export type TicketFlowAction = "COMPLETE" | "RETURN";

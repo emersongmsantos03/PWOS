@@ -434,6 +434,18 @@ function AnalyzeButton({ campaign, onClick, icon = false }: { campaign: Campaign
 function PerformanceValue({ value, tone, detail }: { value: string; tone: PerformanceTone; detail?: string }) {
   return <span className={`performance-value ${tone}`} title={detail || toneLabel[tone]}><i />{value}</span>;
 }
+// Mensagem final na aba aberta para o PDF automático, quando ele não pode ser gerado.
+const reportPreviewFailed = (target: Window, detail: string) => {
+  if (target.closed) return;
+  const main = target.document.createElement("main"), title = target.document.createElement("b"), text = target.document.createElement("p");
+  main.style.cssText = "font:16px system-ui;padding:40px;color:#17324d";
+  text.style.color = "#6b7f92";
+  title.textContent = "Não foi possível gerar o relatório.";
+  text.textContent = detail;
+  main.append(title, text);
+  target.document.title = "Relatório não gerado";
+  target.document.body.replaceChildren(main);
+};
 const accountLabel = (account: Account) => {
   const preferred = account.pageName || account.name || "";
   return /^\d+$/.test(preferred.trim())
@@ -1417,6 +1429,16 @@ export function MediaDashboard({ section = "CLIENTS" }: { section?: "TODAY" | "C
   const [reportIncludeThirtyDays, setReportIncludeThirtyDays] = useState(false);
   const [reportWindows, setReportWindows] = useState<{ primary: { since: string; until: string }; thirty?: { since: string; until: string } } | null>(null);
   const [automaticReportPreview, setAutomaticReportPreview] = useState<{ id: number; clientId: string; target: Window } | null>(null);
+  // Rede de segurança da aba "Preparando o relatório…": se nada responder em 90 s, ela mostra o
+  // aviso em vez de ficar carregando para sempre.
+  useEffect(() => {
+    if (!automaticReportPreview) return;
+    const timeout = window.setTimeout(() => {
+      reportPreviewFailed(automaticReportPreview.target, "O relatório demorou mais que o esperado. Feche esta aba e tente novamente.");
+      setAutomaticReportPreview(null);
+    }, 90_000);
+    return () => window.clearTimeout(timeout);
+  }, [automaticReportPreview?.id]);
   // Campanhas, anúncios e criativos podem ocupar vários megabytes. Além de
   // estourar a pequena cota do localStorage, esse cache fazia um usuário ver
   // por instantes o conteúdo deixado pelo usuário anterior no navegador.
@@ -2983,18 +3005,19 @@ function CampaignReport({
         (item.score >= 0 && item.score < 70) || item.status === "WITH_ISSUES",
     );
   const activeClientReportRows = enrichedCampaigns.filter((item) => item.clientId === clientId && item.status === "ACTIVE");
-  const exportClientPdf = async (mode: "preview" | "download" = "download", previewTarget?: Window, audience: "CLIENT" | "OPERATION" = "CLIENT") => {
+  // Devolve false quando não chega a abrir/baixar o PDF (a aba automática mostra o motivo).
+  const exportClientPdf = async (mode: "preview" | "download" = "download", previewTarget?: Window, audience: "CLIENT" | "OPERATION" = "CLIENT"): Promise<boolean> => {
     const clientName = clientOptions.find(([id]) => id === clientId)?.[1];
-    if (!clientName || !activeClientReportRows.length) return;
+    if (!clientName || !activeClientReportRows.length) return false;
     let aiInsight: { summary: string; priorities: string[]; risks: string[]; experiments: string[]; generatedAt: string; model: string } | null = null;
     if (audience === "OPERATION") {
       setReportAiNotice("");
       try {
         const insightResponse = await fetch("/api/media/ai-insights", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ clientName, since, until, campaigns: activeClientReportRows.map((item) => ({ name: item.name, platform: item.platform, status: item.status, objective: item.objective, spend: item.spend, impressions: item.impressions, clicks: item.clicks, leads: item.leads, cpl: item.cpl, score: item.score })) }) }), insightPayload = await insightResponse.json();
-        if (!insightResponse.ok) { setReportAiNotice(insightPayload.message || "Não foi possível gerar os insights da operação."); return; }
+        if (!insightResponse.ok) { setReportAiNotice(insightPayload.message || "Não foi possível gerar os insights da operação."); return false; }
         aiInsight = insightPayload.insight;
         setReportAiNotice(insightPayload.cached ? "Insights reutilizados do cache — nenhum token adicional consumido." : "Insights gerados e armazenados para reutilização sem novo consumo.");
-      } catch { setReportAiNotice("Falha de conexão com o serviço de IA. O PDF do cliente continua disponível."); return; }
+      } catch { setReportAiNotice("Falha de conexão com o serviço de IA. O PDF do cliente continua disponível."); return false; }
     }
     const { jsPDF } = await import("jspdf"), doc = new jsPDF({ unit: "mm", format: "a4" }),
       portfolioNames = [...new Set(activeClientReportRows.map((item) => item.portfolioName))],
@@ -3066,15 +3089,17 @@ function CampaignReport({
     for (let page = 1; page <= pages; page++) { doc.setPage(page); doc.setFontSize(6); doc.setTextColor(130, 143, 157); doc.text(`Gerado em ${new Date().toLocaleString("pt-BR")} · Página ${page} de ${pages}`, 105, 290, { align: "center" }); }
     const reportDate = shortDate(until).replaceAll("/", "-"),
       filename = `${audience === "OPERATION" ? "Relatório Ops" : "Relatório"} (${safePdfNamePart(clientName)}) - ${reportDate}`;
-    try {
-      if (audience === "CLIENT") await fetch("/api/client-report-artifacts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ clientId, fileName: `${filename}.pdf`, dataUrl: doc.output("datauristring"), since, until, mode }) });
-    } catch { /* O PDF continua disponível mesmo se o registro da versão falhar. */ }
+    // Registro da versão em segundo plano: o PDF abre na hora, sem esperar o envio ao servidor.
+    if (audience === "CLIENT")
+      void fetch("/api/client-report-artifacts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ clientId, fileName: `${filename}.pdf`, dataUrl: doc.output("datauristring"), since, until, mode }) })
+        .catch(() => { /* O PDF continua disponível mesmo se o registro da versão falhar. */ });
     if (mode === "preview") {
       const pdfUrl = String(doc.output("bloburl"));
       if (previewTarget && !previewTarget.closed) previewTarget.location.href = pdfUrl;
       else window.open(pdfUrl, "_blank", "noopener,noreferrer");
     }
     else doc.save(`${filename}.pdf`);
+    return true;
   };
   useEffect(() => {
     if (!automaticPreview || !allPlatforms) return;
@@ -3084,11 +3109,15 @@ function CampaignReport({
       return;
     }
     if (clientId !== "ALL" && activeClientReportRows.length) {
-      void exportClientPdf("preview", automaticPreview.target).finally(() => onAutomaticPreviewDone?.());
+      const target = automaticPreview.target;
+      void exportClientPdf("preview", target)
+        .then((opened) => { if (!opened) reportPreviewFailed(target, "O cliente do relatório não foi encontrado na lista de clientes. Atualize a página e tente novamente."); })
+        .catch((cause) => reportPreviewFailed(target, `Erro ao montar o PDF: ${cause instanceof Error ? cause.message : String(cause)}`))
+        .finally(() => onAutomaticPreviewDone?.());
       return;
     }
     const timeout = window.setTimeout(() => {
-      if (!automaticPreview.target.closed) automaticPreview.target.document.body.innerHTML = '<main style="font:16px system-ui;padding:40px;color:#17324d"><b>Não foi possível gerar o relatório.</b><p style="color:#6b7f92">As campanhas ativas não ficaram disponíveis. Sincronize os dados e tente novamente.</p></main>';
+      reportPreviewFailed(automaticPreview.target, "As campanhas ativas não ficaram disponíveis. Sincronize os dados e tente novamente.");
       onAutomaticPreviewDone?.();
     }, 15000);
     return () => window.clearTimeout(timeout);
