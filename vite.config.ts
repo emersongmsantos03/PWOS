@@ -10281,11 +10281,12 @@ function localApi(
           const params = new URL(url, "http://localhost").searchParams;
           const prefixes = (params.get("accounts") || "")
             .split(",").map((value) => value.trim()).filter((value) => /^(META_ADS|GOOGLE_ADS):[^:]+$/.test(value)).slice(0, 200).map((value) => `${value}:`);
-          // A revisão pertence ao cartão (cliente/filial) a que as contas das campanhas dela estão
-          // vinculadas hoje, não ao cartão onde foi gravada. Assim, uma revisão feita enquanto a conta
-          // estava vinculada ao cliente errado aparece no cliente certo depois de corrigir o vínculo,
-          // inclusive as antigas. Conta sem vínculo mantém a revisão onde ela foi gravada.
-          const requestedKey = params.get("key") || "", reviewOwner = new Map<string, string>();
+          // Cada revisão do portfólio aparece em um único cartão: o cartão onde foi gravada. Só muda
+          // de cartão quando nenhuma das contas dela está mais vinculada a ele e elas estão
+          // vinculadas a outro cliente/filial (ex.: revisão gravada enquanto a conta estava no
+          // cliente errado). As cópias gravadas no histórico de cada campanha nunca aparecem
+          // sozinhas em outro cartão, mesmo que a conta seja compartilhada.
+          const requestedKey = params.get("key") || "", savedReviewIds = new Set<string>();
           const currentCardOf = (platform: string, accountId: string) => {
             const assignment = mediaAssignments.get(`${platform}:${accountId}`);
             return assignment?.clientId ? `client:${assignment.clientId}${assignment.branchId ? `:${assignment.branchId}` : ""}` : undefined;
@@ -10293,19 +10294,16 @@ function localApi(
           const ownerOf = (storedKey: string, review: PortfolioReview) => {
             const votes = new Map<string, number>();
             review.campaigns.forEach((item) => { const card = currentCardOf(item.platform, item.accountId); if (card) votes.set(card, (votes.get(card) || 0) + 1); });
-            return [...votes].sort((a, b) => b[1] - a[1])[0]?.[0] || storedKey;
+            if (!votes.size || votes.has(storedKey)) return storedKey;
+            return [...votes].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0][0];
           };
           const ownedReviews: PortfolioReview[] = [];
           Object.entries(portfolioReviews).forEach(([key, list]) => list.forEach((item) => {
-            const owner = ownerOf(key, item);
-            reviewOwner.set(item.id, owner);
-            if (owner === requestedKey) ownedReviews.push(item);
+            savedReviewIds.add(item.id);
+            if (ownerOf(key, item) === requestedKey) ownedReviews.push(item);
           }));
           ownedReviews.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-          const belongsHere = (portfolioReviewId?: string) => {
-            const owner = portfolioReviewId ? reviewOwner.get(portfolioReviewId) : undefined;
-            return !owner || owner === requestedKey || !owner.startsWith("client:");
-          };
+          const belongsHere = (portfolioReviewId?: string) => !portfolioReviewId || !savedReviewIds.has(portfolioReviewId);
           const campaigns = Object.entries(campaignVerifications).flatMap(([key, value]) => {
             const prefix = prefixes.find((candidate) => key.startsWith(candidate)),
               reviews = (value.history || []).filter((entry) => entry.action === "REVIEW" && belongsHere(entry.portfolioReviewId));
