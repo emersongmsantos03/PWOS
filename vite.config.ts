@@ -1793,6 +1793,22 @@ function localApi(
         item.since === since && item.until === until && Array.isArray(item.accounts) && Array.isArray(item.campaigns));
     return candidates.sort((a, b) => String(b.syncedAt).localeCompare(String(a.syncedAt)))[0];
   };
+  // Nome e portfólio de negócios de cada conta, lidos dos caches das plataformas. Usado só para
+  // achar o cartão de revisões antigas cujo cliente foi excluído; relido quando o cache muda.
+  type MediaAccountInfo = { name: string; pageName: string; businessPortfolioId: string };
+  let mediaAccountIndexCache: { stamp: number; accounts: Map<string, MediaAccountInfo> } | undefined;
+  const mediaAccountIndex = () => {
+    const stamp = (fileMtime(localMetaDashboardCachePath) || 0) + (fileMtime(localGoogleDashboardCachePath) || 0);
+    if (mediaAccountIndexCache?.stamp === stamp) return mediaAccountIndexCache.accounts;
+    const accounts = new Map<string, MediaAccountInfo>();
+    const add = (platform: string, list: unknown) => (Array.isArray(list) ? list : []).forEach((item: any) => {
+      if (item?.id) accounts.set(`${platform}:${item.id}`, { name: String(item.name || ""), pageName: String(item.pageName || ""), businessPortfolioId: String(item.businessPortfolioId || "") });
+    });
+    try { add("META_ADS", JSON.parse(readFileSync(localMetaDashboardCachePath, "utf8"))?.payload?.accounts); } catch { /* sem cache da Meta */ }
+    try { add("GOOGLE_ADS", JSON.parse(readFileSync(localGoogleDashboardCachePath, "utf8"))?.accounts); } catch { /* sem cache do Google */ }
+    mediaAccountIndexCache = { stamp, accounts };
+    return accounts;
+  };
   // Com `force`, vale apenas o intervalo mínimo entre atualizações manuais.
   // Sem `force`, vale a regra da coleta agendada (mediaFreshness.ts): o dado atual
   // é o coletado depois do último horário (08:00, 13:00 ou 16:00), e períodos
@@ -7628,6 +7644,14 @@ function localApi(
             });
           clients.delete(client.id);
           persistClients();
+          // As contas de mídia do cliente excluído ficam sem cliente (o responsável continua).
+          let unlinkedAccounts = false;
+          mediaAssignments.forEach((item) => {
+            if (item.clientId !== client.id) return;
+            Object.assign(item, { clientId: "", branchId: undefined, updatedAt: new Date().toISOString(), updatedBy: currentUser.id });
+            unlinkedAccounts = true;
+          });
+          if (unlinkedAccounts) persistMediaAssignments();
           return json(response, 200, { ok: true });
         }
         const clientCompanyLink = url.match(/^\/clients\/([^/]+)\/company-link$/);
@@ -10107,7 +10131,10 @@ function localApi(
               message: "Você não possui acesso aos vínculos de mídia.",
             });
           return json(response, 200, {
-            assignments: [...mediaAssignments.values()],
+            // Vínculo com cliente que foi excluído vale como "sem cliente": senão, contas de lojas
+            // diferentes ligadas ao mesmo cliente apagado viravam um cartão só (e dividiam revisões).
+            assignments: [...mediaAssignments.values()].map((item) =>
+              !item.clientId || clients.has(item.clientId) ? item : { ...item, clientId: "", branchId: undefined }),
             canManage: hasPermission(currentUser, "media.edit"),
             // Sincronização manual da Meta e do Google: somente o usuário master.
             canSync: currentUser.profile === "MASTER",
@@ -10289,9 +10316,31 @@ function localApi(
           const requestedKey = params.get("key") || "", savedReviewIds = new Set<string>();
           const currentCardOf = (platform: string, accountId: string) => {
             const assignment = mediaAssignments.get(`${platform}:${accountId}`);
-            return assignment?.clientId ? `client:${assignment.clientId}${assignment.branchId ? `:${assignment.branchId}` : ""}` : undefined;
+            return assignment?.clientId && clients.has(assignment.clientId) ? `client:${assignment.clientId}${assignment.branchId ? `:${assignment.branchId}` : ""}` : undefined;
+          };
+          // Mesmo cartão que a Gestão de mídia monta para uma conta sem cliente.
+          const unlinkedCardOf = (platform: string, accountId: string) => {
+            const portfolio = mediaAccountIndex().get(`${platform}:${accountId}`)?.businessPortfolioId;
+            return portfolio ? `unlinked:${platform}:portfolio:${portfolio}` : `unlinked:${platform}:account:${accountId}`;
+          };
+          const plain = (value?: string) => (value || "").normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toLowerCase();
+          // Revisão gravada no cartão de um cliente que foi excluído (que juntava contas de lojas
+          // diferentes): vai para a conta com o nome do cartão onde foi escrita ou, sem ela, para a
+          // conta com mais campanhas revisadas.
+          const homeCardOf = (review: PortfolioReview) => {
+            const index = mediaAccountIndex(), label = plain(review.portfolioName), counts = new Map<string, { platform: string; accountId: string; total: number }>();
+            review.campaigns.forEach((item) => {
+              const id = `${item.platform}:${item.accountId}`, current = counts.get(id);
+              counts.set(id, { platform: item.platform, accountId: item.accountId, total: (current?.total || 0) + 1 });
+            });
+            const accounts = [...counts.entries()];
+            const named = label ? accounts.find(([id]) => { const info = index.get(id); return !!info && (plain(info.name) === label || plain(info.pageName) === label); }) : undefined;
+            const home = (named || accounts.sort((a, b) => b[1].total - a[1].total)[0])?.[1];
+            return home ? currentCardOf(home.platform, home.accountId) || unlinkedCardOf(home.platform, home.accountId) : undefined;
           };
           const ownerOf = (storedKey: string, review: PortfolioReview) => {
+            const storedClient = storedKey.startsWith("client:") ? storedKey.split(":")[1] : "";
+            if (storedClient && !clients.has(storedClient)) return homeCardOf(review) || storedKey;
             const votes = new Map<string, number>();
             review.campaigns.forEach((item) => { const card = currentCardOf(item.platform, item.accountId); if (card) votes.set(card, (votes.get(card) || 0) + 1); });
             if (!votes.size || votes.has(storedKey)) return storedKey;
