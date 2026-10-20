@@ -10281,11 +10281,27 @@ function localApi(
           const params = new URL(url, "http://localhost").searchParams;
           const prefixes = (params.get("accounts") || "")
             .split(",").map((value) => value.trim()).filter((value) => /^(META_ADS|GOOGLE_ADS):[^:]+$/.test(value)).slice(0, 200).map((value) => `${value}:`);
-          // Revisão feita no cartão de outro cliente fica com ele: quando uma conta muda de
-          // cliente, as anotações antigas (gravadas também em cada campanha) não a acompanham.
-          // As feitas antes da conta ser vinculada (cartão "unlinked:") continuam aparecendo.
+          // A revisão pertence ao cartão (cliente/filial) a que as contas das campanhas dela estão
+          // vinculadas hoje, não ao cartão onde foi gravada. Assim, uma revisão feita enquanto a conta
+          // estava vinculada ao cliente errado aparece no cliente certo depois de corrigir o vínculo,
+          // inclusive as antigas. Conta sem vínculo mantém a revisão onde ela foi gravada.
           const requestedKey = params.get("key") || "", reviewOwner = new Map<string, string>();
-          Object.entries(portfolioReviews).forEach(([key, list]) => list.forEach((item) => reviewOwner.set(item.id, key)));
+          const currentCardOf = (platform: string, accountId: string) => {
+            const assignment = mediaAssignments.get(`${platform}:${accountId}`);
+            return assignment?.clientId ? `client:${assignment.clientId}${assignment.branchId ? `:${assignment.branchId}` : ""}` : undefined;
+          };
+          const ownerOf = (storedKey: string, review: PortfolioReview) => {
+            const votes = new Map<string, number>();
+            review.campaigns.forEach((item) => { const card = currentCardOf(item.platform, item.accountId); if (card) votes.set(card, (votes.get(card) || 0) + 1); });
+            return [...votes].sort((a, b) => b[1] - a[1])[0]?.[0] || storedKey;
+          };
+          const ownedReviews: PortfolioReview[] = [];
+          Object.entries(portfolioReviews).forEach(([key, list]) => list.forEach((item) => {
+            const owner = ownerOf(key, item);
+            reviewOwner.set(item.id, owner);
+            if (owner === requestedKey) ownedReviews.push(item);
+          }));
+          ownedReviews.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
           const belongsHere = (portfolioReviewId?: string) => {
             const owner = portfolioReviewId ? reviewOwner.get(portfolioReviewId) : undefined;
             return !owner || owner === requestedKey || !owner.startsWith("client:");
@@ -10297,7 +10313,7 @@ function localApi(
             const [platform, accountId] = prefix.split(":"), campaignId = key.slice(prefix.length);
             return [{ platform, accountId, campaignId, name: [...reviews].reverse().find((entry) => entry.snapshot?.name)?.snapshot?.name || null, reviews }];
           });
-          return json(response, 200, { reviews: portfolioReviews[requestedKey] || [], campaigns, canModerate: hasPermission(currentUser, "media.edit") });
+          return json(response, 200, { reviews: ownedReviews, campaigns, canModerate: hasPermission(currentUser, "media.edit") });
         }
         // Editar ou apagar uma revisão do portfólio (quem escreveu ou quem gerencia a mídia). A cópia
         // replicada no histórico de cada campanha acompanha; ao apagar, a campanha volta a ficar
