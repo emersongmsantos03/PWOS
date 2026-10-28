@@ -18,6 +18,7 @@ import {
   type GoogleDailyStore,
   type GoogleDayRow,
 } from "./googleDailyStore";
+import { collectGoogleCampaignAnalysis, mergeCampaignAnalysis, type CampaignAnalysis } from "./googleCampaignAnalysis";
 import { googleOAuthReturnPage } from "./oauthCallback";
 import { canReassignStep, canReassignTicket, quotedList, reassignRights, reassignSteps } from "./apps/web/src/ticketReassign";
 import { applyFlowAction, canReturnStep, flowStatus, mergeFlows, reopenFlow, sanitizeFlow, scheduleSteps, ticketFlows, type TicketFlow, type TicketStep } from "./apps/web/src/ticketFlows";
@@ -2454,13 +2455,13 @@ function localApi(
         await forEachConcurrent(accounts, 4, async (account) => {
           try {
             const rows = await search(account.id, account.loginCustomerId,
-              `SELECT segments.date, campaign.id, metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions, metrics.search_top_impression_share, metrics.search_absolute_top_impression_share FROM campaign WHERE segments.date BETWEEN '${range.since}' AND '${range.until}'`);
+              `SELECT segments.date, campaign.id, metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions, metrics.search_top_impression_share, metrics.search_absolute_top_impression_share, metrics.search_impression_share FROM campaign WHERE segments.date BETWEEN '${range.since}' AND '${range.until}'`);
             const share = (value: unknown) => (value == null ? null : Number.isFinite(Number(value)) ? Number(value) : null);
             applyDailyRows(googleDaily, account.id, range.since, range.until, rows.flatMap((row) => {
               const metrics = row.metrics || {}, day = String(row.segments?.date || ""), campaignId = String(row.campaign?.id || "");
               const data: GoogleDayRow = [
                 Number(metrics.costMicros || 0), Number(metrics.impressions || 0), Number(metrics.clicks || 0), Number(metrics.conversions || 0),
-                share(metrics.searchTopImpressionShare), share(metrics.searchAbsoluteTopImpressionShare),
+                share(metrics.searchTopImpressionShare), share(metrics.searchAbsoluteTopImpressionShare), share(metrics.searchImpressionShare),
               ];
               return day && campaignId && (data[0] || data[1] || data[2] || data[3]) ? [{ day, campaignId, row: data }] : [];
             }));
@@ -2521,7 +2522,7 @@ function localApi(
             if (cause instanceof GoogleQuotaError) throw cause;
             console.warn(`[Google Ads] Saldo de orçamento indisponível para ${account.id}:`, cause instanceof Error ? cause.message : cause);
           }
-          googleDaily.accounts[account.id] = { id: account.id, name: account.name, currency: account.currency, loginCustomerId: account.loginCustomerId, remainingBudget: accountRemaining };
+          googleDaily.accounts[account.id] = { ...googleDaily.accounts[account.id], id: account.id, name: account.name, currency: account.currency, loginCustomerId: account.loginCustomerId, remainingBudget: accountRemaining };
           rows.forEach((row) => {
             const campaign = row.campaign || {}, budget = row.campaignBudget || {}, id = String(campaign.id || "");
             if (!id) return;
@@ -2555,6 +2556,9 @@ function localApi(
             if (data[0] > 0 || data[1] > 0) withDelivery.add(key.slice(0, key.indexOf(":")));
         await forEachConcurrent(accounts.filter((account) => withDelivery.has(account.id)), 3, async (account) => {
           const details = await collectGoogleAccountDetails(search, account, detailsSince, today);
+          // As quebras da Análise da Campanha cobrem 30 dias: uma coleta por dia basta e poupa a cota.
+          const analysisDue = googleDaily.accounts[account.id]?.analysisCollectedOn !== today;
+          const analysis = analysisDue ? await collectGoogleCampaignAnalysis(search, account, detailsSince, today, today) : null;
           for (const [key, meta] of Object.entries(googleDaily.campaigns)) {
             if (meta.accountId !== account.id) continue;
             googleDaily.campaigns[key] = {
@@ -2564,8 +2568,12 @@ function localApi(
               geography: details.geographyByCampaign.get(meta.id) || meta.geography || [],
               searchTerms: details.searchTermsByCampaign.get(meta.id) || meta.searchTerms || [],
               ads: details.adsByCampaign.get(meta.id) || meta.ads || [],
+              ...(analysis ? { ...mergeCampaignAnalysis(analysis.get(meta.id), meta), analysisPeriod: { since: detailsSince, until: today } } : {}),
             };
           }
+          // Se a cota esgotou no meio, as consultas que faltaram são repetidas na próxima coleta.
+          if (analysis && googleQuotaBlockedSeconds() === 0 && googleDaily.accounts[account.id])
+            googleDaily.accounts[account.id].analysisCollectedOn = today;
         });
       } else {
         // Na coleta manual, as páginas de destino já conhecidas são verificadas de novo: é só um
@@ -10755,7 +10763,7 @@ function localApi(
               campaigns: Record<string, any>[] = [],
               accountRemainingBudgets = new Map<string, number | null>();
             await forEachConcurrent(accounts, 4, async (account) => {
-              const baseGoogleFields = `customer.id, customer.descriptive_name, customer.currency_code, campaign.id, campaign.name, campaign.status, campaign.advertising_channel_type, campaign.optimization_score, campaign_budget.amount_micros, campaign_budget.total_amount_micros, campaign_budget.period, metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions, metrics.average_cpc, metrics.search_top_impression_share, metrics.search_absolute_top_impression_share`;
+              const baseGoogleFields = `customer.id, customer.descriptive_name, customer.currency_code, campaign.id, campaign.name, campaign.status, campaign.advertising_channel_type, campaign.optimization_score, campaign_budget.amount_micros, campaign_budget.total_amount_micros, campaign_budget.period, metrics.cost_micros, metrics.impressions, metrics.clicks, metrics.conversions, metrics.average_cpc, metrics.search_top_impression_share, metrics.search_absolute_top_impression_share, metrics.search_impression_share`;
               let rows: Record<string, any>[];
               try {
                 rows = await search(
@@ -10853,6 +10861,10 @@ function localApi(
               const { landingPages, adsByCampaign, landingPageStatuses, searchTermsByCampaign, geographyByCampaign } = loadGoogleDetails
                 ? await collectGoogleAccountDetails(search, account, since, until)
                 : emptyGoogleAccountDetails();
+              const analysisByCampaign = loadGoogleDetails
+                ? await collectGoogleCampaignAnalysis(search, account, since, until, saoPauloDay(new Date()))
+                : new Map<string, Partial<CampaignAnalysis>>();
+              const share = (value: unknown) => (value == null || !Number.isFinite(Number(value)) ? null : Number(value));
               rows.forEach((row) => {
                 const campaign = row.campaign || {},
                   metrics = row.metrics || {},
@@ -10906,6 +10918,11 @@ function localApi(
                   geography: geographyByCampaign.get(String(campaign.id || "")) || previousCampaign?.geography || [],
                   searchTerms: searchTermsByCampaign.get(String(campaign.id || "")) || previousCampaign?.searchTerms || [],
                   ads: adsByCampaign.get(String(campaign.id || "")) || previousCampaign?.ads || [],
+                  searchImpressionShare: share(metrics.searchImpressionShare),
+                  searchTopImpressionShare: share(metrics.searchTopImpressionShare),
+                  searchAbsoluteTopImpressionShare: share(metrics.searchAbsoluteTopImpressionShare),
+                  ...mergeCampaignAnalysis(analysisByCampaign.get(String(campaign.id || "")), previousCampaign),
+                  analysisPeriod: analysisByCampaign.size ? { since, until } : previousCampaign?.analysisPeriod || null,
                 });
               });
             });

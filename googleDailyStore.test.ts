@@ -85,6 +85,34 @@ describe("googleDailyStore — períodos", () => {
     expect(buildGooglePeriod(store, "2026-09-01", "2026-09-02").campaigns[0].auctionPosition).toBe("40.0% no topo absoluto");
   });
 
+  it("expõe as três parcelas de impressão como fração e não inventa a geral em dias antigos", () => {
+    const store = storeWithCampaign();
+    applyDailyRows(store, "111", "2026-09-01", "2026-09-02", [
+      { day: "2026-09-01", campaignId: "1", row: [1_000_000, 100, 0, 0, 0.5, 0.4, 0.9] },
+      { day: "2026-09-02", campaignId: "1", row: [1_000_000, 300, 0, 0, 0.1, null, 0.5] },
+    ]);
+    const campaign = buildGooglePeriod(store, "2026-09-01", "2026-09-02").campaigns[0];
+    expect(campaign.searchImpressionShare).toBe(0.6);
+    expect(campaign.searchTopImpressionShare).toBe(0.2);
+    expect(campaign.searchAbsoluteTopImpressionShare).toBe(0.4);
+    // Um dia salvo antes da parcela geral existir deixa o período sem ela.
+    applyDailyRows(store, "111", "2026-09-03", "2026-09-03", [{ day: "2026-09-03", campaignId: "1", row: row(1, 100, 0, 0, 0.5, 0.4) }]);
+    expect(buildGooglePeriod(store, "2026-09-01", "2026-09-03").campaigns[0].searchImpressionShare).toBeNull();
+    expect(buildGooglePeriod(store, "2026-09-01", "2026-09-03").campaigns[1].searchImpressionShare).toBeNull();
+  });
+
+  it("devolve as quebras da análise salvas na campanha, ou listas vazias", () => {
+    const store = storeWithCampaign();
+    store.campaigns["111:1"].conversionActions = [{ name: "WhatsApp Topo", conversions: 18 }];
+    store.campaigns["111:1"].analysisPeriod = { since: "2026-08-04", until: "2026-09-02" };
+    const [first, second] = buildGooglePeriod(store, "2026-09-01", "2026-09-02").campaigns;
+    expect(first.conversionActions).toEqual([{ name: "WhatsApp Topo", conversions: 18 }]);
+    expect(first.analysisPeriod).toEqual({ since: "2026-08-04", until: "2026-09-02" });
+    expect(second.byDevice).toEqual([]);
+    expect(second.changeHistory).toEqual([]);
+    expect(second.analysisPeriod).toBeNull();
+  });
+
   it("recoletar um intervalo substitui os números da conta sem tocar em outras contas", () => {
     const store = storeWithCampaign();
     store.campaigns["222:9"] = { ...store.campaigns["111:1"], id: "9", accountId: "222" };

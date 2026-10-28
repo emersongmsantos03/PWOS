@@ -5,10 +5,13 @@
 // agendada (08:00, 13:00 e 16:00) só precisa buscar os dias recentes, que ainda podem mudar, e completar
 // eventuais dias que faltem.
 import { addDays } from "./mediaFreshness";
+import { mergeCampaignAnalysis, type CampaignAnalysis } from "./googleCampaignAnalysis";
 
 // [custo em micros, impressões, cliques, conversões,
-//  parcela de impressões no topo (0-1) ou null, parcela no topo absoluto (0-1) ou null]
-export type GoogleDayRow = [number, number, number, number, number | null, number | null];
+//  parcela de impressões no topo (0-1) ou null, parcela no topo absoluto (0-1) ou null,
+//  parcela de impressões geral (0-1) ou null]
+// A parcela geral passou a ser coletada depois: dias salvos antes não têm o 7º item.
+export type GoogleDayRow = [number, number, number, number, number | null, number | null, (number | null)?];
 
 export type GoogleAccountMeta = {
   id: string;
@@ -16,9 +19,11 @@ export type GoogleAccountMeta = {
   currency: string;
   loginCustomerId: string;
   remainingBudget: number | null;
+  // Dia (AAAA-MM-DD) da última coleta das quebras da Análise da Campanha nesta conta.
+  analysisCollectedOn?: string;
 };
 
-export type GoogleCampaignMeta = {
+export type GoogleCampaignMeta = Partial<CampaignAnalysis> & {
   id: string;
   accountId: string;
   client: string;
@@ -35,6 +40,8 @@ export type GoogleCampaignMeta = {
   geography?: Array<Record<string, unknown>>;
   searchTerms?: Array<Record<string, unknown>>;
   ads?: Array<Record<string, unknown>>;
+  // Período a que se referem as quebras da análise (os detalhes cobrem os últimos 30 dias).
+  analysisPeriod?: { since: string; until: string };
 };
 
 export type GoogleDailyStore = {
@@ -138,21 +145,28 @@ export const markDaysSynced = (store: GoogleDailyStore, since: string, until: st
 
 // Monta a resposta de um período no mesmo formato que a tela já consome.
 export const buildGooglePeriod = (store: GoogleDailyStore, since: string, until: string) => {
-  type Total = { cost: number; impressions: number; clicks: number; conversions: number; topSum: number; topWeight: number; absSum: number; absWeight: number };
+  type Total = {
+    cost: number; impressions: number; clicks: number; conversions: number;
+    topSum: number; topWeight: number; absSum: number; absWeight: number; shareSum: number; shareWeight: number; shareMissing: boolean;
+  };
   const totals = new Map<string, Total>();
   for (const day of dayRange(since, until)) {
     const entries = store.days[day];
     if (!entries) continue;
-    for (const [key, [cost, impressions, clicks, conversions, top, absoluteTop]] of Object.entries(entries)) {
-      const total = totals.get(key) || { cost: 0, impressions: 0, clicks: 0, conversions: 0, topSum: 0, topWeight: 0, absSum: 0, absWeight: 0 };
+    for (const [key, [cost, impressions, clicks, conversions, top, absoluteTop, share]] of Object.entries(entries)) {
+      const total = totals.get(key) || { cost: 0, impressions: 0, clicks: 0, conversions: 0, topSum: 0, topWeight: 0, absSum: 0, absWeight: 0, shareSum: 0, shareWeight: 0, shareMissing: false };
       total.cost += cost; total.impressions += impressions; total.clicks += clicks; total.conversions += conversions;
       // Parcelas de impressão são razões: o período usa a média ponderada pelas impressões de cada dia.
       if (top != null) { total.topSum += top * impressions; total.topWeight += impressions; }
       if (absoluteTop != null) { total.absSum += absoluteTop * impressions; total.absWeight += impressions; }
+      if (share != null) { total.shareSum += share * impressions; total.shareWeight += impressions; }
+      // Dia coletado antes de a parcela geral existir: a média do período ficaria parcial.
+      else if (share === undefined && impressions > 0) total.shareMissing = true;
       totals.set(key, total);
     }
   }
   const percent = (value: number) => (value * 100).toFixed(1);
+  const average = (sum: number, weight: number) => (weight > 0 ? Math.round((sum / weight) * 10_000) / 10_000 : null);
   const spendByAccount = new Map<string, number>();
   const campaigns = Object.entries(store.campaigns).map(([key, meta]) => {
     const total = totals.get(key);
@@ -184,6 +198,10 @@ export const buildGooglePeriod = (store: GoogleDailyStore, since: string, until:
         : total && total.topWeight > 0
           ? `${percent(total.topSum / total.topWeight)}% no topo`
           : null,
+      // As mesmas parcelas em número (fração 0-1), para gráficos.
+      searchImpressionShare: total && !total.shareMissing ? average(total.shareSum, total.shareWeight) : null,
+      searchTopImpressionShare: total ? average(total.topSum, total.topWeight) : null,
+      searchAbsoluteTopImpressionShare: total ? average(total.absSum, total.absWeight) : null,
       optimizationStatus: meta.optimizationStatus,
       optimizationHistory: meta.optimizationHistory || [],
       landingPageStatus: meta.landingPageStatus || "UNKNOWN",
@@ -191,6 +209,8 @@ export const buildGooglePeriod = (store: GoogleDailyStore, since: string, until:
       geography: meta.geography || [],
       searchTerms: meta.searchTerms || [],
       ads: meta.ads || [],
+      ...mergeCampaignAnalysis(meta, undefined),
+      analysisPeriod: meta.analysisPeriod || null,
     };
   });
   const accounts = Object.values(store.accounts).map((account) => ({
