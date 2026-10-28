@@ -2554,11 +2554,9 @@ function localApi(
         for (const day of dayRange(detailsSince, today))
           for (const [key, data] of Object.entries(googleDaily.days[day] || {}))
             if (data[0] > 0 || data[1] > 0) withDelivery.add(key.slice(0, key.indexOf(":")));
-        await forEachConcurrent(accounts.filter((account) => withDelivery.has(account.id)), 3, async (account) => {
+        const detailAccounts = accounts.filter((account) => withDelivery.has(account.id));
+        await forEachConcurrent(detailAccounts, 3, async (account) => {
           const details = await collectGoogleAccountDetails(search, account, detailsSince, today);
-          // As quebras da Análise da Campanha cobrem 30 dias: uma coleta por dia basta e poupa a cota.
-          const analysisDue = googleDaily.accounts[account.id]?.analysisCollectedOn !== today;
-          const analysis = analysisDue ? await collectGoogleCampaignAnalysis(search, account, detailsSince, today, today) : null;
           for (const [key, meta] of Object.entries(googleDaily.campaigns)) {
             if (meta.accountId !== account.id) continue;
             googleDaily.campaigns[key] = {
@@ -2568,12 +2566,20 @@ function localApi(
               geography: details.geographyByCampaign.get(meta.id) || meta.geography || [],
               searchTerms: details.searchTermsByCampaign.get(meta.id) || meta.searchTerms || [],
               ads: details.adsByCampaign.get(meta.id) || meta.ads || [],
-              ...(analysis ? { ...mergeCampaignAnalysis(analysis.get(meta.id), meta), analysisPeriod: { since: detailsSince, until: today } } : {}),
             };
           }
-          // Se a cota esgotou no meio, as consultas que faltaram são repetidas na próxima coleta.
-          if (analysis && googleQuotaBlockedSeconds() === 0 && googleDaily.accounts[account.id])
-            googleDaily.accounts[account.id].analysisCollectedOn = today;
+        });
+        saveGoogleDaily();
+        // 4) Quebras da Análise da Campanha (30 dias): depois dos detalhes, para nunca atrasá-los,
+        //    e uma vez por dia por conta. Se o tempo da coleta acabar no meio, as contas que
+        //    ficaram de fora (ou falharam por cota/instabilidade) são feitas na próxima coleta.
+        await forEachConcurrent(detailAccounts.filter((account) => googleDaily.accounts[account.id]?.analysisCollectedOn !== today), 3, async (account) => {
+          const analysis = await collectGoogleCampaignAnalysis(search, account, detailsSince, today, today);
+          for (const [key, meta] of Object.entries(googleDaily.campaigns)) {
+            if (meta.accountId !== account.id) continue;
+            googleDaily.campaigns[key] = { ...meta, ...mergeCampaignAnalysis(analysis.campaigns.get(meta.id), meta), analysisPeriod: { since: detailsSince, until: today } };
+          }
+          if (analysis.complete && googleDaily.accounts[account.id]) googleDaily.accounts[account.id].analysisCollectedOn = today;
         });
       } else {
         // Na coleta manual, as páginas de destino já conhecidas são verificadas de novo: é só um
@@ -10862,7 +10868,7 @@ function localApi(
                 ? await collectGoogleAccountDetails(search, account, since, until)
                 : emptyGoogleAccountDetails();
               const analysisByCampaign = loadGoogleDetails
-                ? await collectGoogleCampaignAnalysis(search, account, since, until, saoPauloDay(new Date()))
+                ? (await collectGoogleCampaignAnalysis(search, account, since, until, saoPauloDay(new Date()))).campaigns
                 : new Map<string, Partial<CampaignAnalysis>>();
               const share = (value: unknown) => (value == null || !Number.isFinite(Number(value)) ? null : Number(value));
               rows.forEach((row) => {

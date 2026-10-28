@@ -2,7 +2,7 @@
 // semana, horário, idade, faixa de renda e histórico de alterações. Tudo sai do próprio
 // Google Ads, somado no período da coleta de detalhes e indexado pelo id da campanha.
 //
-// São de quatro a cinco consultas por conta (dispositivo, dia e horário vêm juntos numa
+// São de cinco a seis consultas por conta (dispositivo, dia e horário vêm juntos numa
 // só), por isso a coleta diária as executa no máximo uma vez por dia em cada conta.
 import { addDays } from "./mediaFreshness";
 
@@ -189,9 +189,16 @@ export const buildChangeHistory = (rows: Record<string, any>[], campaignsByBudge
   return result;
 };
 
-// Consulta o Google Ads e monta as quebras de cada campanha da conta. Cada consulta é
-// independente: se uma falhar (tipo de campanha sem aquele recorte, por exemplo), as
-// demais seguem e a campanha mantém o que já tinha salvo naquele campo.
+// Erros 4xx (exceto limite de taxa e timeout) são da própria conta ou do tipo de campanha e
+// se repetiriam; tempo esgotado, cota e instabilidade do Google merecem nova tentativa.
+const isPermanentError = (cause: unknown) => {
+  const status = Number((cause as { status?: unknown } | null)?.status);
+  return status >= 400 && status < 500 && status !== 408 && status !== 429;
+};
+
+// Consulta o Google Ads e monta as quebras de cada campanha da conta. As consultas rodam em
+// paralelo e são independentes: se uma falhar, as demais seguem e a campanha mantém o que já
+// tinha salvo naquele campo. `complete` diz se vale tentar de novo na próxima coleta.
 export const collectGoogleCampaignAnalysis = async (
   search: SearchFn,
   account: { id: string; loginCustomerId: string; currency?: string },
@@ -199,45 +206,51 @@ export const collectGoogleCampaignAnalysis = async (
   until: string,
   today: string,
 ) => {
-  const analysis = new Map<string, Partial<CampaignAnalysis>>();
-  const attach = <F extends keyof CampaignAnalysis>(field: F, values: Map<string, CampaignAnalysis[F]>) =>
-    values.forEach((value, campaignId) => analysis.set(campaignId, { ...analysis.get(campaignId), [field]: value }));
+  const campaigns = new Map<string, Partial<CampaignAnalysis>>();
+  let complete = true;
+  const attach = (values: Map<string, Partial<CampaignAnalysis>>) =>
+    values.forEach((value, campaignId) => campaigns.set(campaignId, { ...campaigns.get(campaignId), ...value }));
+  const field = <F extends keyof CampaignAnalysis>(name: F, values: Map<string, CampaignAnalysis[F]>) =>
+    new Map([...values].map(([campaignId, value]) => [campaignId, { [name]: value } as Partial<CampaignAnalysis>]));
   const run = async (label: string, query: string) => {
     try {
       return await search(account.id, account.loginCustomerId, query);
     } catch (cause) {
+      if (!isPermanentError(cause)) complete = false;
       console.warn(`[Google Ads] ${label} indisponível para ${account.id}:`, cause instanceof Error ? cause.message : cause);
       return null;
     }
   };
   const period = `segments.date BETWEEN '${since}' AND '${until}'`;
-  const actionRows = await run("Conversões por ação", `SELECT campaign.id, segments.conversion_action_name, metrics.conversions FROM campaign WHERE ${period}`);
-  if (actionRows) attach("conversionActions", buildConversionActions(actionRows));
-  const scheduleRows = await run("Dispositivo/dia/horário", `SELECT campaign.id, segments.device, segments.day_of_week, segments.hour, metrics.clicks, metrics.conversions FROM campaign WHERE ${period}`);
-  if (scheduleRows) buildScheduleBreakdowns(scheduleRows).forEach((value, campaignId) => analysis.set(campaignId, { ...analysis.get(campaignId), ...value }));
-  const ageRows = await run("Idade", `SELECT campaign.id, ad_group_criterion.age_range.type, metrics.clicks, metrics.conversions FROM age_range_view WHERE ${period}`);
-  if (ageRows) attach("byAgeRange", buildAgeRanges(ageRows));
-  const incomeRows = await run("Faixa de renda", `SELECT campaign.id, ad_group_criterion.income_range.type, metrics.clicks, metrics.conversions FROM income_range_view WHERE ${period}`);
-  if (incomeRows) attach("byIncomeRange", buildIncomeRanges(incomeRows));
   // O Google só guarda o histórico de alterações dos últimos 30 dias.
   const changeSince = since > addDays(today, -29) ? since : addDays(today, -29);
-  if (changeSince <= until) {
-    const changeRows = await run("Histórico de alterações",
-      `SELECT change_event.change_date_time, change_event.change_resource_type, change_event.change_resource_name, change_event.resource_change_operation, change_event.changed_fields, change_event.user_email, change_event.client_type, change_event.campaign, change_event.old_resource, change_event.new_resource FROM change_event WHERE change_event.change_date_time >= '${changeSince}' AND change_event.change_date_time <= '${until} 23:59:59' ORDER BY change_event.change_date_time DESC LIMIT 2000`);
-    if (changeRows) {
-      // Alterações de orçamento não trazem a campanha: o vínculo vem do cadastro, e só é consultado se precisar.
-      const campaignsByBudget = new Map<string, string[]>();
-      if (changeRows.some((row) => row.changeEvent?.changeResourceType === "CAMPAIGN_BUDGET" && !row.changeEvent?.campaign)) {
-        const budgetRows = await run("Vínculo de orçamentos", "SELECT campaign.id, campaign.campaign_budget FROM campaign WHERE campaign.status != 'REMOVED'");
-        budgetRows?.forEach((row) => {
-          const budget = String(row.campaign?.campaignBudget || ""), campaignId = campaignIdOf(row);
-          if (budget && campaignId) campaignsByBudget.set(budget, [...(campaignsByBudget.get(budget) || []), campaignId]);
-        });
-      }
-      attach("changeHistory", buildChangeHistory(changeRows, campaignsByBudget, account.currency));
+  const [actionRows, scheduleRows, ageRows, incomeRows, changeRows] = await Promise.all([
+    run("Conversões por ação", `SELECT campaign.id, segments.conversion_action_name, metrics.conversions FROM campaign WHERE ${period}`),
+    run("Dispositivo/dia/horário", `SELECT campaign.id, segments.device, segments.day_of_week, segments.hour, metrics.clicks, metrics.conversions FROM campaign WHERE ${period}`),
+    run("Idade", `SELECT campaign.id, ad_group_criterion.age_range.type, metrics.clicks, metrics.conversions FROM age_range_view WHERE ${period}`),
+    run("Faixa de renda", `SELECT campaign.id, ad_group_criterion.income_range.type, metrics.clicks, metrics.conversions FROM income_range_view WHERE ${period}`),
+    changeSince <= until
+      ? run("Histórico de alterações",
+        `SELECT change_event.change_date_time, change_event.change_resource_type, change_event.change_resource_name, change_event.resource_change_operation, change_event.changed_fields, change_event.user_email, change_event.client_type, change_event.campaign, change_event.old_resource, change_event.new_resource FROM change_event WHERE change_event.change_date_time >= '${changeSince}' AND change_event.change_date_time <= '${until} 23:59:59' ORDER BY change_event.change_date_time DESC LIMIT 2000`)
+      : Promise.resolve(null),
+  ]);
+  if (actionRows) attach(field("conversionActions", buildConversionActions(actionRows)));
+  if (scheduleRows) attach(buildScheduleBreakdowns(scheduleRows));
+  if (ageRows) attach(field("byAgeRange", buildAgeRanges(ageRows)));
+  if (incomeRows) attach(field("byIncomeRange", buildIncomeRanges(incomeRows)));
+  if (changeRows) {
+    // Alterações de orçamento não trazem a campanha: o vínculo vem do cadastro, e só é consultado se precisar.
+    const campaignsByBudget = new Map<string, string[]>();
+    if (changeRows.some((row) => row.changeEvent?.changeResourceType === "CAMPAIGN_BUDGET" && !row.changeEvent?.campaign)) {
+      const budgetRows = await run("Vínculo de orçamentos", "SELECT campaign.id, campaign.campaign_budget FROM campaign WHERE campaign.status != 'REMOVED'");
+      budgetRows?.forEach((row) => {
+        const budget = String(row.campaign?.campaignBudget || ""), campaignId = campaignIdOf(row);
+        if (budget && campaignId) campaignsByBudget.set(budget, [...(campaignsByBudget.get(budget) || []), campaignId]);
+      });
     }
+    attach(field("changeHistory", buildChangeHistory(changeRows, campaignsByBudget, account.currency)));
   }
-  return analysis;
+  return { campaigns, complete };
 };
 
 // Campos da análise para a resposta: o que acabou de ser coletado, senão o que já estava salvo.

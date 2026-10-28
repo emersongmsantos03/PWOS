@@ -101,10 +101,35 @@ describe("googleCampaignAnalysis — coleta", () => {
       return [];
     };
     const result = await collectGoogleCampaignAnalysis(search, { id: "111", loginCustomerId: "900" }, "2026-09-29", "2026-10-28", "2026-10-28");
-    expect(result.get("1")).toEqual({ conversionActions: [{ name: "WhatsApp Topo", conversions: 3 }] });
+    expect(result.campaigns.get("1")).toEqual({ conversionActions: [{ name: "WhatsApp Topo", conversions: 3 }] });
     expect(queries).toHaveLength(5);
     expect(queries.some((query) => query.includes("campaign.campaign_budget"))).toBe(false);
     expect(queries.at(-1)).toContain("change_event.change_date_time >= '2026-09-29'");
+  });
+
+  it("dispara as consultas em paralelo", async () => {
+    let inFlight = 0, peak = 0;
+    await collectGoogleCampaignAnalysis(async () => {
+      inFlight += 1; peak = Math.max(peak, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      inFlight -= 1;
+      return [];
+    }, { id: "111", loginCustomerId: "900" }, "2026-09-29", "2026-10-28", "2026-10-28");
+    expect(peak).toBe(5);
+  });
+
+  it("só considera a conta concluída se nenhuma consulta falhou por tempo, cota ou instabilidade", async () => {
+    const failing = (error: unknown) => async (_c: string, _l: string, query: string) => {
+      if (query.includes("income_range_view")) throw error;
+      return [];
+    };
+    const collect = (error: unknown) => collectGoogleCampaignAnalysis(failing(error), { id: "111", loginCustomerId: "900" }, "2026-09-29", "2026-10-28", "2026-10-28");
+    // Recusa definitiva (ex.: recurso não suportado pela conta): não adianta repetir.
+    expect((await collect(Object.assign(new Error("not supported"), { status: 400 }))).complete).toBe(true);
+    // Tempo da coleta esgotado, limite de taxa e erro do Google: tenta de novo na próxima coleta.
+    expect((await collect(Object.assign(new Error("This operation was aborted"), { name: "AbortError" }))).complete).toBe(false);
+    expect((await collect(Object.assign(new Error("Too many requests"), { status: 429 }))).complete).toBe(false);
+    expect((await collect(Object.assign(new Error("Internal error"), { status: 500 }))).complete).toBe(false);
   });
 
   it("limita o histórico de alterações aos últimos 30 dias", async () => {
